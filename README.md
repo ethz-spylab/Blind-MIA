@@ -86,7 +86,7 @@ We handle this dataset separately because it is too big to push to the repositor
 
 If you use our attacks in your work, please consider citing our paper:
 
-```
+```bibtex
 @misc{das2024blindbaselinesbeatmembership,
       title={Blind Baselines Beat Membership Inference Attacks for Foundation Models}, 
       author={Debeshee Das and Jie Zhang and Florian Tramèr},
