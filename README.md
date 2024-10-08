@@ -81,3 +81,19 @@ We handle this dataset separately because it is too big to push to the repositor
 3. Run the attack on the dataset using the command below:
 
 ``` python3 run_attack.py --dataset arxiv1m_1m --attack greedy_selection ```
+
+### Citation
+
+If you use our attacks in your work, please consider citing our paper:
+
+```
+@misc{das2024blindbaselinesbeatmembership,
+      title={Blind Baselines Beat Membership Inference Attacks for Foundation Models}, 
+      author={Debeshee Das and Jie Zhang and Florian Tramèr},
+      year={2024},
+      eprint={2406.16201},
+      archivePrefix={arXiv},
+      primaryClass={cs.CR},
+      url={https://arxiv.org/abs/2406.16201}, 
+}
+```
