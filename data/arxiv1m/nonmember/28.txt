@@ -1,0 +1,1157 @@
+\section{Introduction}
+
+Federated Learning (FL) is a distributed machine learning training system in which edge devices (clients) collaboratively train a model of interest based on their locally stored datasets. A central node (parameter server) orchestrates the learning process by collecting the clients' parameters for aggregation \cite{pmlr-v54-mcmahan17a}. Due to its data privacy preserving and bandwidth saving nature, FL has attracted a lot of attention and has been used in diverse applications including healthcare and mobile services. 
+
+\noindent\textbf{Challenges and Related Work.} In order to successfully deploy FL in communication networks, lots of challenges should be addressed. These include: the computing capabilities of the clients; the communication overhead between the clients and the parameter server; and the system heterogeneity, whether in the clients' communication channels or their data statistics. 
+
+Due to the resource-constrained capabilities of the clients and the limited channel bandwidth, quantization, sparsification and compression are usually employed when the learning model size is too large \cite{bouzinis2022wireless, sattler2019robust}. Another concern is related to the limited available spectrum that hinders the simultaneous participation of all clients, and hence client scheduling and its consequences on the system's performance becomes crucial \cite{cho2021client,wang2022a,AoI}.   
+
+Among all challenges, communication remains to be the bottleneck issue, and various solutions have been proposed in the literature to mitigate it. One of these solutions is to conduct several local updates at the clients' side before communicating with the parameter server \cite{stich2018local,woodworth2020local,lin2018don,pmlr-v130-shokri-ghadikolaei21a}. Another solution is to introduce intermediate parameter servers, denoted local parameter servers (LPSs), between the clients and the (now) global parameter server (GPS). Such setting of FL is known in the literature as the {\it hierarchical} FL (HFL) setting \cite{wang2022demystifying}. The main advantage of having LPSs close to the clients is to reduce the latency and required energy to communicate with the GPS \cite{Hfl_kh}. In \cite{luo2020hfel}, a joint resource allocation and client association problem is formulated
+in an HFL setting, and then solved by an iterative algorithm. Reference \cite{wainakh2020enhancing} shows that HFL settings can also enhance data privacy. In these mentioned works, the authors analyze their systems while assuming a fixed number of local iterations and global communication rounds. In more realistic scenarios, however, the number of local iterations may vary from one global communication round to another depending on the dynamic nature of the (wireless) communication channel and the different computational capabilities of the edge devices. Moreover, the number of global communication rounds can also vary in case the training time is constrained. One scenario in which this is the case is when model training is conducted during non-congested periods of the network.
+
+\noindent\textbf{Contributions.}
+Motivated by filling the gap of the aforementioned endeavors and to cope with the very low latency service requirements in 6G networks (and beyond), in this paper we focus on HFL for {\it delay-sensitive} communication networks. We study FL settings that have an additional requirement of conducting training within a predefined deadline. Such scenario is relevant for, e.g., energy-limited clients whose availability for long times is not always guaranteed. To enforce the system to abide by this constraint, the number of local training updates will be determined by a wall-clock time. Specifically, we define a {\it sync time} $S$ within which the LPSs are allowed to aggregate the parameters they receive from their groups' clients. Each local iteration consumes a random group-specific {\it delay}, and hence the total number of local updates within $S$ will also be random, and could possibly be {\it different} across groups. This dissimilarity in the delay statistics is introduced to capture, e.g., the effects of wireless channels and different computational resources among different group clients. Following the deadline $S$, the LPSs forward their models to the GPS.
+
+We set another time constraint at the GPS and denote it the {\it total system time} $T$. This is the total allowed time for the overall HFL system to perform the training and get its final model parameter. Different values of $S$ and $T$ will lead to a different number of local and global updates. Thus, by controlling $S$, we also control how many times the clients will communicate with the GPS, i.e., more local iterations would lead to less global ones. This is is different from the existing works that assume that the global communication rounds are constant and unaffected by the number of local updates.
+
+We present a thorough theoretical convergence analysis for the proposed HFL setting for non-convex loss functions. Our results show how the different system parameters affect the accuracy, namely, the wall-clock times $S$, $T$, the number of groups, and the number of clients per group. Various experiments are then performed to show how to optimize the sync time $S$ based on the other system parameters.
+ 
+\noindent\textbf{Notation and Organization.} $\mathbb{R}$ denotes the real number field; $ \left\|\cdot\right\|$ denotes the Euclidean norm; $\langle x, y \rangle$ denotes the inner product between two vectors $x$ and $y$; $\mathbb{E}$  denotes statistical expectation,  while $\mathbb{E}_{|x}\left\|\cdot\right\|$ represents the conditional expectation given $x$.
+
+The rest of the paper is organized as follows. Section~\ref{Sys_Model} presents the system model and our proposed HFL algorithm. Theoretical convergence analyses are derived in Section~\ref{main_res}, and verified via extensive simulation under different scenarios in Section~\ref{experiments}. Section~\ref{conclusion} concludes the paper.
+
+
+
+\section{System Model}\label{Sys_Model}
+
+We consider an HFL system with a global PS (GPS) and a set of local PSs (LPSs), $\mathcal{N}_g$, that serve a number of clients. Clients are distributed across different LPSs to form clusters (groups), in which a client can only belong to one group, and may only communicate with one specific LPS. Denoting by $\mathcal{N}_i$ the set of clients in group $i$, the total number of clients in the system is $\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|$, with $|\cdot|$ denoting cardinality. Each client has its own dataset, and the data is independently and identically distributed (i.i.d.) among clients. The empirical loss function at the LPS of group $i \in \mathcal{N}_g$ is defined as follows:
+\begin{align}
+\label{group_loss}
+    f_{i}(x)\triangleq\frac{1}{|\mathcal{N}_i|}\sum_{k \in \mathcal{N}_i}F_{i,k}(x), \quad  i \in \mathcal{N}_g,
+\end{align}
+where $F_{i,k}(x)$ is the loss function at client $k$ in group $i$. The goal of the HFL system is to minimize a global loss function:
+\begin{align} \label{global_loss}
+    f(x)&\triangleq\frac{1}{\sum_{i \in \mathcal{N}_g} |\mathcal{N}_i|} \sum_{i \in \mathcal{N}_g} |\mathcal{N}_i| f_{i}(x) \nonumber \\
+   
+    &=\frac{1}{\sum_{i \in \mathcal{N}_g} |\mathcal{N}_i|}\sum_{i \in \mathcal{N}_g} \sum_{k \in \mathcal{N}_i}F_{i,k}(x).
+\end{align}
+
+The global loss function is minimized over a number of {\it global communication rounds} between the GPS and the LPSs. At the beginning of the $u$th global round, the GPS broadcasts the global model, $x^u \in \mathbb{R}^{d} $, with $d$ representing the model dimension, to the LPSs. The LPSs then forward $x^u$ to their associated clients, which is used to run a number of SGD steps based on their own local datasets. After each SGD step, the clients share their models with their LPS, which aggregates them and broadcasts them back locally to its clients. We call this local round trip a {\it local iteration}. We further illustrate how the global rounds and local iterations interact as follows. Let $x_i^{u,l}$ denote the model available at LPS $i$ after local iteration $l$ during global round $u$, and let $x_{i,k}^{u,l}$ denote the corresponding local model of client $k$ of group $i$. We now have the following equations that build up the models:
+\begin{align}
+x_{i}^{u,0}&=x^{u},\quad \forall i\in\mathcal{N}_g, \label{eq_lps-model-initial} \\
+x_{i,k}^{u,0}&=x_{i}^{u,0},~ x_{i,k}^{u,l}=x_{i}^{u,l-1} - \alpha \: \Tilde{g}_{i,k}\left(x_{i}^{u,l-1}\right),\quad \forall k \in \mathcal{N}_{i}, \label{eq_lps-model-itr}
+\end{align}
+where $\alpha$ is the learning rate, and $\Tilde{g}_{i,k}$ is an unbiased stochastic gradient evaluated at $x_{i}^{u,l-1}$. After the $l$th SGD step, LPS $i$ collects $\left\{x_{i,k}^{u,l}\right\}$ from its associated clients and aggregates them to get the $l$th local model,
+\begin{align}
+    x_{i}^{u,l} =\frac{1}{|\mathcal{N}_i|} \sum_{k \in \mathcal{N}_i} x_{i,k}^{u,l}, \label{eq_lps-model-agg}
+\end{align}
+which is shared with its clients to initialize SGD step $l+1$.
+
+Each local iteration takes a {\it random} time to be completed. This includes the time for broadcasting the local model by the LPS to its clients, the SGD computation time, and the aggregation time. Let $\tau_{i,l}^u$ denote the wall-clock time elapsed during local iteration $l$ for group $i$ in global round $u$. We assume that $\tau_{i,l}^u$'s are i.i.d. across local iterations $l$ and global rounds $u$, but may not be identical across groups $i$. This is motivated by the different channel delay statistics that each group may experience when communicating with its LPS. In addition to that, each group may have clients with heterogeneous computational capabilities. These two factors together hinder one group to (statistically) do an identical number of local updates like other groups. We define a {\it sync time,} $S$, that represents the allowed local training time for {\it all} groups. After the sync time, the LPSs need to report their local models to the GPS, and thereby ending the current global round. During global round $u$, and within the sync time $S$, group $i$ will therefore conduct a random number of local iterations given by 
+\begin{align}
+    t_{i}^{u}\triangleq\min\left\{n:~\sum_{l=1}^{n} \tau_{i,l}^u \geq S\right\},\quad i \in \mathcal{N}_g.
+\end{align}
+Observe that the statistics of $t_i^u$'s are not identical across groups, see Fig.~\ref{fig_s-protocol-example} for an example sample path during global round $u$. After the $t_i^u$ local iterations are finished, and using (\ref{eq_lps-model-initial})--(\ref{eq_lps-model-agg}), LPS $i$ will have acquired the following model:
+\begin{align} \label{eq_local-update}
+        x_{i}^{u,t_{i}^{u}} = x_{i}^{u,0}-\frac{\alpha}{|\mathcal{N}_i|} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i} \Tilde{g}_{i,k}\left(x_{i}^{u,l}\right).
+\end{align}
+
+We consider a synchronous setting in which the GPS waits for all the LPSs to finish their local iterations before a global aggregation. Since LPSs incur different wall-clock times to collect their models, some of them may need to stay idle waiting for others to finish. The GPS therefore starts aggregating the models after
+\begin{align}
+\max_{i\in\mathcal{N}_g}\left\{\sum_{l=1}^{n} \tau_{i,l}^{u}\right\}
+\end{align}
+time units from the start of the local iterations in global round $u$. We denote this period the {\it syncing period} (see Fig.~\ref{fig_s-protocol-example}). When updating the GPS, LPS $i$ sends the difference between its final and initial models, {\it divided by the number of its local iterations performed \cite{fedvarp},} i.e., it sends
+\begin{align} \label{local_update}
+        \frac{1}{t_i^u}\left(x_{i}^{u,t_{i}^{u}}\!-\! x_{i}^{u,0}\right)=-\frac{\alpha}{|\mathcal{N}_i|} \frac{1}{t_i^u}\sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i} \Tilde{g}_{i,k}\left(x_{i}^{u,l}\right),~i \in \mathcal{N}_g.
+\end{align}
+We note that the purpose of diving by $t_i^{u}$ is to avoid \textit{biasing} the global model, and to force the aggregated model update to be a result of an \textit{equal} contribution from all groups. To see this, observe that (cf. Assumption~2) 
+\begin{align}
+ \mathbb{E}_{|\bm t_i^u} \frac{1}{t_i^u}\left(x_{i}^{u,t_{i}^{u}}- x_{i}^{u,0}\right) &=-\frac{\alpha}{|\mathcal{N}_i|}\frac{1}{t_i^u}\sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i} \nabla F_{i,k}\left(x_{i}^{u,l}\right)\nonumber \\
+ &=-\frac{\alpha}{t_i^u}\sum_{l=0}^{t_{i}^{u}-1}   \nabla  f_{i}\left(x_{i}^{u,l}\right),
+
+\end{align}
+where $\mathbb{E}_{|\bm t_i^u} $ denotes conditional expectation given the vector ${\bm t}_i^u\triangleq\left\{t_{i}^{u^\prime}\right\}_{u^\prime=1}^{u}$.
+
+The GPS then updates its global model as 
+\begin{align}\label{global_update}
+         x^{u+1}&=x^{u}+\sum_{i \in \mathcal{N}_g}\frac{|\mathcal{N}_i|}{\sum_{i \in \mathcal{N}_g} |\mathcal{N}_i|}\frac{1}{t_{i}^{u}}\left(x_{i}^{u,t_{i}^{u}}- x_{i}^{u,0}\right) \nonumber \\
+         &=x^{u}-\frac{\alpha}{\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|}\sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i} \Tilde{g}_{i,k}\left(x_{i}^{u,l}\right), 
+\end{align}
+and broadcasts $x^{u+1}$ to the LPSs to begin global round $u+1$. We assume that the global aggregation and broadcasting processes consume i.i.d. $\tau_g^u$'s wall-clock times. An example of the HFL setting considered is depicted in Fig.~\ref{fig_s-protocol-example}.
+
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.75\linewidth]{n_s_protocol.pdf}
+\caption{Example sample path of global rounds and local iterations of 2 groups with wall-clock times considerations.}
+\label{fig_s-protocol-example}
+\end{figure}
+    
+The overall HFL training process stops after a total {\it system time} $T$. The value of $T$ represents the allowed time budget for training in delay-sensitive applications. Within $T$, the total number of global rounds will be given by
+\begin{align}
+    \mathcal{U}\triangleq\min\left\{m:~\sum_{u=1}^{m} \max_{i\in\mathcal{N}_g}\left\{\sum_{l=1}^{n} \tau_{i,l}^{u}\right\} + \tau_{g}^{u} \geq T\right\}.
+\end{align}
+
+We coin the proposed algorithm {\it delay sensitive HFL} which is summarized in Algorithm~\ref{alg_main}. In the sequel, we analyze its performance in terms of the wall-clock times, number of clients, and other system parameters. We then discuss how to optimize the choice of the sync time $S$ to guarantee better learning outcomes.
+
+
+\begin{algorithm}[t]
+	\caption{Delay Sensitive HFL} 
+	\begin{algorithmic}[1]
+\State \textbf{Input:} learning rate $\alpha$, system time $T$, sync time $S$
+\State \textbf{Output:} global aggregated model $x^{\mathcal{U}}$
+\State \textbf{Initialization:} $\Bar{T},u \gets 0$
+\While {$\Bar{T} \leq T$}
+		\State \underline{Global Broadcast:} $x_i^{u,0} \gets x^{u}, \: \forall i \in \mathcal{N}_g$
+		\For {$i \in \mathcal{N}_g$}
+				\State $t_i^{u}\gets 0 , \Bar{t} \gets 0$
+		\While {$\Bar{t} \leq S$}
+			\For {$k \in \mathcal{N}_i$}
+				\State \underline{SGD Update:} $x_{i,k}^{u,l} =x_{i}^{u,l-1} - \alpha \: \Tilde{g}_{i,k}(x_{i}^{u,l-1})$
+			\EndFor
+			\State \underline{Local Aggregation:}     $x_{i}^{u,l} =\frac{1}{|\mathcal{N}_i|} \sum_{k \in \mathcal{N}_i} x_{i,k}^{u,l} $
+			\State \underline{Group Broadcast:} $x_{i,k}^{u,l}=x_{i}^{u,l}$
+			\State \underline{Local updates increment:} $t_i^{u} \gets t_i^{u}+1 , \Bar{t} \gets \Bar{t}+\tau_{i}^{u}$
+			\EndWhile
+			\State \underline{Upload:} $\frac{1}{t_{i}^{u}}(x_{i}^{u,t_{i}^{u}}- x_{i}^{u,0})$
+		\EndFor
+		\State \underline{Global Update:} $x^{u+1}=x^{u}+\sum_{i \in \mathcal{N}_g}\frac{|\mathcal{N}_i|}{\sum_{i \in \mathcal{N}_g} |\mathcal{N}_i|}\frac{1}{t_{i}^{u}}(x_{i}^{u,t_{i}^{u}}- x_{i}^{u,0})$ 
+	
+		\State \underline{System Time Update:} $\Bar{T} \gets \max_{i}\{\sum_{j=1}^{(t_i^{u})} \tau_{i,j}^{u}\}+ \tau_{g} $, $\mathcal{U},u \gets u+1$
+		\EndWhile
+	\end{algorithmic} \label{alg_main}
+\end{algorithm}
+
+
+
+\section{Main Results}\label{main_res}
+In this section, we present the convergence analysis for the proposed HFL setting. We have the following typical assumptions about the loss function and SGD \cite{Hfl_kh}:
+
+\noindent\textbf{Assumption 1.} (\textit{Smoothness}). Loss functions are  $L$-smooth: $\forall x,y \in \mathbb{R}^d$, there exists $L > 0$ such that 
+\begin{align} \label{assum_1}
+    F_{i,k}(y) \leq F_{i,k}(x)+\langle \nabla F_{i,k}(x),y-x \rangle+\frac{L}{2} \left\| y-x\right\|^2,\quad \forall i,k.
+\end{align}
+\textbf{Assumption 2.} (\textit{Unbiased Gradient}). The gradient estimate at each client satisfies
+\begin{align} \label{assum_2}
+    \mathbb{E}\Tilde{g}_{i,k}(x)= \nabla F_{i,k}\left(x\right),\quad \forall i,k.
+\end{align} 
+ \textbf{Assumption 3.} (\textit{Bounded Gradient}). There exists a constant $G >0 $ such that the stochastic gradient's second moment is bounded as
+\begin{align}\label{assum_3}
+\mathbb{E}\left\|\Tilde{g}_{i,k}(x)\right\|^2 \leq G^2,\quad \forall i,k.
+\end{align}
+  \textbf{Assumption 4.} (\textit{Bounded Variance}). There exists a constant $\sigma >0 $, such that the variance of the stochastic gradient is bounded as
+\begin{align} \label{assum_4}
+    \mathbb{E}\left\| \Tilde{g}_{i,k}(x)-\nabla F_{i,k}(x)\right\|^2 \leq \sigma^2,\quad \forall i,k.
+\end{align}
+
+It is worth noting that we conduct our analysis {\it without} assuming convexity of the loss function at any entity in the system. According to our proposed algorithm, after each global round, the group clients will resume their local training from the aggregated global model instead of the their latest local one. Hence, we need to quantify the {\it deviation} between the two parameter models through the following lemma:
+\begin{lemma} \label{lemma_1}
+For $0 \leq \alpha \leq \frac{1}{L}$, the delay sensitive HFL algorithm satisfies the following $\forall u, i$:
+\begin{align} 
+       \mathbb{E}_{|\bm t_i^u} \left\| x^{u+1}-x_{i}^{u,t_{i}^{u}}\right\|^2 &\leq 2\alpha^2 \left( \left( t_{i}^{u}\right)^2+ \frac{|\mathcal{N}_g|}{(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|)^2} \sum_{j \in \mathcal{N}_g }|\mathcal{N}_j|^2\right) G^2. \label{eq_divergence}
+\end{align}
+\end{lemma}
+\begin{proof}
+   See Appendix \ref{appB}.
+\end{proof}
+\begin{remark}
+The first term in the bound in Lemma~\ref{lemma_1} represents the contribution of group $i$ while the second one reflects the impact of all groups in the deviation between the parameter models. It is obvious that more local iterations lead to more deviation between the local and the global models. Note that local iterations are the sole determinant of the deviation in case of having one group only (e.g., when there is no hierarchy); having two or more groups carries an additive effect on the deviation as seen in the second term. 
+\end{remark}
+
+\begin{remark}
+In case of having only one group in the system, one gets a strictly smaller upper bound than that in \cite{yu2019parallel}, which is given by $4\alpha^2 \left(t_{i}^{u}\right)^2 G^2$ (almost two times the bound in (\ref{eq_divergence}) for $|\mathcal{N}_g|=1$ for large values of $t_i^u$).
+\end{remark}
+ 
+Lemma~\ref{lemma_1} serves as a building block for our main convergence theorems of the proposed delay sensitive HFL. These are mentioned next.
+
+\begin{theorem}[\textbf{Convergence  Analysis per Group}]
+\label{CA_Group}
+For $0 \leq \alpha \leq \frac{1}{L}$, the delay sensitive HFL algorithm achieves the following group $i$ bound for a given $\mathcal{U}$:
+\begin{align}
+\frac{1}{\sum_{u=1}^{\mathcal{U}} t_{i}^{u}} \sum_{u=1}^{\mathcal{U}}  &\sum_{l=1}^{t_{i}^{u}} \mathbb{E}_{|\bm t_i^u}\left\|\nabla f_{i}(x_{i}^{u,l-1})\right\|^2 
+     \leq \frac{2}{\alpha \sum_{u=1}^{\mathcal{U}} t_{i}^{u}} \Biggl(\mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{1}\right)-\mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{\mathcal{U},t_i^{\mathcal{U}}}\right) \Biggl)+ \frac{\alpha  L \sigma^2}{|\mathcal{N}_{i}|}  \nonumber \\
+    &+\Biggl(\frac{1}{\alpha \sum_{u=1}^{\mathcal{U}} t_{i}^{u}} +  \frac{2 (L +1) \kappa \alpha}{ \sum_{u=1}^{\mathcal{U}} t_{i}^{u}} \Biggr)(\mathcal{U}-1)  G^2 +\frac{2 (L +1)\alpha}{ \sum_{u=1}^{\mathcal{U}} t_{i}^{u}}   \sum_{u=1}^{\mathcal{U}-1}   ( t_{i}^{u})^2 G^2,
+\end{align}
+where the term $\kappa$ is given by
+\begin{align}
+\kappa\triangleq\frac{|\mathcal{N}_g|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{j \in \mathcal{N}_g} |\mathcal{N}_j|^2.
+\end{align}
+\end{theorem}
+ \begin{proof}
+ See Appendix \ref{appC}.
+ \end{proof}
+
+Notably, setting $\mathcal{U}=1$ means that the groups will work \textit{individually}. The result of Theorem~\ref{CA_Group} shows that convergence is still guaranteed in this isolated case by choosing $0\leq\alpha\leq\min\left\{\frac{1}{L},\frac{1}{\sqrt{t_i^1}}\right\}$.
+
+\begin{theorem}[\textbf{Global Convergence  Analysis} ]
+\label{global_convg}
+For $0 \leq \alpha \leq \frac{1}{L}$, the delay sensitive HFL algorithm achieves the following global bound for a given $\mathcal{U}$:
+\begin{align} \label{global_bound} 
+\frac{1}{\mathcal{U}} \sum_{u=1}^{\mathcal{U}} \mathbb{E}_{|\bm t_i^u}\left\|\nabla f\left(x^{u}\right)\right\|^2  &\!\leq\!  \frac{2}{\alpha} \frac{1}{\mathcal{U}}  \left(\mathbb{E}_{|\bm t_i^u}f\left(x^{1}\right)\!-\!\mathbb{E}_{|\bm t_i^u}f\left(x^{\mathcal{U}+1}\right)\right)  
++ \frac{\alpha L |\mathcal{N}_g| \sum_{i \in \mathcal{N}_g} |\mathcal{N}_i|^2\sigma^2}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2}\nonumber \\
+&+ \frac{1}{\mathcal{U}} \sum_{u=1}^{\mathcal{U}}  \frac{12\alpha^2  L^2 |\mathcal{N}_{g}|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}|^2   \left(t_{i}^{u-1}\right)^2 \nonumber \\
+&+\frac{12 \alpha^2 L^2 G^2 |\mathcal{N}_{g}|^2}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^4}   \left(\sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}|^2\right)^2 
+ \nonumber \\
+&+ \frac{1}{\mathcal{U}} \sum_{u=1}^{\mathcal{U}}\frac{4 \alpha^2 L^2  G^2 |\mathcal{N}_{g}|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}|^2 \frac{1}{t_i^u} \sum_{l=0}^{t_i^{u}-1}  l^2 .
+\end{align}
+\end{theorem}
+\begin{proof}
+See Appendix \ref{appD}.
+\end{proof}
+
+Observe that the sync time $S$ controls the upper bounds in the theorems above by statistically controlling the number of local iterations. Now let us assume that there exists a {\it minimum} local iteration time for group $i$, i.e., a lower bound:
+\begin{align} \label{t_bound1}
+\tau_{i,l}^u\geq c_i,~\text{a.s.},~\forall l,u.
+\end{align}
+Then, one gets a {\it maximum} number of local iterations:
+\begin{align} \label{t_bound2}
+t_{i}^{u} \leq t_{i}^{\max}\triangleq\ceil*{\frac{S}{c_i}},~\text{a.s.},~\forall u.
+\end{align}
+Based on the above bound, one can get the following global convergence guarantee.
+
+\begin{corollary} [\textit{Global Convergence Guarantee}]
+\label{corollary}
+For a given $\{t_i^{\max}\}$, setting $\alpha =\min\{\frac{1}{\sqrt{\mathcal{U}}},\frac{1}{L}\}$, the delay sensitive HFL algorithm achieves 
+$   \frac{1}{\mathcal{U}} \sum_{u=1}^{\mathcal{U}} \mathbb{E}\left\|\nabla f\left(x^{u}\right)\right\|^2\leq\mathcal{O}(\frac{1}{\sqrt{\mathcal{U}}})$.
+\begin{proof}
+     See Appendix \ref{appE}.
+\end{proof}
+\end{corollary}
+
+Therefore, for a finite sync time $S$, as the training time $T$ increases, the number of the global communication rounds $\mathcal{U}$ also increases, and hence Corollary~\ref{corollary} shows that the gradient converges to $0$ sublinearly.
+
+\section{Experiments}\label{experiments}
+In this section, we present some simulation results for the proposed delay sensitive HFL algorithm to verify the findings from the theoretical analysis.
+
+\noindent \textbf{Datasets and Model.} We consider an image classification supervised learning task on the CIFAR-10 dataset \cite{krizhevsky2009learning}.
+A convolution neural network (CNN) is adopted with two 5x5 convolution layers, two 2x2 max pooling layers,  two fully connected layers with 120 and 84 units, respectively, ReLu activation, a final softmax output layer and cross entropy loss.
+
+\noindent\textbf{Federated Learning Setting.}
+Unless otherwise stated, we have 30 clients randomly distributed across 2 groups. The groups have similar data statistics. We consider shifted exponential delays \cite{shiftedexp1}: $\tau_{i,l}^u\sim\exp(c_i,10)$ and $\tau_g^u\sim\exp(c_g,10)$.
+
+\noindent \textbf{Discussion.} In Fig.~\ref{1}, we show the evolution of both groups' accuracies and the global accuracy across time. The zoomed-in version in Fig.~\ref{fig:1b} shows the high (SGD) variance in the performance of the two groups especially during the earlier phase of training. Then, with more averaging with the GPS, the variance is reduced.
+\begin{figure*}[htp] 
+    \centering
+    \subfloat[Performance overall Training Time Budget]{%
+        \includegraphics[width=0.5\linewidth]{global_group_accuracy.pdf}%
+        \label{fig:1a}%
+        }%
+    \hfill%
+    \subfloat[Performance during  The Beginning of Training Time]{%
+        \includegraphics[width=0.5\linewidth]{global_group_accuracy_zoomed.pdf}%
+        \label{fig:1b}%
+        }%
+    \caption{HFL system with 10 clients per group with $c_1=c_2=1$, $c_g=5$ and $S=5$.}
+    \label{1}
+\end{figure*}
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.75\linewidth]{cooperative_isolated_new2.pdf}
+\caption{Significance of group cooperation under non-i.i.d data.}
+\label{3}
+\end{figure}
+
+In Fig.~\ref{3}, the significance of collaborative learning is emphasized. We run three experiments, one for each group in an isolated fashion, and one under the HFL setting. First, while we do not conduct our theoretical analysis under heterogeneous data distribution, we consider a non-iid data distribution among the two groups in this setting, and we see that our proposed algorithm still \textit{converges}. Second, it is clear that the performances of the group with less number of clients under heterogeneous data distribution and isolated learning will be deteriorated. However, aided by HFL, its performance improves while the other group's performance is not severely decreased, which promotes {\it fairness} among the groups.    
+
+\begin{figure*}[htp] 
+    \centering
+    \subfloat[$c_1=1 \text{ and} \:\: c_2=7$]{%
+        \includegraphics[width=0.5\linewidth]{n_user_association_1_7.pdf}%
+        \label{fig:UA_a}%
+        }%
+    \hfill%
+    \subfloat[$c_1=7 \text{ and} \:\: c_2=1$]{%
+        \includegraphics[width=0.5\linewidth]{n_user_association_7_1.pdf}%
+        \label{fig:UA_b}%
+        }%
+    \caption{Impact of the groups' shift parameters $c_1$ and $c_2$ on the group-client association under $S=8$ and $c_g=10$.}
+    \label{userassociation}
+\end{figure*}
+
+In Fig.~\ref{userassociation}, the effect of the groups' shift parameters $c_1$ and $c_2$ on determining the optimal group-client association is investigated. The results show that it is not always optimal to cluster the clients evenly among the groups. In Fig.~\ref{fig:UA_b} for instance, we see that assigning less clients to a group with a relatively smaller shift parameter performs better than an equal assignment of clients among both groups; this is observation is reversed in Fig.~\ref{fig:UA_a}, in which a larger number of clients is assigned to the relatively slower LPS.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.75\linewidth]{n_Global_Shift_Parameter_Imapct.pdf}
+\caption{The effect of global shift parameter $c_g$ under $S=10$.}
+\label{5}
+\end{figure}
+
+In Fig.~\ref{5}, the impact of global shift parameter $c_g$ on the global accuracy is shown. As the global shift delay parameter increases, the performance  gets worse. This is mainly because the number of global communication rounds with the GPS, $\mathcal{U}$, is reduced, which hinders the clients from getting the benefit of accessing other clients' learning models. 
+
+\begin{figure*}[htp] 
+    \centering
+    \subfloat[$c_g=10$]{%
+        \includegraphics[width=0.5\linewidth]{n_S_Parameter_choice_under_C_g=10.pdf}%
+        \label{fig:5a}%
+        }%
+    \hfill%
+    \subfloat[$c_g=30$]{%
+        \includegraphics[width=0.5\linewidth]{n_S_Parameter_choice_under_C_g=30.pdf}%
+        \label{fig:5b}%
+        }%
+    \caption{Impact of the global shift parameter $c_g$ on choosing the sync time $S$.}
+    \label{6}
+\end{figure*}
+
+
+
+In Fig.~\ref{6}, we show impact of the sync time $S$ on the performance, by varying the GPS shift parameter $c_g$. We see that for $c_g=10$, $S=0$ outperforms $S=20$. Note that $S=0$ corresponds to a centralized system (non-hierarchical). Increasing the shift parameter to $C_g=30$, however, the situation is different. Although in both figures $S=5$ is the optimum choice, but in case the system has an additional constraint on communicating with the GPS, $S=20$ will be a better choice, especially that the accuracy gain will not be sacrificed much. It is also worth noticing that the training time budget $T$ plays a significant role in choosing $S$; in Fig.~\ref{fig:5b}, $S=0$ (always communicate with the GPS) outperforms $S=20$ as long as $T \leq 500$, and the opposite is true afterwards. This means that in some scenarios, the hierarchical setting may not be the optimal setting (which is different from the findings in \cite{Hfl_kh}); for instance, if the system has a hard time constraint in learning, it may prefer to make use of communicating with GPS more frequently to get the advantage of learning the resulting models from different data.
+
+
+\section{Conclusion and Outlook}\label{conclusion}
+A delay sensitive HFL algorithm has been proposed, in which the effects of wall-clock times and delays on the overall accuracy of FL is investigated. A sync time $S$ governs how many local iterations are allowed at LPSs before forwarding to the GPS, and a system time $T$ constrains the overall training period. Our theoretical and simulation findings reveal that the optimal $S$ depends on different factors such as the delays at the LPSs and the GPS, the number of clients per group, and the value of $T$. Multiple insights are drawn on the performance of HFL in time-restricted settings. 
+
+\noindent\textbf{Future Investigation.} Guided by our understanding from the convergence bounds and the simulation results, we observe that it is better to make the parameter $S$ \textit{variable} especially during the first global communication rounds. For instance, instead of fixing $S=5$, we allow $S$ to increase gradually with each round from $1$ to $5$, and then fix it at $5$ for the remaining rounds. Our reasoning behind this is that the clients' models need to be {\it directed} towards global optimum, and not their local optima. Since this direction is done through the GPS, it is reasonable to communicate with it more frequently at the beginning of learning to push the local models towards the optimum direction. To investigate this setting, we train a logistic regression model over the MNIST dataset, and distribute it in a non-iid fashion over 500 clients per group. As shown in Fig.~\ref{svariable}, the variable $S$ approach achieves a higher accuracy than the fixed one, with the effect more pronounced as $S$ increases.
+
+\begin{figure*}[htp] 
+    \centering
+    \subfloat[$S=5$]{%
+        \includegraphics[width=0.33\linewidth]{n_SV_1_5.pdf}%
+        \label{fig:a}%
+        }%
+    \hfill%
+    \subfloat[$S=10$]{%
+        \includegraphics[width=0.33\linewidth]{n_SV_1_10.pdf}%
+        \label{fig:b}%
+        }%
+        \hfill%
+    \subfloat[$S=20$]{\includegraphics[width=0.33\linewidth]{n_SV_1_20.pdf}%
+        \label{fig:c}%
+        }
+    \caption{Comparison between variable and fixed $S$ with respect to the global learning accuracy.}
+    \label{svariable}
+\end{figure*}
+
+
+
+
+
+\appendices
+
+\section{Preliminaries}
+
+We will rely on the following relationships throughout our proofs, and will be using them without explicit reference:
+
+For any $x, y \in \mathbb{R}^n$, we have:
+\begin{align}
+ \langle  x,y\rangle \leq  \frac{1}{2}\left\|x\right\|^2+ \frac{1}{2}\left\|y\right\|^2.   
+\end{align}
+ 
+ 
+By Jensen's inequality, for $x_{i} \in \mathbb{R}^n$, $i \in \{1,2,3,\dots,N\}$, we have
+\begin{align}
+\left\|\frac{1}{N}\sum_{i=1}^{N}x_i\right\|^2 \leq \frac{1}{N}\sum_{i=1}^{N}\left\|x_i\right\|^2,
+\end{align}
+which implies 
+\begin{align}
+\left\|\sum_{i=1}^{N}x_i\right\|^2 \leq N\sum_{i=1}^{N}\left\|x_i\right\|^2.
+\end{align}
+
+
+\section{Proof of Lemma~\ref{lemma_1}}\label{appB}
+Conditioning on the number of local updates of group $i$ up to and including global round $u$, ${\bm t}_i^{u}$, we evaluate the expected difference between the aggregated global model and the latest local model at group $i$, by the end of global round $u$. Based on \eqref{eq_local-update} and \eqref{global_update}, the following holds:
+\begin{align}
+\mathbb{E}_{|\bm t_i^u}&\left\| x^{u+1}-x_{i}^{u,t_{i}^{u}}\right\|^2 \nonumber \\
+=&\alpha^2 \mathbb{E}_{|\bm t_i^u}\left\| \frac{1}{|\mathcal{N}_i|} \sum_{k \in \mathcal{N}_i}\sum_{l=0}^{t_{i}^{u}-1}\Tilde{g}_{i,k}\left(x_{i}^{u,l}\right)- \frac{1}{\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|} \sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}}\sum_{k \in \mathcal{N}_i} \sum_{l=0}^{t_{i}^{u}-1}\Tilde{g}_{i,k}\left(x_{i}^{u,l}\right)\right\|^2 \nonumber\\
+\leq& 2\alpha^2  \mathbb{E}_{|\bm t_i^u}\!\!\left(\left\| \frac{1}{|\mathcal{N}_i|} \sum_{k \in \mathcal{N}_i} \sum_{l=0}^{t_{i}^{u}-1}\Tilde{g}_{i,k}\left(x_{i}^{u,l}\right)\right\|^2\!\! + \left\|\frac{1}{\sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}|} \sum_{i \in \mathcal{N}_g}\frac{1}{t_{i}^{u}}\sum_{k \in \mathcal{N}_{i}} \sum_{l=0}^{t_{i}^{u}-1}\Tilde{g}_{i,k}\left(x_{i}^{u,l}\right)\right\|^2 \right) \nonumber\\
+ \leq& 2 \alpha^2  \mathbb{E}_{|\bm t_i^u}\!\!\left( \!\!\frac{1}{|\mathcal{N}_{i}|^2} \left\| \sum_{k \in \mathcal{N}_i} \sum_{l=0}^{t_{i}^{u}-1}\Tilde{g}_{i,k}\left(x_{i}^{u,l}\right)\right\|^2\!\! \!+\!\frac{|\mathcal{N}_g|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2}\!\sum_{i \in \mathcal{N}_g}\! \!\frac{1}{(t_{i}^{u})^2}\left\| \sum_{k \in \mathcal{N}_i}\! \sum_{l=0}^{t_{i}^{u}-1}\Tilde{g}_{i,k}\left(x_{i}^{u,l}\right)\right\|^2 \! \right) \nonumber\\
+=&2 \alpha^2 \left( \frac{1}{|\mathcal{N}_{i}|^2} + \frac{|\mathcal{N}_g|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2(t_i^{u})^2}\right) \mathbb{E}_{|\bm t_i^u} \left\| \sum_{k \in \mathcal{N}_i } \sum_{l=0}^{t_{i}^{u}-1}\Tilde{g}_{i,k}\left(x_{i}^{u,l}\right)\right\|^2 \nonumber \\ 
+&+2 \alpha^2 \frac{|\mathcal{N}_g|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{j \in \mathcal{N}_g \setminus{\{i\}}}\frac{1}{(t_j^{u})^2}\mathbb{E}_{|\bm t_i^u} \left\|\sum_{k \in \mathcal{N}_j} \sum_{l=0}^{t_{j}^{u}-1}\Tilde{g}_{j,k}\left(x_{j}^{u,l}\right)\right\|^2   \nonumber\\
+\leq& 2 \alpha^2 \left( \frac{1}{|\mathcal{N}_{i}|^2} + \frac{|\mathcal{N}_g|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2(t_i^u)^2}\right) |\mathcal{N}_i|\sum_{k \in \mathcal{N}_i} \mathbb{E}_{|\bm t_i^u}\left\|\sum_{l=0}^{t_{i}^{u}-1}\Tilde{g}_{i,k}\left(x_{i}^{u,l}\right)\right\|^2\nonumber \\ 
+&+2 \alpha^2 \frac{|\mathcal{N}_g|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{j \in \mathcal{N}_g \setminus{\{i\}}} \frac{|\mathcal{N}_j|}{(t_j^u)^2} \sum_{k \in \mathcal{N}_j}\mathbb{E}_{|\bm t_i^u}\left\| \sum_{l=0}^{t_{j}^{u}-1}\Tilde{g}_{j,k}\left(x_{j}^{u,l}\right)\right\|^2  \nonumber\\
+\leq& 2 \alpha^2 \left( \frac{1}{|\mathcal{N}_{i}|^2} + \frac{|\mathcal{N}_g|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2(t_i^{u})^2}\right) |\mathcal{N}_i|\sum_{k \in \mathcal{N}_i} t_{i}^{u} \sum_{l=0}^{t_{i}^{u}-1}\mathbb{E}_{|\bm t_i^u}\left\|\Tilde{g}_{i,k}\left(x_{i}^{u,l}\right)\right\|^2\nonumber \\ 
+&+2 \alpha^2 \frac{|\mathcal{N}_g|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{j \in \mathcal{N}_g \setminus{\{i\}}} \frac{|\mathcal{N}_j|}{(t_j^u)^2} \sum_{k \in \mathcal{N}_j}t_{j}^{u} \sum_{l=0}^{t_{j}^{u}-1} \mathbb{E}_{|\bm t_i^u}\left\|  \Tilde{g}_{j,k}\left(x_{j}^{u,l}\right)\right\|^2 \nonumber \\
+\leq& 2 \alpha^2 \left( \frac{1}{|\mathcal{N}_{i}|^2} + \frac{|\mathcal{N}_g|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2 \left(t_{i}^{u}\right)^2}\right) |\mathcal{N}_i|\sum_{k \in \mathcal{N}_i} t_{i}^{u} \sum_{l=0}^{t_{i}^{u}-1} G^2 \nonumber \\ 
+&+2 \alpha^2 \frac{|\mathcal{N}_g|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{j \in \mathcal{N}_g \setminus{\{i\}}}\frac{ |\mathcal{N}_j|}{(t_{j}^{u})^2} \sum_{k \in \mathcal{N}_j} t_{j}^{u} \sum_{l=0}^{t_{j}^{u}-1} G^2 \nonumber\\
+=&2\alpha^2 \left( \underbrace{  \left(t_{i}^{u}\right)^2}_{\text{group } i\text{'s} \text{ contribution} }+\underbrace{ \frac{|\mathcal{N}_g|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{j \in \mathcal{N}_g }|\mathcal{N}_j|^2}_{\text{all groups' contribution}}\right)G^2.
+\end{align}
+
+
+\section{Proof of Theorem~\ref{CA_Group}}\label{appC}
+Based on the smoothness assumption of the loss function at LPS $i$, the SGD update rule in \eqref{eq_lps-model-itr}, and the local aggregation rule in \eqref{eq_lps-model-agg}, one can write
+\begin{align} \label{smooth_bound}
+    \mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{u,l}\right) \leq& \mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{u,l-1}\right)+ \mathbb{E}_{|\bm t_i^u} \langle\nabla f_{i}\left(x_{i}^{u,l-1}\right),x_{i}^{u,l}-x_{i}^{u,l-1}\rangle+\frac{L}{2} \mathbb{E}_{|\bm t_i^u}\left\|x_{i}^{u,l}-x_{i}^{u,l-1}\right\|^2
+\nonumber\\
+=&\mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{u,l-1}\right)+ \alpha \mathbb{E}_{|\bm t_i^u} \langle \nabla f_{i}\left(x_{i}^{u,l-1}\right),  \frac{-1}{|\mathcal{N}_{i}|} \sum_{k \in \mathcal{N}_i}\Tilde{g}_{i,k}\left(x_{i}^{u,l-1}\right) \rangle \nonumber\\ 
+&+   \frac{\alpha^2 L}{2}  \mathbb{E}_{|\bm t_i^u}\left\| \sum_{k \in \mathcal{N}_i} \frac{1}{|\mathcal{N}_i|} \Tilde{g}_{i,k}\left(x_{i}^{u,l-1}\right)\right\|^2.
+\end{align}
+For the inner product term above, we have
+\begin{align} \label{dot_bound}
+  \alpha &\mathbb{E}_{|\bm t_i^u} \langle \nabla f_{i}\left(x_{i}^{u,l-1}\right), \frac{-1}{|\mathcal{N}_i|} \sum_{k \in \mathcal{N}_i} \Tilde{g}_{i,k}\left(x_{i}^{u,l-1}\right)\rangle\nonumber \\ 
+  \overset{(\text{i})}{=}&  \alpha \mathbb{E}_{|\bm t_i^u} \langle \nabla f_{i}\left(x_{i}^{u,l-1}\right),  \frac{-1}{|\mathcal{N}_i|}\sum_{k \in \mathcal{N}_i} \nabla F_{i,k}\left(x_{i}^{u,l-1}\right) \rangle\nonumber\\
+  \overset{(\text{ii})}{=}&
+  \frac{\alpha}{2} \Biggl(\mathbb{E}_{|\bm t_i^u} \left\|\nabla f_{i}\left(x_{i}^{u,l-1}\right)-  \frac{1}{|\mathcal{N}_i|}\sum_{k \in \mathcal{N}_i} \nabla F_{i,k}\left(x_{i}^{u,l-1}\right)\right\|^2
+   -\mathbb{E}_{|\bm t_i^u}\left\|\nabla f_{i}\left(x_{i}^{u,l-1}\right)\right\|^2\nonumber \\
+   &\hspace{3in}-\mathbb{E}_{|\bm t_i^u}\left\|\frac{1}{|\mathcal{N}_i|}\sum_{k \in \mathcal{N}_i} \nabla F_{i,k}\left(x_{i}^{u,l-1}\right)\right\|^2\Biggl),
+\end{align}
+where (i) follows from Assumption~2 (unbiased stochastic gradient in \eqref{assum_2}), and (ii) results from $ \langle x,y\rangle=\frac{1}{2}\left(\left\|x+y\right\|^2-\left\|x\right\|^2-\left\|y\right\|^2 \right)$. Regarding last term in \eqref{smooth_bound}, the following holds: 
+\begin{align} \label{sgd_bound}
+&\mathbb{E}_{|\bm t_i^u}\left\| \frac{1}{|\mathcal{N}_i|} \sum_{k \in \mathcal{N}_i} \Tilde{g}_{i,k}\left(x_{i}^{u,l-1}\right)\right\|^2
+\nonumber \\
+&=\mathbb{E}_{|\bm t_i^u}\left\|\frac{1}{|\mathcal{N}_i|} \sum_{k \in \mathcal{N}_i} \Biggl( \Tilde{g}_{i,k}\left(x_{i}^{u,l-1}\right)-\nabla F_{i,k}\left(x_{i}^{u,l-1}\right)+\nabla F_{i,k}\left(x_{i}^{u,l-1}\right)\Biggr) \right\|^2\nonumber\\
+ &\overset{(\text{iii})}{=}\frac{1}{|\mathcal{N}_i|^2} \sum_{k \in \mathcal{N}_i} \mathbb{E}_{|\bm t_i^u}\left\| \Tilde{g}_{i,k}\left(x_{i}^{u,l-1}\right)-\nabla F_{i,k}\left(x_{i}^{u,l-1}\right)\right\|^2+ \mathbb{E}_{|\bm t_i^u}\left\| \frac{1}{|\mathcal{N}_i|} \sum_{k \in \mathcal{N}_i} \nabla F_{i,k}\left(x_{i}^{u,l-1}\right)\right\|^2\nonumber\\
+ &\leq \frac{1}{|\mathcal{N}_i|} \sigma^2+ \mathbb{E}_{|\bm t_i^u}\left\| \frac{1}{|\mathcal{N}_i|}\sum_{k \in \mathcal{N}_i} \nabla F_{i,k}\left(x_{i}^{u,l-1}\right)\right\|^2, \nonumber\\
+\end{align}
+where (iii) follows because each $k$th term $\Tilde{g}_{i,k}\left(x_{i}^{u,l-1}\right)-\nabla F_{i,k}\left(x_{i}^{u,l-1}\right)$ has zero mean and the overall $|\mathcal{N}_i|$ terms are independent across different clients. Substituting \eqref{dot_bound} and \eqref{sgd_bound} into \eqref{smooth_bound}, one get
+\begin{align} 
+\mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{u,l}\right) \leq& \mathbb{E}_{|\bm t_i^u} f_{i}\left(x_{i}^{u,l-1}\right) +   \frac{\alpha^2L}{2}  \frac{1}{|\mathcal{N}_i|} \sigma^2+  \frac{\alpha^2 L}{2} \mathbb{E}_{|\bm t_i^u}\left\| \frac{1}{|\mathcal{N}_i|}\sum_{k \in \mathcal{N}_i} \nabla F_{i,k}\left(x_{i}^{u,l-1}\right)\right\|^2 \nonumber\\
+&+ \frac{\alpha}{2} \Biggl(\mathbb{E}_{|\bm t_i^u} \left\|\nabla f_{i}\left(x_{i}^{u,l-1}\right)-  \frac{1}{|\mathcal{N}_i|}\sum_{k \in \mathcal{N}_i} \nabla F_{i,k}\left(x_{i}^{u,l-1}\right)\right\|^2
+  -\mathbb{E}_{|\bm t_i^u}\left\|\nabla f_{i}\left(x_{i}^{u,l-1}\right)\right\|^2\nonumber \\
+  &\hspace{2.5in}-\mathbb{E}_{|\bm t_i^u}\left\|\frac{1}{|\mathcal{N}_i|}\sum_{k \in \mathcal{N}_i} \nabla F_{i,k}\left(x_{i}^{u,l-1}\right)\right\|^2\Biggl) \nonumber\\
+=&\mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{u,l-1}\right) - \frac{\alpha}{2} \mathbb{E}_{|\bm t_i^u}\left\|\nabla f_{i}\left(x_{i}^{u,l-1}\right)\right\|^2  +  \frac{\alpha^2 L}{2}  \frac{1}{|\mathcal{N}_i|} \sigma^2 \nonumber\\
+&- \left(\frac{\alpha}{2}- \frac{\alpha^2 L}{2}\right)\mathbb{E}_{|\bm t_i^u}\left\| \frac{1}{|\mathcal{N}_i|}\sum_{k \in \mathcal{N}_i} \nabla F_{i,k}\left(x_{i}^{u,l-1}\right)\right\|^2\ \label{eq_nameless} \\
+  \leq& \mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{u,l-1}\right) - \frac{\alpha}{2} \mathbb{E}_{|\bm t_i^u}\left\|\nabla f_{i}\left(x_{i}^{u,l-1}\right)\right\|^2+ \frac{\alpha^2 L}{2}  \frac{1}{|\mathcal{N}_i|} \sigma^2,
+\end{align}
+where \eqref{eq_nameless} follows from \eqref{group_loss}, and the last inequality follows by choosing $0 < \alpha \leq \frac{1}{L}$.
+
+Next, rearranging the terms above and summing over all local iterations till iteration $t_{i}^{u}$, we have
+\begin{align}
+       \frac{\alpha}{2} \sum_{l=1}^{t_{i}^{u}} \mathbb{E}_{|\bm t_i^u}\left\|\nabla f_{i}\left(x_{i}^{u,l-1}\right)\right\|^2 &\leq \sum_{l=1}^{t_{i}^{u}} \left[\mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{u,l-1}\right) - \mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{u,l}\right) \right] + t_{i}^{u}\alpha^2  \frac{L}{2}  \frac{1}{|\mathcal{N}_i|} \sigma^2\ \nonumber\\    
+       &=\left[\mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{u}\right) - \mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{u,t_{i}^{u}}\right) \right] +  t_{i}^{u}\alpha^2  \frac{L}{2}  \frac{1}{|\mathcal{N}_i|} \sigma^2.
+\end{align}
+Now taking the average over all global communication rounds yields
+\begin{align} \label{global_avg}
+ &\frac{1}{\sum_{u=1}^{\mathcal{U}} t_{i}^{u}} \sum_{u=1}^{\mathcal{U}} \frac{\alpha}{2} \sum_{l=1}^{t_{i}^{u}} \mathbb{E}_{|\bm t_i^u}\left\|\nabla f_{i}\left(x_{i}^{u,l-1}\right)\right\|^2 \nonumber \\ 
+       \leq&      
+       \frac{1}{\sum_{u=1}^{\mathcal{U}} t_{i}^{u}} \sum_{u=1}^{\mathcal{U}} \left[\mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{u}\right) - \mathbb{E}f_{i}\left(x_{i}^{u,t_{i}^{u}}\right) \right]+\sum_{u=1}^{\mathcal{U}}\frac{t_{i}^{u}}{\sum_{u=1}^{\mathcal{U}}t_{i}^{u}}  \frac{\alpha^2 L}{2}  \frac{1}{|\mathcal{N}_i|}
+       \sigma^2 \nonumber\\
+       =&  \frac{1}{\sum_{u=1}^{\mathcal{U}} t_{i}^{u}} \left(\mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{1}\right)-\mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{\mathcal{U},t_i^{\mathcal{U}}}\right) \!+\!\sum_{u=1}^{\mathcal{U}-1} 
+    \mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{u+1}\right)\!-\!\mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{u,t_i^{u}}\right)\right) \!+\! \frac{\alpha^2 L}{2}  \frac{1}{|\mathcal{N}_i|} \sigma^2.
+       \end{align}
+Now let us consider one of the summands in the equality above. We have
+\begin{align} \label{last_step}
+ \mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{u+1}\right)-\mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{u,t_i^{u}}\right) &\leq \mathbb{E}_{|\bm t_i^u}\langle\nabla f_{i}\left(x_{i}^{u,t_i^{u}}\right) ,x_{i}^{u+1}- x_{i}^{u,t_i^{u}}\rangle+ \frac{L}{2}\mathbb{E}_{|\bm t_i^u}\left\| x_{i}^{u+1}-x_{i}^{u,t_{i}^{u}}\right\|^2 \nonumber \\
+  &\leq {\frac{1}{2}} \mathbb{E}_{|\bm t_i^u} \left(\left\|\nabla f_{i}\left(x_{i}^{u,t_i^{u}}\right)\right\|^2+ \left\|x_{i}^{u+1}- x_{i}^{u,t_i^{u}}\right\|^2\right) \nonumber \\
+  &\hspace{2.59in}+\frac{L}{2}\mathbb{E}_{|\bm t_i^u}\left\| x_{i}^{u+1}-x_{i}^{u,t_{i}^{u}}\right\|^2 \nonumber \\
+  &= \frac{1}{2}\mathbb{E}_{|\bm t_i^u}\left\|\nabla f_{i}\left(x_{i}^{u,t_i^{u}}\right)\right\|^2+\frac{(L +1)}{2}\mathbb{E}\left\| x_{i}^{u+1}-x_{i}^{u,t_{i}^{u}}\right\|^2 \nonumber\\
+   &= \frac{1}{2}\mathbb{E}_{|\bm t_i^u}\left\|\frac{1}{|\mathcal{N}_i|} \sum_{k \in \mathcal{N}_i}\nabla F_{i,k}\left(x_{i}^{u,t_i^{u}}\right)\right\|^2+\frac{L +1}{2}\mathbb{E}\left\| x_{i}^{u+1}-x_{i}^{u,t_{i}^{u}}\right\|^2\nonumber \\
+   &\leq  \frac{G^2}{2} + \frac{(L +1)}{2}\mathbb{E}_{|\bm t_i^u}\left\| x_{i}^{u+1}-x_{i}^{u,t_{i}^{u}}\right\|^2\nonumber\\
+   &\leq  \frac{G^2}{2}+ (L +1)\alpha^2 \left( ( t_{i}^{u})^2+ \frac{|\mathcal{N}_g|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{j \in \mathcal{N}_g }|\mathcal{N}_j|^2\right) G^2,
+\end{align}
+where the last inequality follows directly from Lemma~\ref{lemma_1} (note that each group restarts its model updates following each global iteration, and hence $x_{i}^{u+1,0}=x^{u+1}$). Finally, by substituting \eqref{last_step} into \eqref{global_avg} we get
+\begin{align} 
+ &\frac{1}{\sum_{u=1}^{\mathcal{U}} t_{i}^{u}} \sum_{u=1}^{\mathcal{U}}  \sum_{l=1}^{t_{i}^{u}} \mathbb{E}_{|\bm t_i^u}\left\|\nabla f_{i}\left(x_{i}^{u,l-1}\right)\right\|^2 \nonumber \\   
+    & \leq \frac{2}{\alpha \sum_{u=1}^{\mathcal{U}} t_{i}^{u}} \Biggl(\mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{1}\right)-\mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{\mathcal{U},t_i^{\mathcal{U}}}\right) \Biggl)+ \frac{ \alpha  L}{|\mathcal{N}_{i}|} \sigma^2 +\frac{1}{\alpha \sum_{u=1}^{\mathcal{U}} t_{i}^{u}}  (\mathcal{U}-1) G^2 \nonumber \\
+    &\hspace{2in}+  \frac{2 (L +1)\alpha}{ \sum_{u=1}^{\mathcal{U}} t_{i}^{u}}   \sum_{u=1}^{\mathcal{U}-1}   \left( ( t_{i}^{u})^2+ \underbrace{\frac{|\mathcal{N}_g|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{j \in \mathcal{N}_g }|\mathcal{N}_j|^2}_{\triangleq\kappa}\right) G^2
+    \nonumber\\
+    &=\frac{2}{\alpha \sum_{u=1}^{\mathcal{U}} t_{i}^{u}} \Biggl(\mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{1}\right)-\mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{\mathcal{U},t_i^{\mathcal{U}}}\right) \Biggl)+ \alpha  L \frac{1}{|\mathcal{N}_{i}|} \sigma^2 \nonumber \\
+    &\hspace{1in}+\Biggl(\frac{1}{\alpha \sum_{u=1}^{\mathcal{U}} t_{i}^{u}} +  \frac{2 (L +1) \kappa \alpha}{ \sum_{u=1}^{\mathcal{U}} t_{i}^{u}} \Biggr)(\mathcal{U}-1)  G^2 +\frac{2 (L +1)\alpha}{ \sum_{u=1}^{\mathcal{U}} t_{i}^{u}}   \sum_{u=1}^{\mathcal{U}-1}   ( t_{i}^{u})^2 G^2. 
+   
+   
+   
+    \end{align}
+
+
+\section{Proof of Theorem~\ref{global_convg}} \label{appD}
+We first use the smoothness assumption of the global loss function, together with the SGD update rule in \eqref{global_update} to get the following:
+\begin{align} \label{global_smooth_bound}
+    \mathbb{E}_{|\bm t_i^u}f\left(x^{u+1}\right) &\leq \mathbb{E}_{|\bm t_i^u}f\left(x^{u}\right)+ \mathbb{E}_{|\bm t_i^u} \langle \nabla f\left(x^{u}\right),x^{u+1}-x^{u}\rangle+\frac{L}{2} \mathbb{E}_{|\bm t_i^u}\left\|x^{u+1}-x^{u}\right\|^2
+\nonumber\\
+&=\mathbb{E}_{|\bm t_i^u} f\left(x^{u}\right)+ \alpha \mathbb{E}_{|\bm t_i^u}  \langle\nabla f\left(x^{u}\right),  \frac{-1}{\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|}\sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i} \Tilde{g}_{i,k}\left(x_{i}^{u,l}\right)\rangle\nonumber\\  
+&\quad + \frac{\alpha^2 L}{2(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|)^2} \mathbb{E}_{|\bm t_i^u} \left\|\sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i} \Tilde{g}_{i,k}\left(x_{i}^{u,l}\right)\right\|^2.
+\end{align}
+For the inner product term above, we have
+\begin{align} \label{global_dot_bound}
+  &\alpha \mathbb{E}_{|\bm t_i^u} \langle \nabla f\left(x^{u}\right),\frac{-1}{\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|}\sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i} \Tilde{g}_{i,k}\left(x_{i}^{u,l}\right)\rangle \nonumber \\
+  &\overset{(\text{i})}{=}  \alpha \mathbb{E}_{|\bm t_i^u} \langle\nabla f\left(x^{u}\right),  \frac{-1}{\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|}\sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i}\nabla F_{i,k}\left(x_{i}^{u,l}\right)\rangle\nonumber\\
+  &=
+  \frac{\alpha}{2} \left(\mathbb{E}_{|\bm t_i^u}\left\|\nabla f\left(x^{u}\right)-   \frac{1}{\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|}\sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i}\nabla F_{i,k}\left(x_{i}^{u,l}\right)\right\|^2\right.\nonumber\\ 
+  &\left.\quad \qquad -\mathbb{E}_{|\bm t_i^u}\left\|\nabla f\left(x^{u}\right)\right\|^2-\mathbb{E}_{|\bm t_i^u}\left\|\frac{1}{\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|}\sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i}\nabla F_{i,k}\left(x_{i}^{u,l}\right)\right\|^2\right),
+\end{align}
+where (i) follows from Assumption~2 (unbiased stochastic gradient in \eqref{assum_2}). 
+For the last term in \eqref{global_smooth_bound}, we have
+\begin{align} \label{global_sgd_bound}
+&\mathbb{E}_{|\bm t_i^u}\left\|\sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i} \Tilde{g}_{i,k}\left(x_{i}^{u,l}\right)\right\|^2
+\nonumber \\
+&=\mathbb{E}_{|\bm t_i^u}\left\| \sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i} \Tilde{g}_{i,k}\left(x_{i}^{u,l}\right)-\nabla F_{i,k}\left(x_{i}^{u,l}\right)+\nabla F_{i,k}\left(x_{i}^{u,l}\right) \right\|^2\nonumber\\
+ &=\mathbb{E}_{|\bm t_i^u}\left\|\sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i} \Tilde{g}_{i,k}\left(x_{i}^{u,l}\right)-\nabla F_{i,k}\left(x_{i}^{u,l}\right)\right\|^2+ \mathbb{E}_{|\bm t_i^u}\left\| \sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i} \nabla F_{i,k}\left(x_{i}^{u,l}\right)\right\|^2\nonumber\\
+ &\leq |\mathcal{N}_g|\sum_{i \in \mathcal{N}_g } \frac{1}{t_{i}^u} \sum_{l=0}^{t_{i}^{u}-1}  \mathbb{E}_{|\bm t_i^u}\left\|\sum_{k \in \mathcal{N}_i} \Tilde{g}_{i,k}\left(x_{i}^{u,l}\right)-\nabla F_{i,k}\left(x_{i}^{u,l}\right)\right\|^2+ \mathbb{E}_{|\bm t_i^u}\left\| \sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i} \nabla F_{i,k}\left(x_{i}^{u,l}\right)\right\|^2 \nonumber\\
+
+ &\leq |\mathcal{N}_g|\sum_{i \in \mathcal{N}_g } \frac{1}{t_i^{u}}\sum_{l=0}^{t_{i}^{u}-1}|\mathcal{N}_i| \sum_{ i \in \mathcal{N}_i} \mathbb{E}_{|\bm t_i^u}\left\| \Tilde{g}_{i,k}\left(x_{i}^{u,l}\right)-\nabla F_{i,k}\left(x_{i}^{u,l}\right)\right\|^2 \nonumber \\
+ &\hspace{3.5in}+ \mathbb{E}_{|\bm t_i^u}\left\|\sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i} \nabla F_{i,k}\left(x_{i}^{u,l}\right)\right\|^2 \nonumber\\
+
+ &\leq |\mathcal{N}_g|\sum_{i \in \mathcal{N}_g } \frac{1}{t_i^{u}}\sum_{l=0}^{t_{i}^{u}-1}|\mathcal{N}_i| \sum_{ i \in \mathcal{N}_i} \sigma^2+ \mathbb{E}_{|\bm t_i^u}\left\| \sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i} \nabla F_{i,k}\left(x_{i}^{u,l}\right)\right\|^2         \nonumber\\
+
+  & =|\mathcal{N}_g|\sum_{i \in \mathcal{N}_g } \frac{1}{t_i^{u}}t_{i}^{u}|\mathcal{N}_i|^2\sigma^2+ \mathbb{E}_{|\bm t_i^u}\left\| \sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i} \nabla F_{i,k}\left(x_{i}^{u,l}\right)\right\|^2\nonumber\\
+  & =|\mathcal{N}_g|\sum_{i \in \mathcal{N}_g } |\mathcal{N}_i|^2\sigma^2+ \mathbb{E}_{|\bm t_i^u}\left\| \sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i} \nabla F_{i,k}\left(x_{i}^{u,l}\right)\right\|^2.
+\end{align}
+Substituting \eqref{global_dot_bound} and \eqref{global_sgd_bound} into \eqref{global_smooth_bound} yields
+\begin{align}  \label{global_smooth_bound_2}
+    \mathbb{E}_{|\bm t_i^u}f\left(x^{u+1}\right) \leq& \mathbb{E}_{|\bm t_i^u}f\left(x^{u}\right)+ 
+  \frac{\alpha}{2} \left(\mathbb{E}_{|\bm t_i^u}\left\|\nabla f\left(x^{u}\right)-   \frac{1}{\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|}\sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i}\nabla F_{i,k}(x_{i}^{u,l})\right\|^2\right.\nonumber\\ 
+  &\left. -\mathbb{E}_{|\bm t_i^u}\left\|\nabla f\left(x^{u}\right)\right\|^2-\mathbb{E}_{|\bm t_i^u}\left\| \frac{1}{\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|}\sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i}\nabla F_{i,k}(x_{i}^{u,l})\right\|^2\right)
+\nonumber \\
+&+\frac{\alpha^2  L}{2\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2}  \left(|\mathcal{N}_g|\sum_{i \in \mathcal{N}_g } |\mathcal{N}_i|^2\sigma^2+ \mathbb{E}_{|\bm t_i^u}\left\| \sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i} \nabla F_{i,k}\left(x_{i}^{u,l}\right)\right\|^2\right)\nonumber \\
+\leq& \mathbb{E}_{|\bm t_i^u}f\left(x^{u}\right)+ 
+  \frac{\alpha}{2} \mathbb{E}_{|\bm t_i^u}\left\|\nabla f\left(x^{u}\right)-   \frac{1}{\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|}\sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i}\nabla F_{i,k}\left(x_{i}^{u,l}\right)\right\|^2 \nonumber \\
+  &-\frac{\alpha}{2}\mathbb{E}_{|\bm t_i^u}\left\|\nabla \left(x^{u}\right)\right\|^2 + \frac{\alpha^2 L |\mathcal{N}_g| \sum_{i \in \mathcal{N}_g} |\mathcal{N}_i|^2\sigma^2}{2\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2},
+\end{align}
+where the last inequality follows by choosing $0 < \alpha \leq \frac{1}{L}$.
+
+Regarding the second term in \eqref{global_smooth_bound_2}, although the division by $t_i^{u}$ fixes the bias issue of the cumulative gradient at the GPS, it does not make it not coincide with its theoretical definition in \eqref{global_loss}. Hence, different from the analogous step in \eqref{eq_nameless} in the proof of Theorem~\ref{CA_Group}, the term above requires more mathematical manipulations. Towards that end, we bound it as follows:
+\begin{align} \label{e_bound2}
+&\mathbb{E}_{|\bm t_i^u}\left\|\nabla f\left(x^{u}\right)-   \frac{1}{\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|}\sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i}\nabla F_{i,k}\left(x_{i}^{u,l}\right)\right\|^2 \nonumber \\
+& =\mathbb{E}_{|\bm t_i^u} \left\|\frac{1}{\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|}\sum_{i \in \mathcal{N}_g}\sum_{k \in \mathcal{N}_i}\nabla F_{i,k}\left(x^{u}\right)-\frac{1}{\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|}\sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i}\nabla F_{i,k}\left(x_{i}^{u,l}\right)\right\|^2\nonumber\\ 
+&\leq \frac{|\mathcal{N}_{g}|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{i \in \mathcal{N}_g} 
+   \mathbb{E}_{|\bm t_i^u}\left\| \sum_{k \in \mathcal{N}_i}\nabla F_{i,k}\left(x^{u}\right)
+    - \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i}\nabla F_{i,k}\left(x_{i}^{u,l}\right)\right\|^2\nonumber \\
+   
+&\leq \frac{|\mathcal{N}_{g}|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}| \sum_{k \in \mathcal{N}_i}
+ \mathbb{E}_{|\bm t_i^u}\left\| \nabla F_{i,k}\left(x^{u}\right)
+    - \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\nabla F_{i,k}\left(x_{i}^{u,l}\right)\right\|^2\nonumber \\ 
+&\leq\frac{|\mathcal{N}_{g}|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}| \sum_{k \in \mathcal{N}_i} \frac{1}{t_i^u} \sum_{l=0}^{t_i^{u}-1}
+  \mathbb{E}_{|\bm t_i^u}\left\| \nabla F_{i,k}\left(x^{u}\right)
+    -\nabla F_{i,k}\left(x_{i}^{u,l}\right)\right\|^2\nonumber \\
+&\leq\frac{|\mathcal{N}_{g}|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}| \sum_{k \in \mathcal{N}_i} \frac{1}{t_i^u} \sum_{l=0}^{t_i^{u}-1} L^2 \mathbb{E}_{|\bm t_i^u} \left\|(x^{u})
+    -(x_{i}^{u,l})\right\|^2\nonumber \\
+    &\leq  \frac{2 L^2 |\mathcal{N}_{g}|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}| \sum_{k \in \mathcal{N}_i} \frac{1}{t_i^u} \sum_{l=0}^{t_i^{u}-1} \mathbb{E}_{|\bm t_i^u} \left\|x^{u}-x_{i}^{u-1,t_{i}^{u-1}}
+    \right\|^2+\mathbb{E}_{|\bm t_i^u} \left\|x_{i}^{u-1,t_{i}^{u-1}}-x_{i}^{u,l}\right\|^2.
+\end{align}
+For the last term above, we have
+\begin{align}\label{b_bound}
+   \mathbb{E}_{|\bm t_i^u}\left\|x_{i}^{u-1,t_{i}^{u-1}}-x_{i}^{u,l}\right\|^2&= \mathbb{E}_{|\bm t_i^u}\left\|x_{i}^{u-1,t_{i}^{u-1}}-x^{u}+x^{u}-x_{i}^{u,l}\right\|^2 \nonumber \\
+   &\leq 2 \mathbb{E}_{|\bm t_i^u}\left\|x_{i}^{u-1,t_{i}^{u-1}}-x^{u}\right\|^2 + 2 \mathbb{E}_{|\bm t_i^u}\left\| x^{u}-x_{i}^{u,l}\right\|^2 \nonumber \\
+   &\overset{(a)}{=} 2 \mathbb{E}_{|\bm t_i^u}\left\|x_{i}^{u-1,t_{i}^{u-1}}-x^{u}\right\|^2 + 2 \mathbb{E}_{|\bm t_i^u}\left\|\frac{\alpha}{|\mathcal{N}_i|} \sum_{m=0}^{l-1}\sum_{k \in \mathcal{N}_i} \Tilde{g}_{i,k}\left(x_{i}^{u,m}\right) \right\|^2 \nonumber \\
+   &\leq 2 \mathbb{E}_{|\bm t_i^u}\left\|x_{i}^{u-1,t_{i}^{u-1}}-x^{u}\right\|^2 + 2 \frac{\alpha^2}{|\mathcal{N}_i|}\sum_{k \in \mathcal{N}_i} l \sum_{m=0}^{l-1} \mathbb{E}_{|\bm t_i^u}\left\|  \Tilde{g}_{i,k}\left(x_{i}^{u,m}\right) \right\|^2 \nonumber \\
+   &\leq 2 \mathbb{E}_{|\bm t_i^u}\left\|x_{i}^{u-1,t_{i}^{u-1}}-x^{u}\right\|^2 + 2 \frac{\alpha^2}{|\mathcal{N}_i|}\sum_{k \in \mathcal{N}_i} l^2  G^2 \nonumber \\
+   &= 2 \mathbb{E}_{|\bm t_i^u}\left\|x_{i}^{u-1,t_{i}^{u-1}}-x^{u}\right\|^2 + 2 \alpha^2l^2  G^2,
+\end{align}
+where (a) follows from \eqref{eq_local-update}.
+Next, substituting the bound of (\ref{b_bound}) in (\ref{e_bound2}) yields 
+\begin{align} 
+&\mathbb{E}_{|\bm t_i^u}\left\|\nabla f(x^{u})-   \frac{1}{\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|}\sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i}\nabla F_{i,k}\left(x_{i}^{u,l}\right)\right\|^2 \nonumber \\
+&\leq \frac{ 2 L^2 |\mathcal{N}_{g}|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}| \sum_{k \in \mathcal{N}_i} \frac{1}{t_i^u} \sum_{l=0}^{t_i^{u}-1} \Biggl( 3 \mathbb{E}_{|\bm t_i^u} \left\|x^{u}-x_{i}^{u-1,t_{i}^{u-1}}
+     \right\|^2+ 2 \alpha^2l^2  G^2 \Biggr) \nonumber \\
+&\leq  \frac{4 L^2 |\mathcal{N}_{g}|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}| \sum_{k \in \mathcal{N}_i} \frac{1}{t_i^u} \sum_{l=0}^{t_i^{u}-1} \! \left(3\alpha^2  (t_{i}^{u-1})^2\!+\! \frac{3\alpha^2 |\mathcal{N}_g|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{j \in \mathcal{N}_g}|\mathcal{N}_j|^2G^2\!+\!  \alpha^2l^2  G^2 \!\right).
+\end{align}
+Finally, Substituting (41) in (38) and rearranging, we get
+\begin{align}  \label{global_smooth_bound_3}
+    &\mathbb{E}_{|\bm t_i^u}\left\|\nabla f(x^{u})\right\|^2  
+\leq  \frac{2}{\alpha} \left(\mathbb{E}_{|\bm t_i^u}f\left(x^{u}\right)-\mathbb{E}_{|\bm t_i^u}f\left(x^{u+1}\right)\right) + \frac{\alpha L |\mathcal{N}_g| \sum_{i \in \mathcal{N}_g} |\mathcal{N}_i|^2\sigma^2}{(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|)^2}\nonumber \\
+&+ \frac{4 L^2 |\mathcal{N}_{g}|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}| \sum_{k \in \mathcal{N}_i} \frac{1}{t_i^u} \sum_{l=0}^{t_i^{u}-1}  \left(\!3\alpha^2  (t_{i}^{u-1})^2\!+\! \frac{3\alpha^2 |\mathcal{N}_g|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{j \in \mathcal{N}_g}|\mathcal{N}_j|^2G^2+  \alpha^2l^2  G^2 \!\right)
+.
+\end{align}
+Then, taking the average over global communication rounds $\mathcal{U}$ yields
+\begin{align}  
+   \frac{1}{\mathcal{U}} \sum_{u=1}^{\mathcal{U}} \mathbb{E}_{|\bm t_i^u}\left\|\nabla f\left(x^{u}\right)\right\|^2  
+\leq&  \frac{2}{\alpha} \frac{1}{\mathcal{U}}  \left(\mathbb{E}_{|\bm t_i^u}f(x^{1})-\mathbb{E}_{|\bm t_i^u}f\left(x^{\mathcal{U}+1}\right) \right) + \frac{\alpha L |\mathcal{N}_g| \sum_{i \in \mathcal{N}_g} |\mathcal{N}_i|^2\sigma^2}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2}\nonumber \\
+&+ \frac{1}{\mathcal{U}} \sum_{u=1}^{\mathcal{U}}  \frac{4 L^2}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} |\mathcal{N}_{g}|\sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}| \sum_{k \in \mathcal{N}_i} \frac{1}{t_i^u} \sum_{l=0}^{t_i^{u}-1} 3\alpha^2  (t_{i}^{u-1})^2 \nonumber \\
+&+ \frac{12 \alpha^2 L^2 G^2}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^4} |\mathcal{N}_{g}|^2  \sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}|^2 \sum_{j \in \mathcal{N}_g}  |\mathcal{N}_j|^2 \nonumber \\
+&+ \frac{1}{\mathcal{U}} \sum_{u=1}^{\mathcal{U}}\frac{4\alpha^2 L^2  G^2 }{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} |\mathcal{N}_{g}|\sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}| \sum_{k \in \mathcal{N}_i} \frac{1}{t_i^u} \sum_{l=0}^{t_i^{u}-1}  l^2 . 
+\end{align}
+Direct simplifications of the above expression give the result of the theorem.
+
+\section{Proof Of Corollary ~\ref{corollary}} \label{appE}
+
+By Theorem~\ref{global_convg}, we have shown the convergence rate of the whole setting. Furthermore, bounding the local iteration time, and as a consequence the number of local iterations as stated in \eqref{t_bound1} and \eqref{t_bound2}, one can show that the bound in Theorem~\ref{global_convg} behaves as follows: 
+
+
+\begin{align} \label{global_bound} 
+   \frac{1}{\mathcal{U}} \sum_{u=1}^{\mathcal{U}} \mathbb{E}_{|\bm t_i^u}\left\|\nabla f(x^{u})\right\|^2  
+\leq&  
+ \frac{2}{\alpha} \frac{1}{\mathcal{U}}  \left(\mathbb{E}f\left(x^{1}\right)-\mathbb{E}f\left(x^{\mathcal{U}+1}\right)\right)  + \frac{\alpha L |\mathcal{N}_g| \sum_{i \in \mathcal{N}_g} |\mathcal{N}_i|^2\sigma^2}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2}\nonumber \\
+&+\frac{\alpha^2 }{\mathcal{U}} \sum_{u=1}^{\mathcal{U}}  \frac{12 L^2}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} |\mathcal{N}_{g}|\sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}|^2   (t_{i}^{u-1})^2 \nonumber \\
+&+\alpha^2 \frac{1}{\mathcal{U}} \sum_{u=1}^{\mathcal{U}}\frac{4 L^2 }{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} |\mathcal{N}_{g}|\sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}|^2  \frac{(t_i^{u}-1)(2t_i^{u}-1)}{6}  G^2 
+ \nonumber \\
+ &+\frac{12 \alpha^2 L^2 G^2}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^4} |\mathcal{N}_{g}|^2  \sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}|^2 \sum_{j \in \mathcal{N}_g}  |\mathcal{N}_j|^2\nonumber \\
+ \leq& \frac{2}{\alpha} \frac{1}{\mathcal{U}}  \left(\mathbb{E}_{|\bm t_i^u}f\left(x^{1}\right)-\mathbb{E}_{|\bm t_i^u}f\left(x^{\mathcal{U}+1}\right)\right)  + \frac{\alpha L |\mathcal{N}_g| \sum_{i \in \mathcal{N}_g} |\mathcal{N}_i|^2\sigma^2}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2}\nonumber \\
+&+\alpha^2   \frac{12 L^2}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} |\mathcal{N}_{g}|\sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}|^2  (t_{i}^{\max})^2 \nonumber \\
+&+\alpha^2 \frac{4 L^2  G^2 }{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} |\mathcal{N}_{g}|\sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}|^2  \frac{(t_i^{\max})^2}{3} 
+ \nonumber \\
+ &+\alpha^2 \frac{12  L^2 G^2}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^4} |\mathcal{N}_{g}|^2  \sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}|^2 \sum_{j \in \mathcal{N}_g}  |\mathcal{N}_j|^2\nonumber \\
+ \leq&  \frac{2}{\sqrt{\mathcal{U}}}  \left(\mathbb{E}_{|\bm t_i^u}f\left(x^{1}\right)-\mathbb{E}_{|\bm t_i^u}f\left(x^{\mathcal{U}+1}\right)\right)  + \frac{1}{\sqrt{\mathcal{U}}}\frac{ L |\mathcal{N}_g| \sum_{i \in \mathcal{N}_g} |\mathcal{N}_i|^2\sigma^2}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2}\nonumber \\
+ &+\frac{1}{\mathcal{U}}   \frac{12 L^2}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} |\mathcal{N}_{g}|\sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}|^2  \left(t_{i}^{\max}\right)^2 \nonumber \\
+&+\frac{1}{\mathcal{U}} \frac{4 L^2  G^2 }{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} |\mathcal{N}_{g}|\sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}|^2  \frac{(t_i^{\max})^2}{3} 
+ \nonumber \\
+ &+\frac{1}{\mathcal{U}} \frac{12  L^2 G^2}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^4} |\mathcal{N}_{g}|^2  \sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}|^2 \sum_{j \in \mathcal{N}_g}  |\mathcal{N}_j|^2,
+\end{align}
+where the last inequality follows by choosing $\alpha\leq\frac{1}{\sqrt{\mathcal{U}}}$. This completes the proof.
+
+
+
+
+
+\ifCLASSOPTIONcaptionsoff
+  \newpage
+\fi
+
+
+\section{Introduction}
+
+Federated Learning (FL) is a distributed machine learning training system in which edge devices (clients) collaboratively train a model of interest based on their locally stored datasets. A central node (parameter server) orchestrates the learning process by collecting the clients' parameters for aggregation \cite{pmlr-v54-mcmahan17a}. Due to its data privacy preserving and bandwidth saving nature, FL has attracted a lot of attention and has been used in diverse applications including healthcare and mobile services. 
+
+\noindent\textbf{Challenges and Related Work.} In order to successfully deploy FL in communication networks, lots of challenges should be addressed. These include: the computing capabilities of the clients; the communication overhead between the clients and the parameter server; and the system heterogeneity, whether in the clients' communication channels or their data statistics. 
+
+Due to the resource-constrained capabilities of the clients and the limited channel bandwidth, quantization, sparsification and compression are usually employed when the learning model size is too large \cite{bouzinis2022wireless, sattler2019robust}. Another concern is related to the limited available spectrum that hinders the simultaneous participation of all clients, and hence client scheduling and its consequences on the system's performance becomes crucial \cite{cho2021client,wang2022a,AoI}.   
+
+Among all challenges, communication remains to be the bottleneck issue, and various solutions have been proposed in the literature to mitigate it. One of these solutions is to conduct several local updates at the clients' side before communicating with the parameter server \cite{stich2018local,woodworth2020local,lin2018don,pmlr-v130-shokri-ghadikolaei21a}. Another solution is to introduce intermediate parameter servers, denoted local parameter servers (LPSs), between the clients and the (now) global parameter server (GPS). Such setting of FL is known in the literature as the {\it hierarchical} FL (HFL) setting \cite{wang2022demystifying}. The main advantage of having LPSs close to the clients is to reduce the latency and required energy to communicate with the GPS \cite{Hfl_kh}. In \cite{luo2020hfel}, a joint resource allocation and client association problem is formulated
+in an HFL setting, and then solved by an iterative algorithm. Reference \cite{wainakh2020enhancing} shows that HFL settings can also enhance data privacy. In these mentioned works, the authors analyze their systems while assuming a fixed number of local iterations and global communication rounds. In more realistic scenarios, however, the number of local iterations may vary from one global communication round to another depending on the dynamic nature of the (wireless) communication channel and the different computational capabilities of the edge devices. Moreover, the number of global communication rounds can also vary in case the training time is constrained. One scenario in which this is the case is when model training is conducted during non-congested periods of the network.
+
+\noindent\textbf{Contributions.}
+Motivated by filling the gap of the aforementioned endeavors and to cope with the very low latency service requirements in 6G networks (and beyond), in this paper we focus on HFL for {\it delay-sensitive} communication networks. We study FL settings that have an additional requirement of conducting training within a predefined deadline. Such scenario is relevant for, e.g., energy-limited clients whose availability for long times is not always guaranteed. To enforce the system to abide by this constraint, the number of local training updates will be determined by a wall-clock time. Specifically, we define a {\it sync time} $S$ within which the LPSs are allowed to aggregate the parameters they receive from their groups' clients. Each local iteration consumes a random group-specific {\it delay}, and hence the total number of local updates within $S$ will also be random, and could possibly be {\it different} across groups. This dissimilarity in the delay statistics is introduced to capture, e.g., the effects of wireless channels and different computational resources among different group clients. Following the deadline $S$, the LPSs forward their models to the GPS.
+
+We set another time constraint at the GPS and denote it the {\it total system time} $T$. This is the total allowed time for the overall HFL system to perform the training and get its final model parameter. Different values of $S$ and $T$ will lead to a different number of local and global updates. Thus, by controlling $S$, we also control how many times the clients will communicate with the GPS, i.e., more local iterations would lead to less global ones. This is is different from the existing works that assume that the global communication rounds are constant and unaffected by the number of local updates.
+
+We present a thorough theoretical convergence analysis for the proposed HFL setting for non-convex loss functions. Our results show how the different system parameters affect the accuracy, namely, the wall-clock times $S$, $T$, the number of groups, and the number of clients per group. Various experiments are then performed to show how to optimize the sync time $S$ based on the other system parameters.
+ 
+\noindent\textbf{Notation and Organization.} $\mathbb{R}$ denotes the real number field; $ \left\|\cdot\right\|$ denotes the Euclidean norm; $\langle x, y \rangle$ denotes the inner product between two vectors $x$ and $y$; $\mathbb{E}$  denotes statistical expectation,  while $\mathbb{E}_{|x}\left\|\cdot\right\|$ represents the conditional expectation given $x$.
+
+The rest of the paper is organized as follows. Section~\ref{Sys_Model} presents the system model and our proposed HFL algorithm. Theoretical convergence analyses are derived in Section~\ref{main_res}, and verified via extensive simulation under different scenarios in Section~\ref{experiments}. Section~\ref{conclusion} concludes the paper.
+
+
+
+\section{System Model}\label{Sys_Model}
+
+We consider an HFL system with a global PS (GPS) and a set of local PSs (LPSs), $\mathcal{N}_g$, that serve a number of clients. Clients are distributed across different LPSs to form clusters (groups), in which a client can only belong to one group, and may only communicate with one specific LPS. Denoting by $\mathcal{N}_i$ the set of clients in group $i$, the total number of clients in the system is $\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|$, with $|\cdot|$ denoting cardinality. Each client has its own dataset, and the data is independently and identically distributed (i.i.d.) among clients. The empirical loss function at the LPS of group $i \in \mathcal{N}_g$ is defined as follows:
+\begin{align}
+\label{group_loss}
+    f_{i}(x)\triangleq\frac{1}{|\mathcal{N}_i|}\sum_{k \in \mathcal{N}_i}F_{i,k}(x), \quad  i \in \mathcal{N}_g,
+\end{align}
+where $F_{i,k}(x)$ is the loss function at client $k$ in group $i$. The goal of the HFL system is to minimize a global loss function:
+\begin{align} \label{global_loss}
+    f(x)&\triangleq\frac{1}{\sum_{i \in \mathcal{N}_g} |\mathcal{N}_i|} \sum_{i \in \mathcal{N}_g} |\mathcal{N}_i| f_{i}(x) \nonumber \\
+   
+    &=\frac{1}{\sum_{i \in \mathcal{N}_g} |\mathcal{N}_i|}\sum_{i \in \mathcal{N}_g} \sum_{k \in \mathcal{N}_i}F_{i,k}(x).
+\end{align}
+
+The global loss function is minimized over a number of {\it global communication rounds} between the GPS and the LPSs. At the beginning of the $u$th global round, the GPS broadcasts the global model, $x^u \in \mathbb{R}^{d} $, with $d$ representing the model dimension, to the LPSs. The LPSs then forward $x^u$ to their associated clients, which is used to run a number of SGD steps based on their own local datasets. After each SGD step, the clients share their models with their LPS, which aggregates them and broadcasts them back locally to its clients. We call this local round trip a {\it local iteration}. We further illustrate how the global rounds and local iterations interact as follows. Let $x_i^{u,l}$ denote the model available at LPS $i$ after local iteration $l$ during global round $u$, and let $x_{i,k}^{u,l}$ denote the corresponding local model of client $k$ of group $i$. We now have the following equations that build up the models:
+\begin{align}
+x_{i}^{u,0}&=x^{u},\quad \forall i\in\mathcal{N}_g, \label{eq_lps-model-initial} \\
+x_{i,k}^{u,0}&=x_{i}^{u,0},~ x_{i,k}^{u,l}=x_{i}^{u,l-1} - \alpha \: \Tilde{g}_{i,k}\left(x_{i}^{u,l-1}\right),\quad \forall k \in \mathcal{N}_{i}, \label{eq_lps-model-itr}
+\end{align}
+where $\alpha$ is the learning rate, and $\Tilde{g}_{i,k}$ is an unbiased stochastic gradient evaluated at $x_{i}^{u,l-1}$. After the $l$th SGD step, LPS $i$ collects $\left\{x_{i,k}^{u,l}\right\}$ from its associated clients and aggregates them to get the $l$th local model,
+\begin{align}
+    x_{i}^{u,l} =\frac{1}{|\mathcal{N}_i|} \sum_{k \in \mathcal{N}_i} x_{i,k}^{u,l}, \label{eq_lps-model-agg}
+\end{align}
+which is shared with its clients to initialize SGD step $l+1$.
+
+Each local iteration takes a {\it random} time to be completed. This includes the time for broadcasting the local model by the LPS to its clients, the SGD computation time, and the aggregation time. Let $\tau_{i,l}^u$ denote the wall-clock time elapsed during local iteration $l$ for group $i$ in global round $u$. We assume that $\tau_{i,l}^u$'s are i.i.d. across local iterations $l$ and global rounds $u$, but may not be identical across groups $i$. This is motivated by the different channel delay statistics that each group may experience when communicating with its LPS. In addition to that, each group may have clients with heterogeneous computational capabilities. These two factors together hinder one group to (statistically) do an identical number of local updates like other groups. We define a {\it sync time,} $S$, that represents the allowed local training time for {\it all} groups. After the sync time, the LPSs need to report their local models to the GPS, and thereby ending the current global round. During global round $u$, and within the sync time $S$, group $i$ will therefore conduct a random number of local iterations given by 
+\begin{align}
+    t_{i}^{u}\triangleq\min\left\{n:~\sum_{l=1}^{n} \tau_{i,l}^u \geq S\right\},\quad i \in \mathcal{N}_g.
+\end{align}
+Observe that the statistics of $t_i^u$'s are not identical across groups, see Fig.~\ref{fig_s-protocol-example} for an example sample path during global round $u$. After the $t_i^u$ local iterations are finished, and using (\ref{eq_lps-model-initial})--(\ref{eq_lps-model-agg}), LPS $i$ will have acquired the following model:
+\begin{align} \label{eq_local-update}
+        x_{i}^{u,t_{i}^{u}} = x_{i}^{u,0}-\frac{\alpha}{|\mathcal{N}_i|} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i} \Tilde{g}_{i,k}\left(x_{i}^{u,l}\right).
+\end{align}
+
+We consider a synchronous setting in which the GPS waits for all the LPSs to finish their local iterations before a global aggregation. Since LPSs incur different wall-clock times to collect their models, some of them may need to stay idle waiting for others to finish. The GPS therefore starts aggregating the models after
+\begin{align}
+\max_{i\in\mathcal{N}_g}\left\{\sum_{l=1}^{n} \tau_{i,l}^{u}\right\}
+\end{align}
+time units from the start of the local iterations in global round $u$. We denote this period the {\it syncing period} (see Fig.~\ref{fig_s-protocol-example}). When updating the GPS, LPS $i$ sends the difference between its final and initial models, {\it divided by the number of its local iterations performed \cite{fedvarp},} i.e., it sends
+\begin{align} \label{local_update}
+        \frac{1}{t_i^u}\left(x_{i}^{u,t_{i}^{u}}\!-\! x_{i}^{u,0}\right)=-\frac{\alpha}{|\mathcal{N}_i|} \frac{1}{t_i^u}\sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i} \Tilde{g}_{i,k}\left(x_{i}^{u,l}\right),~i \in \mathcal{N}_g.
+\end{align}
+We note that the purpose of diving by $t_i^{u}$ is to avoid \textit{biasing} the global model, and to force the aggregated model update to be a result of an \textit{equal} contribution from all groups. To see this, observe that (cf. Assumption~2) 
+\begin{align}
+ \mathbb{E}_{|\bm t_i^u} \frac{1}{t_i^u}\left(x_{i}^{u,t_{i}^{u}}- x_{i}^{u,0}\right) &=-\frac{\alpha}{|\mathcal{N}_i|}\frac{1}{t_i^u}\sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i} \nabla F_{i,k}\left(x_{i}^{u,l}\right)\nonumber \\
+ &=-\frac{\alpha}{t_i^u}\sum_{l=0}^{t_{i}^{u}-1}   \nabla  f_{i}\left(x_{i}^{u,l}\right),
+
+\end{align}
+where $\mathbb{E}_{|\bm t_i^u} $ denotes conditional expectation given the vector ${\bm t}_i^u\triangleq\left\{t_{i}^{u^\prime}\right\}_{u^\prime=1}^{u}$.
+
+The GPS then updates its global model as 
+\begin{align}\label{global_update}
+         x^{u+1}&=x^{u}+\sum_{i \in \mathcal{N}_g}\frac{|\mathcal{N}_i|}{\sum_{i \in \mathcal{N}_g} |\mathcal{N}_i|}\frac{1}{t_{i}^{u}}\left(x_{i}^{u,t_{i}^{u}}- x_{i}^{u,0}\right) \nonumber \\
+         &=x^{u}-\frac{\alpha}{\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|}\sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i} \Tilde{g}_{i,k}\left(x_{i}^{u,l}\right), 
+\end{align}
+and broadcasts $x^{u+1}$ to the LPSs to begin global round $u+1$. We assume that the global aggregation and broadcasting processes consume i.i.d. $\tau_g^u$'s wall-clock times. An example of the HFL setting considered is depicted in Fig.~\ref{fig_s-protocol-example}.
+
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.75\linewidth]{n_s_protocol.pdf}
+\caption{Example sample path of global rounds and local iterations of 2 groups with wall-clock times considerations.}
+\label{fig_s-protocol-example}
+\end{figure}
+    
+The overall HFL training process stops after a total {\it system time} $T$. The value of $T$ represents the allowed time budget for training in delay-sensitive applications. Within $T$, the total number of global rounds will be given by
+\begin{align}
+    \mathcal{U}\triangleq\min\left\{m:~\sum_{u=1}^{m} \max_{i\in\mathcal{N}_g}\left\{\sum_{l=1}^{n} \tau_{i,l}^{u}\right\} + \tau_{g}^{u} \geq T\right\}.
+\end{align}
+
+We coin the proposed algorithm {\it delay sensitive HFL} which is summarized in Algorithm~\ref{alg_main}. In the sequel, we analyze its performance in terms of the wall-clock times, number of clients, and other system parameters. We then discuss how to optimize the choice of the sync time $S$ to guarantee better learning outcomes.
+
+
+\begin{algorithm}[t]
+	\caption{Delay Sensitive HFL} 
+	\begin{algorithmic}[1]
+\State \textbf{Input:} learning rate $\alpha$, system time $T$, sync time $S$
+\State \textbf{Output:} global aggregated model $x^{\mathcal{U}}$
+\State \textbf{Initialization:} $\Bar{T},u \gets 0$
+\While {$\Bar{T} \leq T$}
+		\State \underline{Global Broadcast:} $x_i^{u,0} \gets x^{u}, \: \forall i \in \mathcal{N}_g$
+		\For {$i \in \mathcal{N}_g$}
+				\State $t_i^{u}\gets 0 , \Bar{t} \gets 0$
+		\While {$\Bar{t} \leq S$}
+			\For {$k \in \mathcal{N}_i$}
+				\State \underline{SGD Update:} $x_{i,k}^{u,l} =x_{i}^{u,l-1} - \alpha \: \Tilde{g}_{i,k}(x_{i}^{u,l-1})$
+			\EndFor
+			\State \underline{Local Aggregation:}     $x_{i}^{u,l} =\frac{1}{|\mathcal{N}_i|} \sum_{k \in \mathcal{N}_i} x_{i,k}^{u,l} $
+			\State \underline{Group Broadcast:} $x_{i,k}^{u,l}=x_{i}^{u,l}$
+			\State \underline{Local updates increment:} $t_i^{u} \gets t_i^{u}+1 , \Bar{t} \gets \Bar{t}+\tau_{i}^{u}$
+			\EndWhile
+			\State \underline{Upload:} $\frac{1}{t_{i}^{u}}(x_{i}^{u,t_{i}^{u}}- x_{i}^{u,0})$
+		\EndFor
+		\State \underline{Global Update:} $x^{u+1}=x^{u}+\sum_{i \in \mathcal{N}_g}\frac{|\mathcal{N}_i|}{\sum_{i \in \mathcal{N}_g} |\mathcal{N}_i|}\frac{1}{t_{i}^{u}}(x_{i}^{u,t_{i}^{u}}- x_{i}^{u,0})$ 
+	
+		\State \underline{System Time Update:} $\Bar{T} \gets \max_{i}\{\sum_{j=1}^{(t_i^{u})} \tau_{i,j}^{u}\}+ \tau_{g} $, $\mathcal{U},u \gets u+1$
+		\EndWhile
+	\end{algorithmic} \label{alg_main}
+\end{algorithm}
+
+
+
+\section{Main Results}\label{main_res}
+In this section, we present the convergence analysis for the proposed HFL setting. We have the following typical assumptions about the loss function and SGD \cite{Hfl_kh}:
+
+\noindent\textbf{Assumption 1.} (\textit{Smoothness}). Loss functions are  $L$-smooth: $\forall x,y \in \mathbb{R}^d$, there exists $L > 0$ such that 
+\begin{align} \label{assum_1}
+    F_{i,k}(y) \leq F_{i,k}(x)+\langle \nabla F_{i,k}(x),y-x \rangle+\frac{L}{2} \left\| y-x\right\|^2,\quad \forall i,k.
+\end{align}
+\textbf{Assumption 2.} (\textit{Unbiased Gradient}). The gradient estimate at each client satisfies
+\begin{align} \label{assum_2}
+    \mathbb{E}\Tilde{g}_{i,k}(x)= \nabla F_{i,k}\left(x\right),\quad \forall i,k.
+\end{align} 
+ \textbf{Assumption 3.} (\textit{Bounded Gradient}). There exists a constant $G >0 $ such that the stochastic gradient's second moment is bounded as
+\begin{align}\label{assum_3}
+\mathbb{E}\left\|\Tilde{g}_{i,k}(x)\right\|^2 \leq G^2,\quad \forall i,k.
+\end{align}
+  \textbf{Assumption 4.} (\textit{Bounded Variance}). There exists a constant $\sigma >0 $, such that the variance of the stochastic gradient is bounded as
+\begin{align} \label{assum_4}
+    \mathbb{E}\left\| \Tilde{g}_{i,k}(x)-\nabla F_{i,k}(x)\right\|^2 \leq \sigma^2,\quad \forall i,k.
+\end{align}
+
+It is worth noting that we conduct our analysis {\it without} assuming convexity of the loss function at any entity in the system. According to our proposed algorithm, after each global round, the group clients will resume their local training from the aggregated global model instead of the their latest local one. Hence, we need to quantify the {\it deviation} between the two parameter models through the following lemma:
+\begin{lemma} \label{lemma_1}
+For $0 \leq \alpha \leq \frac{1}{L}$, the delay sensitive HFL algorithm satisfies the following $\forall u, i$:
+\begin{align} 
+       \mathbb{E}_{|\bm t_i^u} \left\| x^{u+1}-x_{i}^{u,t_{i}^{u}}\right\|^2 &\leq 2\alpha^2 \left( \left( t_{i}^{u}\right)^2+ \frac{|\mathcal{N}_g|}{(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|)^2} \sum_{j \in \mathcal{N}_g }|\mathcal{N}_j|^2\right) G^2. \label{eq_divergence}
+\end{align}
+\end{lemma}
+\begin{proof}
+   See Appendix \ref{appB}.
+\end{proof}
+\begin{remark}
+The first term in the bound in Lemma~\ref{lemma_1} represents the contribution of group $i$ while the second one reflects the impact of all groups in the deviation between the parameter models. It is obvious that more local iterations lead to more deviation between the local and the global models. Note that local iterations are the sole determinant of the deviation in case of having one group only (e.g., when there is no hierarchy); having two or more groups carries an additive effect on the deviation as seen in the second term. 
+\end{remark}
+
+\begin{remark}
+In case of having only one group in the system, one gets a strictly smaller upper bound than that in \cite{yu2019parallel}, which is given by $4\alpha^2 \left(t_{i}^{u}\right)^2 G^2$ (almost two times the bound in (\ref{eq_divergence}) for $|\mathcal{N}_g|=1$ for large values of $t_i^u$).
+\end{remark}
+ 
+Lemma~\ref{lemma_1} serves as a building block for our main convergence theorems of the proposed delay sensitive HFL. These are mentioned next.
+
+\begin{theorem}[\textbf{Convergence  Analysis per Group}]
+\label{CA_Group}
+For $0 \leq \alpha \leq \frac{1}{L}$, the delay sensitive HFL algorithm achieves the following group $i$ bound for a given $\mathcal{U}$:
+\begin{align}
+\frac{1}{\sum_{u=1}^{\mathcal{U}} t_{i}^{u}} \sum_{u=1}^{\mathcal{U}}  &\sum_{l=1}^{t_{i}^{u}} \mathbb{E}_{|\bm t_i^u}\left\|\nabla f_{i}(x_{i}^{u,l-1})\right\|^2 
+     \leq \frac{2}{\alpha \sum_{u=1}^{\mathcal{U}} t_{i}^{u}} \Biggl(\mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{1}\right)-\mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{\mathcal{U},t_i^{\mathcal{U}}}\right) \Biggl)+ \frac{\alpha  L \sigma^2}{|\mathcal{N}_{i}|}  \nonumber \\
+    &+\Biggl(\frac{1}{\alpha \sum_{u=1}^{\mathcal{U}} t_{i}^{u}} +  \frac{2 (L +1) \kappa \alpha}{ \sum_{u=1}^{\mathcal{U}} t_{i}^{u}} \Biggr)(\mathcal{U}-1)  G^2 +\frac{2 (L +1)\alpha}{ \sum_{u=1}^{\mathcal{U}} t_{i}^{u}}   \sum_{u=1}^{\mathcal{U}-1}   ( t_{i}^{u})^2 G^2,
+\end{align}
+where the term $\kappa$ is given by
+\begin{align}
+\kappa\triangleq\frac{|\mathcal{N}_g|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{j \in \mathcal{N}_g} |\mathcal{N}_j|^2.
+\end{align}
+\end{theorem}
+ \begin{proof}
+ See Appendix \ref{appC}.
+ \end{proof}
+
+Notably, setting $\mathcal{U}=1$ means that the groups will work \textit{individually}. The result of Theorem~\ref{CA_Group} shows that convergence is still guaranteed in this isolated case by choosing $0\leq\alpha\leq\min\left\{\frac{1}{L},\frac{1}{\sqrt{t_i^1}}\right\}$.
+
+\begin{theorem}[\textbf{Global Convergence  Analysis} ]
+\label{global_convg}
+For $0 \leq \alpha \leq \frac{1}{L}$, the delay sensitive HFL algorithm achieves the following global bound for a given $\mathcal{U}$:
+\begin{align} \label{global_bound} 
+\frac{1}{\mathcal{U}} \sum_{u=1}^{\mathcal{U}} \mathbb{E}_{|\bm t_i^u}\left\|\nabla f\left(x^{u}\right)\right\|^2  &\!\leq\!  \frac{2}{\alpha} \frac{1}{\mathcal{U}}  \left(\mathbb{E}_{|\bm t_i^u}f\left(x^{1}\right)\!-\!\mathbb{E}_{|\bm t_i^u}f\left(x^{\mathcal{U}+1}\right)\right)  
++ \frac{\alpha L |\mathcal{N}_g| \sum_{i \in \mathcal{N}_g} |\mathcal{N}_i|^2\sigma^2}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2}\nonumber \\
+&+ \frac{1}{\mathcal{U}} \sum_{u=1}^{\mathcal{U}}  \frac{12\alpha^2  L^2 |\mathcal{N}_{g}|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}|^2   \left(t_{i}^{u-1}\right)^2 \nonumber \\
+&+\frac{12 \alpha^2 L^2 G^2 |\mathcal{N}_{g}|^2}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^4}   \left(\sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}|^2\right)^2 
+ \nonumber \\
+&+ \frac{1}{\mathcal{U}} \sum_{u=1}^{\mathcal{U}}\frac{4 \alpha^2 L^2  G^2 |\mathcal{N}_{g}|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}|^2 \frac{1}{t_i^u} \sum_{l=0}^{t_i^{u}-1}  l^2 .
+\end{align}
+\end{theorem}
+\begin{proof}
+See Appendix \ref{appD}.
+\end{proof}
+
+Observe that the sync time $S$ controls the upper bounds in the theorems above by statistically controlling the number of local iterations. Now let us assume that there exists a {\it minimum} local iteration time for group $i$, i.e., a lower bound:
+\begin{align} \label{t_bound1}
+\tau_{i,l}^u\geq c_i,~\text{a.s.},~\forall l,u.
+\end{align}
+Then, one gets a {\it maximum} number of local iterations:
+\begin{align} \label{t_bound2}
+t_{i}^{u} \leq t_{i}^{\max}\triangleq\ceil*{\frac{S}{c_i}},~\text{a.s.},~\forall u.
+\end{align}
+Based on the above bound, one can get the following global convergence guarantee.
+
+\begin{corollary} [\textit{Global Convergence Guarantee}]
+\label{corollary}
+For a given $\{t_i^{\max}\}$, setting $\alpha =\min\{\frac{1}{\sqrt{\mathcal{U}}},\frac{1}{L}\}$, the delay sensitive HFL algorithm achieves 
+$   \frac{1}{\mathcal{U}} \sum_{u=1}^{\mathcal{U}} \mathbb{E}\left\|\nabla f\left(x^{u}\right)\right\|^2\leq\mathcal{O}(\frac{1}{\sqrt{\mathcal{U}}})$.
+\begin{proof}
+     See Appendix \ref{appE}.
+\end{proof}
+\end{corollary}
+
+Therefore, for a finite sync time $S$, as the training time $T$ increases, the number of the global communication rounds $\mathcal{U}$ also increases, and hence Corollary~\ref{corollary} shows that the gradient converges to $0$ sublinearly.
+
+\section{Experiments}\label{experiments}
+In this section, we present some simulation results for the proposed delay sensitive HFL algorithm to verify the findings from the theoretical analysis.
+
+\noindent \textbf{Datasets and Model.} We consider an image classification supervised learning task on the CIFAR-10 dataset \cite{krizhevsky2009learning}.
+A convolution neural network (CNN) is adopted with two 5x5 convolution layers, two 2x2 max pooling layers,  two fully connected layers with 120 and 84 units, respectively, ReLu activation, a final softmax output layer and cross entropy loss.
+
+\noindent\textbf{Federated Learning Setting.}
+Unless otherwise stated, we have 30 clients randomly distributed across 2 groups. The groups have similar data statistics. We consider shifted exponential delays \cite{shiftedexp1}: $\tau_{i,l}^u\sim\exp(c_i,10)$ and $\tau_g^u\sim\exp(c_g,10)$.
+
+\noindent \textbf{Discussion.} In Fig.~\ref{1}, we show the evolution of both groups' accuracies and the global accuracy across time. The zoomed-in version in Fig.~\ref{fig:1b} shows the high (SGD) variance in the performance of the two groups especially during the earlier phase of training. Then, with more averaging with the GPS, the variance is reduced.
+\begin{figure*}[htp] 
+    \centering
+    \subfloat[Performance overall Training Time Budget]{%
+        \includegraphics[width=0.5\linewidth]{global_group_accuracy.pdf}%
+        \label{fig:1a}%
+        }%
+    \hfill%
+    \subfloat[Performance during  The Beginning of Training Time]{%
+        \includegraphics[width=0.5\linewidth]{global_group_accuracy_zoomed.pdf}%
+        \label{fig:1b}%
+        }%
+    \caption{HFL system with 10 clients per group with $c_1=c_2=1$, $c_g=5$ and $S=5$.}
+    \label{1}
+\end{figure*}
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.75\linewidth]{cooperative_isolated_new2.pdf}
+\caption{Significance of group cooperation under non-i.i.d data.}
+\label{3}
+\end{figure}
+
+In Fig.~\ref{3}, the significance of collaborative learning is emphasized. We run three experiments, one for each group in an isolated fashion, and one under the HFL setting. First, while we do not conduct our theoretical analysis under heterogeneous data distribution, we consider a non-iid data distribution among the two groups in this setting, and we see that our proposed algorithm still \textit{converges}. Second, it is clear that the performances of the group with less number of clients under heterogeneous data distribution and isolated learning will be deteriorated. However, aided by HFL, its performance improves while the other group's performance is not severely decreased, which promotes {\it fairness} among the groups.    
+
+\begin{figure*}[htp] 
+    \centering
+    \subfloat[$c_1=1 \text{ and} \:\: c_2=7$]{%
+        \includegraphics[width=0.5\linewidth]{n_user_association_1_7.pdf}%
+        \label{fig:UA_a}%
+        }%
+    \hfill%
+    \subfloat[$c_1=7 \text{ and} \:\: c_2=1$]{%
+        \includegraphics[width=0.5\linewidth]{n_user_association_7_1.pdf}%
+        \label{fig:UA_b}%
+        }%
+    \caption{Impact of the groups' shift parameters $c_1$ and $c_2$ on the group-client association under $S=8$ and $c_g=10$.}
+    \label{userassociation}
+\end{figure*}
+
+In Fig.~\ref{userassociation}, the effect of the groups' shift parameters $c_1$ and $c_2$ on determining the optimal group-client association is investigated. The results show that it is not always optimal to cluster the clients evenly among the groups. In Fig.~\ref{fig:UA_b} for instance, we see that assigning less clients to a group with a relatively smaller shift parameter performs better than an equal assignment of clients among both groups; this is observation is reversed in Fig.~\ref{fig:UA_a}, in which a larger number of clients is assigned to the relatively slower LPS.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.75\linewidth]{n_Global_Shift_Parameter_Imapct.pdf}
+\caption{The effect of global shift parameter $c_g$ under $S=10$.}
+\label{5}
+\end{figure}
+
+In Fig.~\ref{5}, the impact of global shift parameter $c_g$ on the global accuracy is shown. As the global shift delay parameter increases, the performance  gets worse. This is mainly because the number of global communication rounds with the GPS, $\mathcal{U}$, is reduced, which hinders the clients from getting the benefit of accessing other clients' learning models. 
+
+\begin{figure*}[htp] 
+    \centering
+    \subfloat[$c_g=10$]{%
+        \includegraphics[width=0.5\linewidth]{n_S_Parameter_choice_under_C_g=10.pdf}%
+        \label{fig:5a}%
+        }%
+    \hfill%
+    \subfloat[$c_g=30$]{%
+        \includegraphics[width=0.5\linewidth]{n_S_Parameter_choice_under_C_g=30.pdf}%
+        \label{fig:5b}%
+        }%
+    \caption{Impact of the global shift parameter $c_g$ on choosing the sync time $S$.}
+    \label{6}
+\end{figure*}
+
+
+
+In Fig.~\ref{6}, we show impact of the sync time $S$ on the performance, by varying the GPS shift parameter $c_g$. We see that for $c_g=10$, $S=0$ outperforms $S=20$. Note that $S=0$ corresponds to a centralized system (non-hierarchical). Increasing the shift parameter to $C_g=30$, however, the situation is different. Although in both figures $S=5$ is the optimum choice, but in case the system has an additional constraint on communicating with the GPS, $S=20$ will be a better choice, especially that the accuracy gain will not be sacrificed much. It is also worth noticing that the training time budget $T$ plays a significant role in choosing $S$; in Fig.~\ref{fig:5b}, $S=0$ (always communicate with the GPS) outperforms $S=20$ as long as $T \leq 500$, and the opposite is true afterwards. This means that in some scenarios, the hierarchical setting may not be the optimal setting (which is different from the findings in \cite{Hfl_kh}); for instance, if the system has a hard time constraint in learning, it may prefer to make use of communicating with GPS more frequently to get the advantage of learning the resulting models from different data.
+
+
+\section{Conclusion and Outlook}\label{conclusion}
+A delay sensitive HFL algorithm has been proposed, in which the effects of wall-clock times and delays on the overall accuracy of FL is investigated. A sync time $S$ governs how many local iterations are allowed at LPSs before forwarding to the GPS, and a system time $T$ constrains the overall training period. Our theoretical and simulation findings reveal that the optimal $S$ depends on different factors such as the delays at the LPSs and the GPS, the number of clients per group, and the value of $T$. Multiple insights are drawn on the performance of HFL in time-restricted settings. 
+
+\noindent\textbf{Future Investigation.} Guided by our understanding from the convergence bounds and the simulation results, we observe that it is better to make the parameter $S$ \textit{variable} especially during the first global communication rounds. For instance, instead of fixing $S=5$, we allow $S$ to increase gradually with each round from $1$ to $5$, and then fix it at $5$ for the remaining rounds. Our reasoning behind this is that the clients' models need to be {\it directed} towards global optimum, and not their local optima. Since this direction is done through the GPS, it is reasonable to communicate with it more frequently at the beginning of learning to push the local models towards the optimum direction. To investigate this setting, we train a logistic regression model over the MNIST dataset, and distribute it in a non-iid fashion over 500 clients per group. As shown in Fig.~\ref{svariable}, the variable $S$ approach achieves a higher accuracy than the fixed one, with the effect more pronounced as $S$ increases.
+
+\begin{figure*}[htp] 
+    \centering
+    \subfloat[$S=5$]{%
+        \includegraphics[width=0.33\linewidth]{n_SV_1_5.pdf}%
+        \label{fig:a}%
+        }%
+    \hfill%
+    \subfloat[$S=10$]{%
+        \includegraphics[width=0.33\linewidth]{n_SV_1_10.pdf}%
+        \label{fig:b}%
+        }%
+        \hfill%
+    \subfloat[$S=20$]{\includegraphics[width=0.33\linewidth]{n_SV_1_20.pdf}%
+        \label{fig:c}%
+        }
+    \caption{Comparison between variable and fixed $S$ with respect to the global learning accuracy.}
+    \label{svariable}
+\end{figure*}
+
+
+
+
+
+\appendices
+
+\section{Preliminaries}
+
+We will rely on the following relationships throughout our proofs, and will be using them without explicit reference:
+
+For any $x, y \in \mathbb{R}^n$, we have:
+\begin{align}
+ \langle  x,y\rangle \leq  \frac{1}{2}\left\|x\right\|^2+ \frac{1}{2}\left\|y\right\|^2.   
+\end{align}
+ 
+ 
+By Jensen's inequality, for $x_{i} \in \mathbb{R}^n$, $i \in \{1,2,3,\dots,N\}$, we have
+\begin{align}
+\left\|\frac{1}{N}\sum_{i=1}^{N}x_i\right\|^2 \leq \frac{1}{N}\sum_{i=1}^{N}\left\|x_i\right\|^2,
+\end{align}
+which implies 
+\begin{align}
+\left\|\sum_{i=1}^{N}x_i\right\|^2 \leq N\sum_{i=1}^{N}\left\|x_i\right\|^2.
+\end{align}
+
+
+\section{Proof of Lemma~\ref{lemma_1}}\label{appB}
+Conditioning on the number of local updates of group $i$ up to and including global round $u$, ${\bm t}_i^{u}$, we evaluate the expected difference between the aggregated global model and the latest local model at group $i$, by the end of global round $u$. Based on \eqref{eq_local-update} and \eqref{global_update}, the following holds:
+\begin{align}
+\mathbb{E}_{|\bm t_i^u}&\left\| x^{u+1}-x_{i}^{u,t_{i}^{u}}\right\|^2 \nonumber \\
+=&\alpha^2 \mathbb{E}_{|\bm t_i^u}\left\| \frac{1}{|\mathcal{N}_i|} \sum_{k \in \mathcal{N}_i}\sum_{l=0}^{t_{i}^{u}-1}\Tilde{g}_{i,k}\left(x_{i}^{u,l}\right)- \frac{1}{\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|} \sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}}\sum_{k \in \mathcal{N}_i} \sum_{l=0}^{t_{i}^{u}-1}\Tilde{g}_{i,k}\left(x_{i}^{u,l}\right)\right\|^2 \nonumber\\
+\leq& 2\alpha^2  \mathbb{E}_{|\bm t_i^u}\!\!\left(\left\| \frac{1}{|\mathcal{N}_i|} \sum_{k \in \mathcal{N}_i} \sum_{l=0}^{t_{i}^{u}-1}\Tilde{g}_{i,k}\left(x_{i}^{u,l}\right)\right\|^2\!\! + \left\|\frac{1}{\sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}|} \sum_{i \in \mathcal{N}_g}\frac{1}{t_{i}^{u}}\sum_{k \in \mathcal{N}_{i}} \sum_{l=0}^{t_{i}^{u}-1}\Tilde{g}_{i,k}\left(x_{i}^{u,l}\right)\right\|^2 \right) \nonumber\\
+ \leq& 2 \alpha^2  \mathbb{E}_{|\bm t_i^u}\!\!\left( \!\!\frac{1}{|\mathcal{N}_{i}|^2} \left\| \sum_{k \in \mathcal{N}_i} \sum_{l=0}^{t_{i}^{u}-1}\Tilde{g}_{i,k}\left(x_{i}^{u,l}\right)\right\|^2\!\! \!+\!\frac{|\mathcal{N}_g|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2}\!\sum_{i \in \mathcal{N}_g}\! \!\frac{1}{(t_{i}^{u})^2}\left\| \sum_{k \in \mathcal{N}_i}\! \sum_{l=0}^{t_{i}^{u}-1}\Tilde{g}_{i,k}\left(x_{i}^{u,l}\right)\right\|^2 \! \right) \nonumber\\
+=&2 \alpha^2 \left( \frac{1}{|\mathcal{N}_{i}|^2} + \frac{|\mathcal{N}_g|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2(t_i^{u})^2}\right) \mathbb{E}_{|\bm t_i^u} \left\| \sum_{k \in \mathcal{N}_i } \sum_{l=0}^{t_{i}^{u}-1}\Tilde{g}_{i,k}\left(x_{i}^{u,l}\right)\right\|^2 \nonumber \\ 
+&+2 \alpha^2 \frac{|\mathcal{N}_g|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{j \in \mathcal{N}_g \setminus{\{i\}}}\frac{1}{(t_j^{u})^2}\mathbb{E}_{|\bm t_i^u} \left\|\sum_{k \in \mathcal{N}_j} \sum_{l=0}^{t_{j}^{u}-1}\Tilde{g}_{j,k}\left(x_{j}^{u,l}\right)\right\|^2   \nonumber\\
+\leq& 2 \alpha^2 \left( \frac{1}{|\mathcal{N}_{i}|^2} + \frac{|\mathcal{N}_g|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2(t_i^u)^2}\right) |\mathcal{N}_i|\sum_{k \in \mathcal{N}_i} \mathbb{E}_{|\bm t_i^u}\left\|\sum_{l=0}^{t_{i}^{u}-1}\Tilde{g}_{i,k}\left(x_{i}^{u,l}\right)\right\|^2\nonumber \\ 
+&+2 \alpha^2 \frac{|\mathcal{N}_g|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{j \in \mathcal{N}_g \setminus{\{i\}}} \frac{|\mathcal{N}_j|}{(t_j^u)^2} \sum_{k \in \mathcal{N}_j}\mathbb{E}_{|\bm t_i^u}\left\| \sum_{l=0}^{t_{j}^{u}-1}\Tilde{g}_{j,k}\left(x_{j}^{u,l}\right)\right\|^2  \nonumber\\
+\leq& 2 \alpha^2 \left( \frac{1}{|\mathcal{N}_{i}|^2} + \frac{|\mathcal{N}_g|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2(t_i^{u})^2}\right) |\mathcal{N}_i|\sum_{k \in \mathcal{N}_i} t_{i}^{u} \sum_{l=0}^{t_{i}^{u}-1}\mathbb{E}_{|\bm t_i^u}\left\|\Tilde{g}_{i,k}\left(x_{i}^{u,l}\right)\right\|^2\nonumber \\ 
+&+2 \alpha^2 \frac{|\mathcal{N}_g|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{j \in \mathcal{N}_g \setminus{\{i\}}} \frac{|\mathcal{N}_j|}{(t_j^u)^2} \sum_{k \in \mathcal{N}_j}t_{j}^{u} \sum_{l=0}^{t_{j}^{u}-1} \mathbb{E}_{|\bm t_i^u}\left\|  \Tilde{g}_{j,k}\left(x_{j}^{u,l}\right)\right\|^2 \nonumber \\
+\leq& 2 \alpha^2 \left( \frac{1}{|\mathcal{N}_{i}|^2} + \frac{|\mathcal{N}_g|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2 \left(t_{i}^{u}\right)^2}\right) |\mathcal{N}_i|\sum_{k \in \mathcal{N}_i} t_{i}^{u} \sum_{l=0}^{t_{i}^{u}-1} G^2 \nonumber \\ 
+&+2 \alpha^2 \frac{|\mathcal{N}_g|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{j \in \mathcal{N}_g \setminus{\{i\}}}\frac{ |\mathcal{N}_j|}{(t_{j}^{u})^2} \sum_{k \in \mathcal{N}_j} t_{j}^{u} \sum_{l=0}^{t_{j}^{u}-1} G^2 \nonumber\\
+=&2\alpha^2 \left( \underbrace{  \left(t_{i}^{u}\right)^2}_{\text{group } i\text{'s} \text{ contribution} }+\underbrace{ \frac{|\mathcal{N}_g|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{j \in \mathcal{N}_g }|\mathcal{N}_j|^2}_{\text{all groups' contribution}}\right)G^2.
+\end{align}
+
+
+\section{Proof of Theorem~\ref{CA_Group}}\label{appC}
+Based on the smoothness assumption of the loss function at LPS $i$, the SGD update rule in \eqref{eq_lps-model-itr}, and the local aggregation rule in \eqref{eq_lps-model-agg}, one can write
+\begin{align} \label{smooth_bound}
+    \mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{u,l}\right) \leq& \mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{u,l-1}\right)+ \mathbb{E}_{|\bm t_i^u} \langle\nabla f_{i}\left(x_{i}^{u,l-1}\right),x_{i}^{u,l}-x_{i}^{u,l-1}\rangle+\frac{L}{2} \mathbb{E}_{|\bm t_i^u}\left\|x_{i}^{u,l}-x_{i}^{u,l-1}\right\|^2
+\nonumber\\
+=&\mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{u,l-1}\right)+ \alpha \mathbb{E}_{|\bm t_i^u} \langle \nabla f_{i}\left(x_{i}^{u,l-1}\right),  \frac{-1}{|\mathcal{N}_{i}|} \sum_{k \in \mathcal{N}_i}\Tilde{g}_{i,k}\left(x_{i}^{u,l-1}\right) \rangle \nonumber\\ 
+&+   \frac{\alpha^2 L}{2}  \mathbb{E}_{|\bm t_i^u}\left\| \sum_{k \in \mathcal{N}_i} \frac{1}{|\mathcal{N}_i|} \Tilde{g}_{i,k}\left(x_{i}^{u,l-1}\right)\right\|^2.
+\end{align}
+For the inner product term above, we have
+\begin{align} \label{dot_bound}
+  \alpha &\mathbb{E}_{|\bm t_i^u} \langle \nabla f_{i}\left(x_{i}^{u,l-1}\right), \frac{-1}{|\mathcal{N}_i|} \sum_{k \in \mathcal{N}_i} \Tilde{g}_{i,k}\left(x_{i}^{u,l-1}\right)\rangle\nonumber \\ 
+  \overset{(\text{i})}{=}&  \alpha \mathbb{E}_{|\bm t_i^u} \langle \nabla f_{i}\left(x_{i}^{u,l-1}\right),  \frac{-1}{|\mathcal{N}_i|}\sum_{k \in \mathcal{N}_i} \nabla F_{i,k}\left(x_{i}^{u,l-1}\right) \rangle\nonumber\\
+  \overset{(\text{ii})}{=}&
+  \frac{\alpha}{2} \Biggl(\mathbb{E}_{|\bm t_i^u} \left\|\nabla f_{i}\left(x_{i}^{u,l-1}\right)-  \frac{1}{|\mathcal{N}_i|}\sum_{k \in \mathcal{N}_i} \nabla F_{i,k}\left(x_{i}^{u,l-1}\right)\right\|^2
+   -\mathbb{E}_{|\bm t_i^u}\left\|\nabla f_{i}\left(x_{i}^{u,l-1}\right)\right\|^2\nonumber \\
+   &\hspace{3in}-\mathbb{E}_{|\bm t_i^u}\left\|\frac{1}{|\mathcal{N}_i|}\sum_{k \in \mathcal{N}_i} \nabla F_{i,k}\left(x_{i}^{u,l-1}\right)\right\|^2\Biggl),
+\end{align}
+where (i) follows from Assumption~2 (unbiased stochastic gradient in \eqref{assum_2}), and (ii) results from $ \langle x,y\rangle=\frac{1}{2}\left(\left\|x+y\right\|^2-\left\|x\right\|^2-\left\|y\right\|^2 \right)$. Regarding last term in \eqref{smooth_bound}, the following holds: 
+\begin{align} \label{sgd_bound}
+&\mathbb{E}_{|\bm t_i^u}\left\| \frac{1}{|\mathcal{N}_i|} \sum_{k \in \mathcal{N}_i} \Tilde{g}_{i,k}\left(x_{i}^{u,l-1}\right)\right\|^2
+\nonumber \\
+&=\mathbb{E}_{|\bm t_i^u}\left\|\frac{1}{|\mathcal{N}_i|} \sum_{k \in \mathcal{N}_i} \Biggl( \Tilde{g}_{i,k}\left(x_{i}^{u,l-1}\right)-\nabla F_{i,k}\left(x_{i}^{u,l-1}\right)+\nabla F_{i,k}\left(x_{i}^{u,l-1}\right)\Biggr) \right\|^2\nonumber\\
+ &\overset{(\text{iii})}{=}\frac{1}{|\mathcal{N}_i|^2} \sum_{k \in \mathcal{N}_i} \mathbb{E}_{|\bm t_i^u}\left\| \Tilde{g}_{i,k}\left(x_{i}^{u,l-1}\right)-\nabla F_{i,k}\left(x_{i}^{u,l-1}\right)\right\|^2+ \mathbb{E}_{|\bm t_i^u}\left\| \frac{1}{|\mathcal{N}_i|} \sum_{k \in \mathcal{N}_i} \nabla F_{i,k}\left(x_{i}^{u,l-1}\right)\right\|^2\nonumber\\
+ &\leq \frac{1}{|\mathcal{N}_i|} \sigma^2+ \mathbb{E}_{|\bm t_i^u}\left\| \frac{1}{|\mathcal{N}_i|}\sum_{k \in \mathcal{N}_i} \nabla F_{i,k}\left(x_{i}^{u,l-1}\right)\right\|^2, \nonumber\\
+\end{align}
+where (iii) follows because each $k$th term $\Tilde{g}_{i,k}\left(x_{i}^{u,l-1}\right)-\nabla F_{i,k}\left(x_{i}^{u,l-1}\right)$ has zero mean and the overall $|\mathcal{N}_i|$ terms are independent across different clients. Substituting \eqref{dot_bound} and \eqref{sgd_bound} into \eqref{smooth_bound}, one get
+\begin{align} 
+\mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{u,l}\right) \leq& \mathbb{E}_{|\bm t_i^u} f_{i}\left(x_{i}^{u,l-1}\right) +   \frac{\alpha^2L}{2}  \frac{1}{|\mathcal{N}_i|} \sigma^2+  \frac{\alpha^2 L}{2} \mathbb{E}_{|\bm t_i^u}\left\| \frac{1}{|\mathcal{N}_i|}\sum_{k \in \mathcal{N}_i} \nabla F_{i,k}\left(x_{i}^{u,l-1}\right)\right\|^2 \nonumber\\
+&+ \frac{\alpha}{2} \Biggl(\mathbb{E}_{|\bm t_i^u} \left\|\nabla f_{i}\left(x_{i}^{u,l-1}\right)-  \frac{1}{|\mathcal{N}_i|}\sum_{k \in \mathcal{N}_i} \nabla F_{i,k}\left(x_{i}^{u,l-1}\right)\right\|^2
+  -\mathbb{E}_{|\bm t_i^u}\left\|\nabla f_{i}\left(x_{i}^{u,l-1}\right)\right\|^2\nonumber \\
+  &\hspace{2.5in}-\mathbb{E}_{|\bm t_i^u}\left\|\frac{1}{|\mathcal{N}_i|}\sum_{k \in \mathcal{N}_i} \nabla F_{i,k}\left(x_{i}^{u,l-1}\right)\right\|^2\Biggl) \nonumber\\
+=&\mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{u,l-1}\right) - \frac{\alpha}{2} \mathbb{E}_{|\bm t_i^u}\left\|\nabla f_{i}\left(x_{i}^{u,l-1}\right)\right\|^2  +  \frac{\alpha^2 L}{2}  \frac{1}{|\mathcal{N}_i|} \sigma^2 \nonumber\\
+&- \left(\frac{\alpha}{2}- \frac{\alpha^2 L}{2}\right)\mathbb{E}_{|\bm t_i^u}\left\| \frac{1}{|\mathcal{N}_i|}\sum_{k \in \mathcal{N}_i} \nabla F_{i,k}\left(x_{i}^{u,l-1}\right)\right\|^2\ \label{eq_nameless} \\
+  \leq& \mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{u,l-1}\right) - \frac{\alpha}{2} \mathbb{E}_{|\bm t_i^u}\left\|\nabla f_{i}\left(x_{i}^{u,l-1}\right)\right\|^2+ \frac{\alpha^2 L}{2}  \frac{1}{|\mathcal{N}_i|} \sigma^2,
+\end{align}
+where \eqref{eq_nameless} follows from \eqref{group_loss}, and the last inequality follows by choosing $0 < \alpha \leq \frac{1}{L}$.
+
+Next, rearranging the terms above and summing over all local iterations till iteration $t_{i}^{u}$, we have
+\begin{align}
+       \frac{\alpha}{2} \sum_{l=1}^{t_{i}^{u}} \mathbb{E}_{|\bm t_i^u}\left\|\nabla f_{i}\left(x_{i}^{u,l-1}\right)\right\|^2 &\leq \sum_{l=1}^{t_{i}^{u}} \left[\mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{u,l-1}\right) - \mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{u,l}\right) \right] + t_{i}^{u}\alpha^2  \frac{L}{2}  \frac{1}{|\mathcal{N}_i|} \sigma^2\ \nonumber\\    
+       &=\left[\mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{u}\right) - \mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{u,t_{i}^{u}}\right) \right] +  t_{i}^{u}\alpha^2  \frac{L}{2}  \frac{1}{|\mathcal{N}_i|} \sigma^2.
+\end{align}
+Now taking the average over all global communication rounds yields
+\begin{align} \label{global_avg}
+ &\frac{1}{\sum_{u=1}^{\mathcal{U}} t_{i}^{u}} \sum_{u=1}^{\mathcal{U}} \frac{\alpha}{2} \sum_{l=1}^{t_{i}^{u}} \mathbb{E}_{|\bm t_i^u}\left\|\nabla f_{i}\left(x_{i}^{u,l-1}\right)\right\|^2 \nonumber \\ 
+       \leq&      
+       \frac{1}{\sum_{u=1}^{\mathcal{U}} t_{i}^{u}} \sum_{u=1}^{\mathcal{U}} \left[\mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{u}\right) - \mathbb{E}f_{i}\left(x_{i}^{u,t_{i}^{u}}\right) \right]+\sum_{u=1}^{\mathcal{U}}\frac{t_{i}^{u}}{\sum_{u=1}^{\mathcal{U}}t_{i}^{u}}  \frac{\alpha^2 L}{2}  \frac{1}{|\mathcal{N}_i|}
+       \sigma^2 \nonumber\\
+       =&  \frac{1}{\sum_{u=1}^{\mathcal{U}} t_{i}^{u}} \left(\mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{1}\right)-\mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{\mathcal{U},t_i^{\mathcal{U}}}\right) \!+\!\sum_{u=1}^{\mathcal{U}-1} 
+    \mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{u+1}\right)\!-\!\mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{u,t_i^{u}}\right)\right) \!+\! \frac{\alpha^2 L}{2}  \frac{1}{|\mathcal{N}_i|} \sigma^2.
+       \end{align}
+Now let us consider one of the summands in the equality above. We have
+\begin{align} \label{last_step}
+ \mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{u+1}\right)-\mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{u,t_i^{u}}\right) &\leq \mathbb{E}_{|\bm t_i^u}\langle\nabla f_{i}\left(x_{i}^{u,t_i^{u}}\right) ,x_{i}^{u+1}- x_{i}^{u,t_i^{u}}\rangle+ \frac{L}{2}\mathbb{E}_{|\bm t_i^u}\left\| x_{i}^{u+1}-x_{i}^{u,t_{i}^{u}}\right\|^2 \nonumber \\
+  &\leq {\frac{1}{2}} \mathbb{E}_{|\bm t_i^u} \left(\left\|\nabla f_{i}\left(x_{i}^{u,t_i^{u}}\right)\right\|^2+ \left\|x_{i}^{u+1}- x_{i}^{u,t_i^{u}}\right\|^2\right) \nonumber \\
+  &\hspace{2.59in}+\frac{L}{2}\mathbb{E}_{|\bm t_i^u}\left\| x_{i}^{u+1}-x_{i}^{u,t_{i}^{u}}\right\|^2 \nonumber \\
+  &= \frac{1}{2}\mathbb{E}_{|\bm t_i^u}\left\|\nabla f_{i}\left(x_{i}^{u,t_i^{u}}\right)\right\|^2+\frac{(L +1)}{2}\mathbb{E}\left\| x_{i}^{u+1}-x_{i}^{u,t_{i}^{u}}\right\|^2 \nonumber\\
+   &= \frac{1}{2}\mathbb{E}_{|\bm t_i^u}\left\|\frac{1}{|\mathcal{N}_i|} \sum_{k \in \mathcal{N}_i}\nabla F_{i,k}\left(x_{i}^{u,t_i^{u}}\right)\right\|^2+\frac{L +1}{2}\mathbb{E}\left\| x_{i}^{u+1}-x_{i}^{u,t_{i}^{u}}\right\|^2\nonumber \\
+   &\leq  \frac{G^2}{2} + \frac{(L +1)}{2}\mathbb{E}_{|\bm t_i^u}\left\| x_{i}^{u+1}-x_{i}^{u,t_{i}^{u}}\right\|^2\nonumber\\
+   &\leq  \frac{G^2}{2}+ (L +1)\alpha^2 \left( ( t_{i}^{u})^2+ \frac{|\mathcal{N}_g|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{j \in \mathcal{N}_g }|\mathcal{N}_j|^2\right) G^2,
+\end{align}
+where the last inequality follows directly from Lemma~\ref{lemma_1} (note that each group restarts its model updates following each global iteration, and hence $x_{i}^{u+1,0}=x^{u+1}$). Finally, by substituting \eqref{last_step} into \eqref{global_avg} we get
+\begin{align} 
+ &\frac{1}{\sum_{u=1}^{\mathcal{U}} t_{i}^{u}} \sum_{u=1}^{\mathcal{U}}  \sum_{l=1}^{t_{i}^{u}} \mathbb{E}_{|\bm t_i^u}\left\|\nabla f_{i}\left(x_{i}^{u,l-1}\right)\right\|^2 \nonumber \\   
+    & \leq \frac{2}{\alpha \sum_{u=1}^{\mathcal{U}} t_{i}^{u}} \Biggl(\mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{1}\right)-\mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{\mathcal{U},t_i^{\mathcal{U}}}\right) \Biggl)+ \frac{ \alpha  L}{|\mathcal{N}_{i}|} \sigma^2 +\frac{1}{\alpha \sum_{u=1}^{\mathcal{U}} t_{i}^{u}}  (\mathcal{U}-1) G^2 \nonumber \\
+    &\hspace{2in}+  \frac{2 (L +1)\alpha}{ \sum_{u=1}^{\mathcal{U}} t_{i}^{u}}   \sum_{u=1}^{\mathcal{U}-1}   \left( ( t_{i}^{u})^2+ \underbrace{\frac{|\mathcal{N}_g|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{j \in \mathcal{N}_g }|\mathcal{N}_j|^2}_{\triangleq\kappa}\right) G^2
+    \nonumber\\
+    &=\frac{2}{\alpha \sum_{u=1}^{\mathcal{U}} t_{i}^{u}} \Biggl(\mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{1}\right)-\mathbb{E}_{|\bm t_i^u}f_{i}\left(x_{i}^{\mathcal{U},t_i^{\mathcal{U}}}\right) \Biggl)+ \alpha  L \frac{1}{|\mathcal{N}_{i}|} \sigma^2 \nonumber \\
+    &\hspace{1in}+\Biggl(\frac{1}{\alpha \sum_{u=1}^{\mathcal{U}} t_{i}^{u}} +  \frac{2 (L +1) \kappa \alpha}{ \sum_{u=1}^{\mathcal{U}} t_{i}^{u}} \Biggr)(\mathcal{U}-1)  G^2 +\frac{2 (L +1)\alpha}{ \sum_{u=1}^{\mathcal{U}} t_{i}^{u}}   \sum_{u=1}^{\mathcal{U}-1}   ( t_{i}^{u})^2 G^2. 
+   
+   
+   
+    \end{align}
+
+
+\section{Proof of Theorem~\ref{global_convg}} \label{appD}
+We first use the smoothness assumption of the global loss function, together with the SGD update rule in \eqref{global_update} to get the following:
+\begin{align} \label{global_smooth_bound}
+    \mathbb{E}_{|\bm t_i^u}f\left(x^{u+1}\right) &\leq \mathbb{E}_{|\bm t_i^u}f\left(x^{u}\right)+ \mathbb{E}_{|\bm t_i^u} \langle \nabla f\left(x^{u}\right),x^{u+1}-x^{u}\rangle+\frac{L}{2} \mathbb{E}_{|\bm t_i^u}\left\|x^{u+1}-x^{u}\right\|^2
+\nonumber\\
+&=\mathbb{E}_{|\bm t_i^u} f\left(x^{u}\right)+ \alpha \mathbb{E}_{|\bm t_i^u}  \langle\nabla f\left(x^{u}\right),  \frac{-1}{\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|}\sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i} \Tilde{g}_{i,k}\left(x_{i}^{u,l}\right)\rangle\nonumber\\  
+&\quad + \frac{\alpha^2 L}{2(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|)^2} \mathbb{E}_{|\bm t_i^u} \left\|\sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i} \Tilde{g}_{i,k}\left(x_{i}^{u,l}\right)\right\|^2.
+\end{align}
+For the inner product term above, we have
+\begin{align} \label{global_dot_bound}
+  &\alpha \mathbb{E}_{|\bm t_i^u} \langle \nabla f\left(x^{u}\right),\frac{-1}{\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|}\sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i} \Tilde{g}_{i,k}\left(x_{i}^{u,l}\right)\rangle \nonumber \\
+  &\overset{(\text{i})}{=}  \alpha \mathbb{E}_{|\bm t_i^u} \langle\nabla f\left(x^{u}\right),  \frac{-1}{\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|}\sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i}\nabla F_{i,k}\left(x_{i}^{u,l}\right)\rangle\nonumber\\
+  &=
+  \frac{\alpha}{2} \left(\mathbb{E}_{|\bm t_i^u}\left\|\nabla f\left(x^{u}\right)-   \frac{1}{\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|}\sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i}\nabla F_{i,k}\left(x_{i}^{u,l}\right)\right\|^2\right.\nonumber\\ 
+  &\left.\quad \qquad -\mathbb{E}_{|\bm t_i^u}\left\|\nabla f\left(x^{u}\right)\right\|^2-\mathbb{E}_{|\bm t_i^u}\left\|\frac{1}{\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|}\sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i}\nabla F_{i,k}\left(x_{i}^{u,l}\right)\right\|^2\right),
+\end{align}
+where (i) follows from Assumption~2 (unbiased stochastic gradient in \eqref{assum_2}). 
+For the last term in \eqref{global_smooth_bound}, we have
+\begin{align} \label{global_sgd_bound}
+&\mathbb{E}_{|\bm t_i^u}\left\|\sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i} \Tilde{g}_{i,k}\left(x_{i}^{u,l}\right)\right\|^2
+\nonumber \\
+&=\mathbb{E}_{|\bm t_i^u}\left\| \sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i} \Tilde{g}_{i,k}\left(x_{i}^{u,l}\right)-\nabla F_{i,k}\left(x_{i}^{u,l}\right)+\nabla F_{i,k}\left(x_{i}^{u,l}\right) \right\|^2\nonumber\\
+ &=\mathbb{E}_{|\bm t_i^u}\left\|\sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i} \Tilde{g}_{i,k}\left(x_{i}^{u,l}\right)-\nabla F_{i,k}\left(x_{i}^{u,l}\right)\right\|^2+ \mathbb{E}_{|\bm t_i^u}\left\| \sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i} \nabla F_{i,k}\left(x_{i}^{u,l}\right)\right\|^2\nonumber\\
+ &\leq |\mathcal{N}_g|\sum_{i \in \mathcal{N}_g } \frac{1}{t_{i}^u} \sum_{l=0}^{t_{i}^{u}-1}  \mathbb{E}_{|\bm t_i^u}\left\|\sum_{k \in \mathcal{N}_i} \Tilde{g}_{i,k}\left(x_{i}^{u,l}\right)-\nabla F_{i,k}\left(x_{i}^{u,l}\right)\right\|^2+ \mathbb{E}_{|\bm t_i^u}\left\| \sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i} \nabla F_{i,k}\left(x_{i}^{u,l}\right)\right\|^2 \nonumber\\
+
+ &\leq |\mathcal{N}_g|\sum_{i \in \mathcal{N}_g } \frac{1}{t_i^{u}}\sum_{l=0}^{t_{i}^{u}-1}|\mathcal{N}_i| \sum_{ i \in \mathcal{N}_i} \mathbb{E}_{|\bm t_i^u}\left\| \Tilde{g}_{i,k}\left(x_{i}^{u,l}\right)-\nabla F_{i,k}\left(x_{i}^{u,l}\right)\right\|^2 \nonumber \\
+ &\hspace{3.5in}+ \mathbb{E}_{|\bm t_i^u}\left\|\sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i} \nabla F_{i,k}\left(x_{i}^{u,l}\right)\right\|^2 \nonumber\\
+
+ &\leq |\mathcal{N}_g|\sum_{i \in \mathcal{N}_g } \frac{1}{t_i^{u}}\sum_{l=0}^{t_{i}^{u}-1}|\mathcal{N}_i| \sum_{ i \in \mathcal{N}_i} \sigma^2+ \mathbb{E}_{|\bm t_i^u}\left\| \sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i} \nabla F_{i,k}\left(x_{i}^{u,l}\right)\right\|^2         \nonumber\\
+
+  & =|\mathcal{N}_g|\sum_{i \in \mathcal{N}_g } \frac{1}{t_i^{u}}t_{i}^{u}|\mathcal{N}_i|^2\sigma^2+ \mathbb{E}_{|\bm t_i^u}\left\| \sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i} \nabla F_{i,k}\left(x_{i}^{u,l}\right)\right\|^2\nonumber\\
+  & =|\mathcal{N}_g|\sum_{i \in \mathcal{N}_g } |\mathcal{N}_i|^2\sigma^2+ \mathbb{E}_{|\bm t_i^u}\left\| \sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i} \nabla F_{i,k}\left(x_{i}^{u,l}\right)\right\|^2.
+\end{align}
+Substituting \eqref{global_dot_bound} and \eqref{global_sgd_bound} into \eqref{global_smooth_bound} yields
+\begin{align}  \label{global_smooth_bound_2}
+    \mathbb{E}_{|\bm t_i^u}f\left(x^{u+1}\right) \leq& \mathbb{E}_{|\bm t_i^u}f\left(x^{u}\right)+ 
+  \frac{\alpha}{2} \left(\mathbb{E}_{|\bm t_i^u}\left\|\nabla f\left(x^{u}\right)-   \frac{1}{\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|}\sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i}\nabla F_{i,k}(x_{i}^{u,l})\right\|^2\right.\nonumber\\ 
+  &\left. -\mathbb{E}_{|\bm t_i^u}\left\|\nabla f\left(x^{u}\right)\right\|^2-\mathbb{E}_{|\bm t_i^u}\left\| \frac{1}{\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|}\sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i}\nabla F_{i,k}(x_{i}^{u,l})\right\|^2\right)
+\nonumber \\
+&+\frac{\alpha^2  L}{2\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2}  \left(|\mathcal{N}_g|\sum_{i \in \mathcal{N}_g } |\mathcal{N}_i|^2\sigma^2+ \mathbb{E}_{|\bm t_i^u}\left\| \sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i} \nabla F_{i,k}\left(x_{i}^{u,l}\right)\right\|^2\right)\nonumber \\
+\leq& \mathbb{E}_{|\bm t_i^u}f\left(x^{u}\right)+ 
+  \frac{\alpha}{2} \mathbb{E}_{|\bm t_i^u}\left\|\nabla f\left(x^{u}\right)-   \frac{1}{\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|}\sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i}\nabla F_{i,k}\left(x_{i}^{u,l}\right)\right\|^2 \nonumber \\
+  &-\frac{\alpha}{2}\mathbb{E}_{|\bm t_i^u}\left\|\nabla \left(x^{u}\right)\right\|^2 + \frac{\alpha^2 L |\mathcal{N}_g| \sum_{i \in \mathcal{N}_g} |\mathcal{N}_i|^2\sigma^2}{2\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2},
+\end{align}
+where the last inequality follows by choosing $0 < \alpha \leq \frac{1}{L}$.
+
+Regarding the second term in \eqref{global_smooth_bound_2}, although the division by $t_i^{u}$ fixes the bias issue of the cumulative gradient at the GPS, it does not make it not coincide with its theoretical definition in \eqref{global_loss}. Hence, different from the analogous step in \eqref{eq_nameless} in the proof of Theorem~\ref{CA_Group}, the term above requires more mathematical manipulations. Towards that end, we bound it as follows:
+\begin{align} \label{e_bound2}
+&\mathbb{E}_{|\bm t_i^u}\left\|\nabla f\left(x^{u}\right)-   \frac{1}{\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|}\sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i}\nabla F_{i,k}\left(x_{i}^{u,l}\right)\right\|^2 \nonumber \\
+& =\mathbb{E}_{|\bm t_i^u} \left\|\frac{1}{\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|}\sum_{i \in \mathcal{N}_g}\sum_{k \in \mathcal{N}_i}\nabla F_{i,k}\left(x^{u}\right)-\frac{1}{\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|}\sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i}\nabla F_{i,k}\left(x_{i}^{u,l}\right)\right\|^2\nonumber\\ 
+&\leq \frac{|\mathcal{N}_{g}|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{i \in \mathcal{N}_g} 
+   \mathbb{E}_{|\bm t_i^u}\left\| \sum_{k \in \mathcal{N}_i}\nabla F_{i,k}\left(x^{u}\right)
+    - \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i}\nabla F_{i,k}\left(x_{i}^{u,l}\right)\right\|^2\nonumber \\
+   
+&\leq \frac{|\mathcal{N}_{g}|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}| \sum_{k \in \mathcal{N}_i}
+ \mathbb{E}_{|\bm t_i^u}\left\| \nabla F_{i,k}\left(x^{u}\right)
+    - \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\nabla F_{i,k}\left(x_{i}^{u,l}\right)\right\|^2\nonumber \\ 
+&\leq\frac{|\mathcal{N}_{g}|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}| \sum_{k \in \mathcal{N}_i} \frac{1}{t_i^u} \sum_{l=0}^{t_i^{u}-1}
+  \mathbb{E}_{|\bm t_i^u}\left\| \nabla F_{i,k}\left(x^{u}\right)
+    -\nabla F_{i,k}\left(x_{i}^{u,l}\right)\right\|^2\nonumber \\
+&\leq\frac{|\mathcal{N}_{g}|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}| \sum_{k \in \mathcal{N}_i} \frac{1}{t_i^u} \sum_{l=0}^{t_i^{u}-1} L^2 \mathbb{E}_{|\bm t_i^u} \left\|(x^{u})
+    -(x_{i}^{u,l})\right\|^2\nonumber \\
+    &\leq  \frac{2 L^2 |\mathcal{N}_{g}|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}| \sum_{k \in \mathcal{N}_i} \frac{1}{t_i^u} \sum_{l=0}^{t_i^{u}-1} \mathbb{E}_{|\bm t_i^u} \left\|x^{u}-x_{i}^{u-1,t_{i}^{u-1}}
+    \right\|^2+\mathbb{E}_{|\bm t_i^u} \left\|x_{i}^{u-1,t_{i}^{u-1}}-x_{i}^{u,l}\right\|^2.
+\end{align}
+For the last term above, we have
+\begin{align}\label{b_bound}
+   \mathbb{E}_{|\bm t_i^u}\left\|x_{i}^{u-1,t_{i}^{u-1}}-x_{i}^{u,l}\right\|^2&= \mathbb{E}_{|\bm t_i^u}\left\|x_{i}^{u-1,t_{i}^{u-1}}-x^{u}+x^{u}-x_{i}^{u,l}\right\|^2 \nonumber \\
+   &\leq 2 \mathbb{E}_{|\bm t_i^u}\left\|x_{i}^{u-1,t_{i}^{u-1}}-x^{u}\right\|^2 + 2 \mathbb{E}_{|\bm t_i^u}\left\| x^{u}-x_{i}^{u,l}\right\|^2 \nonumber \\
+   &\overset{(a)}{=} 2 \mathbb{E}_{|\bm t_i^u}\left\|x_{i}^{u-1,t_{i}^{u-1}}-x^{u}\right\|^2 + 2 \mathbb{E}_{|\bm t_i^u}\left\|\frac{\alpha}{|\mathcal{N}_i|} \sum_{m=0}^{l-1}\sum_{k \in \mathcal{N}_i} \Tilde{g}_{i,k}\left(x_{i}^{u,m}\right) \right\|^2 \nonumber \\
+   &\leq 2 \mathbb{E}_{|\bm t_i^u}\left\|x_{i}^{u-1,t_{i}^{u-1}}-x^{u}\right\|^2 + 2 \frac{\alpha^2}{|\mathcal{N}_i|}\sum_{k \in \mathcal{N}_i} l \sum_{m=0}^{l-1} \mathbb{E}_{|\bm t_i^u}\left\|  \Tilde{g}_{i,k}\left(x_{i}^{u,m}\right) \right\|^2 \nonumber \\
+   &\leq 2 \mathbb{E}_{|\bm t_i^u}\left\|x_{i}^{u-1,t_{i}^{u-1}}-x^{u}\right\|^2 + 2 \frac{\alpha^2}{|\mathcal{N}_i|}\sum_{k \in \mathcal{N}_i} l^2  G^2 \nonumber \\
+   &= 2 \mathbb{E}_{|\bm t_i^u}\left\|x_{i}^{u-1,t_{i}^{u-1}}-x^{u}\right\|^2 + 2 \alpha^2l^2  G^2,
+\end{align}
+where (a) follows from \eqref{eq_local-update}.
+Next, substituting the bound of (\ref{b_bound}) in (\ref{e_bound2}) yields 
+\begin{align} 
+&\mathbb{E}_{|\bm t_i^u}\left\|\nabla f(x^{u})-   \frac{1}{\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|}\sum_{i \in \mathcal{N}_g} \frac{1}{t_{i}^{u}} \sum_{l=0}^{t_{i}^{u}-1}\sum_{k \in \mathcal{N}_i}\nabla F_{i,k}\left(x_{i}^{u,l}\right)\right\|^2 \nonumber \\
+&\leq \frac{ 2 L^2 |\mathcal{N}_{g}|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}| \sum_{k \in \mathcal{N}_i} \frac{1}{t_i^u} \sum_{l=0}^{t_i^{u}-1} \Biggl( 3 \mathbb{E}_{|\bm t_i^u} \left\|x^{u}-x_{i}^{u-1,t_{i}^{u-1}}
+     \right\|^2+ 2 \alpha^2l^2  G^2 \Biggr) \nonumber \\
+&\leq  \frac{4 L^2 |\mathcal{N}_{g}|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}| \sum_{k \in \mathcal{N}_i} \frac{1}{t_i^u} \sum_{l=0}^{t_i^{u}-1} \! \left(3\alpha^2  (t_{i}^{u-1})^2\!+\! \frac{3\alpha^2 |\mathcal{N}_g|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{j \in \mathcal{N}_g}|\mathcal{N}_j|^2G^2\!+\!  \alpha^2l^2  G^2 \!\right).
+\end{align}
+Finally, Substituting (41) in (38) and rearranging, we get
+\begin{align}  \label{global_smooth_bound_3}
+    &\mathbb{E}_{|\bm t_i^u}\left\|\nabla f(x^{u})\right\|^2  
+\leq  \frac{2}{\alpha} \left(\mathbb{E}_{|\bm t_i^u}f\left(x^{u}\right)-\mathbb{E}_{|\bm t_i^u}f\left(x^{u+1}\right)\right) + \frac{\alpha L |\mathcal{N}_g| \sum_{i \in \mathcal{N}_g} |\mathcal{N}_i|^2\sigma^2}{(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|)^2}\nonumber \\
+&+ \frac{4 L^2 |\mathcal{N}_{g}|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}| \sum_{k \in \mathcal{N}_i} \frac{1}{t_i^u} \sum_{l=0}^{t_i^{u}-1}  \left(\!3\alpha^2  (t_{i}^{u-1})^2\!+\! \frac{3\alpha^2 |\mathcal{N}_g|}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} \sum_{j \in \mathcal{N}_g}|\mathcal{N}_j|^2G^2+  \alpha^2l^2  G^2 \!\right)
+.
+\end{align}
+Then, taking the average over global communication rounds $\mathcal{U}$ yields
+\begin{align}  
+   \frac{1}{\mathcal{U}} \sum_{u=1}^{\mathcal{U}} \mathbb{E}_{|\bm t_i^u}\left\|\nabla f\left(x^{u}\right)\right\|^2  
+\leq&  \frac{2}{\alpha} \frac{1}{\mathcal{U}}  \left(\mathbb{E}_{|\bm t_i^u}f(x^{1})-\mathbb{E}_{|\bm t_i^u}f\left(x^{\mathcal{U}+1}\right) \right) + \frac{\alpha L |\mathcal{N}_g| \sum_{i \in \mathcal{N}_g} |\mathcal{N}_i|^2\sigma^2}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2}\nonumber \\
+&+ \frac{1}{\mathcal{U}} \sum_{u=1}^{\mathcal{U}}  \frac{4 L^2}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} |\mathcal{N}_{g}|\sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}| \sum_{k \in \mathcal{N}_i} \frac{1}{t_i^u} \sum_{l=0}^{t_i^{u}-1} 3\alpha^2  (t_{i}^{u-1})^2 \nonumber \\
+&+ \frac{12 \alpha^2 L^2 G^2}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^4} |\mathcal{N}_{g}|^2  \sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}|^2 \sum_{j \in \mathcal{N}_g}  |\mathcal{N}_j|^2 \nonumber \\
+&+ \frac{1}{\mathcal{U}} \sum_{u=1}^{\mathcal{U}}\frac{4\alpha^2 L^2  G^2 }{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} |\mathcal{N}_{g}|\sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}| \sum_{k \in \mathcal{N}_i} \frac{1}{t_i^u} \sum_{l=0}^{t_i^{u}-1}  l^2 . 
+\end{align}
+Direct simplifications of the above expression give the result of the theorem.
+
+\section{Proof Of Corollary ~\ref{corollary}} \label{appE}
+
+By Theorem~\ref{global_convg}, we have shown the convergence rate of the whole setting. Furthermore, bounding the local iteration time, and as a consequence the number of local iterations as stated in \eqref{t_bound1} and \eqref{t_bound2}, one can show that the bound in Theorem~\ref{global_convg} behaves as follows: 
+
+
+\begin{align} \label{global_bound} 
+   \frac{1}{\mathcal{U}} \sum_{u=1}^{\mathcal{U}} \mathbb{E}_{|\bm t_i^u}\left\|\nabla f(x^{u})\right\|^2  
+\leq&  
+ \frac{2}{\alpha} \frac{1}{\mathcal{U}}  \left(\mathbb{E}f\left(x^{1}\right)-\mathbb{E}f\left(x^{\mathcal{U}+1}\right)\right)  + \frac{\alpha L |\mathcal{N}_g| \sum_{i \in \mathcal{N}_g} |\mathcal{N}_i|^2\sigma^2}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2}\nonumber \\
+&+\frac{\alpha^2 }{\mathcal{U}} \sum_{u=1}^{\mathcal{U}}  \frac{12 L^2}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} |\mathcal{N}_{g}|\sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}|^2   (t_{i}^{u-1})^2 \nonumber \\
+&+\alpha^2 \frac{1}{\mathcal{U}} \sum_{u=1}^{\mathcal{U}}\frac{4 L^2 }{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} |\mathcal{N}_{g}|\sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}|^2  \frac{(t_i^{u}-1)(2t_i^{u}-1)}{6}  G^2 
+ \nonumber \\
+ &+\frac{12 \alpha^2 L^2 G^2}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^4} |\mathcal{N}_{g}|^2  \sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}|^2 \sum_{j \in \mathcal{N}_g}  |\mathcal{N}_j|^2\nonumber \\
+ \leq& \frac{2}{\alpha} \frac{1}{\mathcal{U}}  \left(\mathbb{E}_{|\bm t_i^u}f\left(x^{1}\right)-\mathbb{E}_{|\bm t_i^u}f\left(x^{\mathcal{U}+1}\right)\right)  + \frac{\alpha L |\mathcal{N}_g| \sum_{i \in \mathcal{N}_g} |\mathcal{N}_i|^2\sigma^2}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2}\nonumber \\
+&+\alpha^2   \frac{12 L^2}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} |\mathcal{N}_{g}|\sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}|^2  (t_{i}^{\max})^2 \nonumber \\
+&+\alpha^2 \frac{4 L^2  G^2 }{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} |\mathcal{N}_{g}|\sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}|^2  \frac{(t_i^{\max})^2}{3} 
+ \nonumber \\
+ &+\alpha^2 \frac{12  L^2 G^2}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^4} |\mathcal{N}_{g}|^2  \sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}|^2 \sum_{j \in \mathcal{N}_g}  |\mathcal{N}_j|^2\nonumber \\
+ \leq&  \frac{2}{\sqrt{\mathcal{U}}}  \left(\mathbb{E}_{|\bm t_i^u}f\left(x^{1}\right)-\mathbb{E}_{|\bm t_i^u}f\left(x^{\mathcal{U}+1}\right)\right)  + \frac{1}{\sqrt{\mathcal{U}}}\frac{ L |\mathcal{N}_g| \sum_{i \in \mathcal{N}_g} |\mathcal{N}_i|^2\sigma^2}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2}\nonumber \\
+ &+\frac{1}{\mathcal{U}}   \frac{12 L^2}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} |\mathcal{N}_{g}|\sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}|^2  \left(t_{i}^{\max}\right)^2 \nonumber \\
+&+\frac{1}{\mathcal{U}} \frac{4 L^2  G^2 }{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^2} |\mathcal{N}_{g}|\sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}|^2  \frac{(t_i^{\max})^2}{3} 
+ \nonumber \\
+ &+\frac{1}{\mathcal{U}} \frac{12  L^2 G^2}{\left(\sum_{i \in \mathcal{N}_g}|\mathcal{N}_i|\right)^4} |\mathcal{N}_{g}|^2  \sum_{i \in \mathcal{N}_g} |\mathcal{N}_{i}|^2 \sum_{j \in \mathcal{N}_g}  |\mathcal{N}_j|^2,
+\end{align}
+where the last inequality follows by choosing $\alpha\leq\frac{1}{\sqrt{\mathcal{U}}}$. This completes the proof.
+
+
+
+
+
+\ifCLASSOPTIONcaptionsoff
+  \newpage
+\fi
+

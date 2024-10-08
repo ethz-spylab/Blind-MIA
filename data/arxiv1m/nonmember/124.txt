@@ -1,0 +1,402 @@
+\section{Introduction}
+\label{submission}
+
+The field of neural architecture search (NAS) emerged about a decade ago as an effort to automatise the process of neural geometry optimisation. At the early stages of NAS development, every candidate architecture used to be evaluated through the training process (reinforcement learning \citep{williams1992simple}, evolutionary algorithms \citep{real2019regularized}, Bayesian optimisation \citep{falkner2018bohb, white2021bananas}). 
+
+One-shot algorithms adopting weight sharing dispense of multiple architectures training, reducing the search time drastically (efficient reinforcement learning \citep{pham2018efficient}, random search with parameters sharing\citep{li2020random}, differentiable methods). Nevertheless, they require the training of a massive hypernet, which necessitates elaborate hyperparameter tuning. While these methods prove efficient, they do not systematically achieve satisfactory results \citep{dong2019searching}. One of the best of them, DARTS- \citep{chu2020darts}, shows significant uncertainty compared to evolutionary or reinforcement algorithms.
+
+There are available methods that estimate network performance without training the dataset of interest but relying on an auxiliary predictive machine learning (ML) model built on a dataset of trained architectures \citep{istrate2019tapas,deng2017peephole}. These methods aim to accelerate the NAS process for image recognition but still rely on training and cannot apply to other ML problems.
+
+Evaluating geometries through training brings multiple disadvantages. The most obvious is that training is a computationally expensive procedure, and large-scale geometry evaluation often cannot be carried out on massive datasets. Consequently, architectures are usually trained with a single random seed and a fixed set of hyperparameters. This fact raises the question of whether the chosen architecture is statistically reliable and might lead to selecting a sub-optimal model, optimal only in the context of the fixed set of hyperparameters. Training also implies using hand-labelled data, which brings in human error -- ImageNet dataset, for instance, is known to have a label error of about $6$\,$\rm\%$ \citep{northcutt2021pervasive}. Importantly, from the fundamental point of view, the above NAS methods do not explain why a given architecture is selected.
+
+\subsection{Zero-cost NAS}
+
+To alleviate the process of architecture search, many researchers focus on developing methods that allow finding optimal architectures without model training -- so-called zero-cost NAS methods. These methods evaluate networks via some trainless metric. They typically require the equivalent of one or a few training epochs, which is two to three orders of magnitude faster than other NAS methods.
+
+\begin{description}[style=unboxed,leftmargin=0cm]
+
+\item[Weight agnostic neural networks.]
+One of the pioneering works in zero-shot NAS is presented by \citet{gaier2019weight}. They demonstrate a constructor that builds up neural architectures based on the mean accuracy over several initialisations with constant shared weights and the number of parameters contained within the model. The resulting model achieves over $90\%$ accuracy on MNIST data \citep{lecun2010mnist} when the weights are fixed to the best-performing constants. While these results are very intriguing, the authors admit that such architectures do not perform particularly well upon training. Moreover, back in $2019$, the benchmark databases of trained architectures, which are now routinely used to compare NAS metrics with each other, were yet to be released, which disables the comparison of this zero-shot method against the most recent ones.
+
+\item[Jacobian covariance.]
+In $2020$, \citet{mellor2020neural} present the \texttt{naswot} metric, which exploits the rectified linear unit (ReLU, \citet{agarap2018deep}) activation function's property to yield distinct activation patterns for different architectures. Concretely, every image yields a binary activation vector upon passing through a network, forming a binary matrix for a mini-batch. The logarithm of the determinant of this matrix serves as a scoring metric. Authors show that larger \texttt{naswot} values are associated with better training performances, which leads to the conclusion that high-performing networks should be able to distinguish the inputs before training. Unfortunately, the method can only be implemented on networks with ReLU activation functions, which limits its applicability to convolutional architectures. In the first version of the paper released in June 2020, the authors presented another scoring method using Jacobian covariance (\texttt{jacov}) and achieved significantly different performances. Following \citet{abdelfattah2021zero}, we compare our results against \texttt{jacov} as well.
+
+Another work employing the abovementioned ReLU property is \citet{chen2021neural}. They combine the number of linear regions in the input space with the spectrum of the neural tangent kernel (NTK) to build the \texttt{tenas} metric. Instead of evaluating each network in the search space individually, they create a super-network built with all the available edges and operators and then prune it.
+
+\item[Coefficient of variance.]
+Another early work on fully trainless NAS belongs to \citet{gracheva2021trainless}, which evaluates the stability of untrained scores over random weights initialisations. The author initialises the networks with multiple random seeds, and architectures are selected based on the coefficient of variance of the accuracy at initialisation, \texttt{CV}. While \texttt{CV} performance is associated with a high error rate, the author concludes that a good architecture should be stable against random weight fluctuations. While this method can, in theory, apply to any neural architecture type, it requires multiple initialisations and is relatively heavy compared to \texttt{naswot} and later methods. Furthermore, accuracy-based scoring metrics can only apply to classification problems, and it is unclear how to extend \texttt{CV} implementation to the regression tasks.
+
+\item[Gradient sign.] The \texttt{grad\_sign} metric is built to approximate the sample-wise optimisation landscape \citep{zhang2021gradsign}. The authors argue that the closer local minima for various samples sit to each other, the higher the probability that the corresponding gradients will have the same sign. The number of samples yielding the same gradient sign approximates this probability. It allows to evaluate the smoothness of the optimisation landscape and architecture trainability. The method requires labels and gradient computation.
+
+\item[Pruning-at-initialisation proxies.]
+Several powerful zero-cost proxies have emerged as an adaptation of pruning-at-initialisation methods to NAS in the work by \citet{abdelfattah2021zero}: \texttt{grad\_norm} \citep{wang2020picking}, \texttt{snip} \citep{lee2018snip}, \texttt{synflow} \citep{tanaka2020pruning}. These metrics are originally developed to evaluate the network's parameters' salience and prune away potentially meaningless synapses. They require a single forward-backwards pass to compute the loss. Then, the importance of parameters is computed as a multiplication of the weight value and gradient value. \citet{abdelfattah2021zero} integrate the salience over all the parameters in the network to evaluate its potential upon training. What is particularly interesting about the \texttt{synflow} metric is that it evaluates the architectures without looking at the data by computing the loss as the product of all the weights' values (randomly initialised). \texttt{synflow} metric shows the most consistent performance among various search spaces and sets the state-of-the-art for the zero-cost NAS.
+\end{description}
+
+Both \texttt{naswot} and \texttt{synflow} do not depend on labels, which arguably reduces the effect of human error during data labelling. Moreover, \texttt{naswot} does not require gradient computation, which renders this method less memory-intensive.
+
+The above results imply that neural networks might have some intrinsic property which defines their prediction potential before training. Such property should not depend on the values of trainable parameters (weights) but only on the network's topology. In the present work, we combine the takeaways from the existing trainless NAS implementations to present a new metric which significantly outperforms existing zero-cost NAS methods.
+
+\subsection{NAS benchmarks}
+To guarantee our metric's reproducibility and compare its performance against other NAS algorithms, we evaluate it on the three widely used NAS benchmark datasets.
+
+\begin{description}[style=unboxed,leftmargin=0cm]
+\item[NAS-Bench-101] The first and one of the largest NAS benchmark sets of trained architectures. It consists of $423{,}624$ cell-based convolutional neural networks \citep{ying2019bench}. The architectures consist of three stacks of cells, each followed by max-pooling layers. Cells may have up to $7$ vertices and $9$ edges, with $3$ possible operations. This benchmark is trained multiple times on a single dataset, \mbox{CIFAR-10} \citep{krizhevsky2009learning}, with a fixed set of hyperparameters for $108$ epochs. 
+
+\item[NAS-Bench-201] It is a set of architectures with a fixed skeleton consisting of a convolution layer and three stacks of cells connected by a residual block \citep{dong2020bench}. Each cell is a densely connected directed acyclic graph with $4$ nodes, $5$ possible operations and no limits on the number of edges, providing a total of $15{,}625$ possible architectures. Architectures are trained on three major datasets: \mbox{CIFAR-10}, \mbox{CIFAR-100} \citep{krizhevsky2009learning} and a downsampled version of ImageNet \citep{chrabaszcz2017downsampled}. Training hyperparameters are fixed, and the training spans $200$ epochs.
+
+\item[NAS-Bench-NLP] As the name suggests, this benchmark consists of architectures suitable for neural language processing \citep{klyuchnikov2022bench}. Concretely, it consists of randomly-generated recurrent neural networks. Recurrent cells comprise $24$ nodes, $3$ hidden states and $3$ input vectors at most, with $7$ allowed operations. Here, we only consider models trained and evaluated on Penn Treebank (PTB, \citet{marcinkiewicz1994building}) dataset: $14{,}322$ random networks with a single seed and $4{,}114$ with tree seeds. The training spans $50$ epochs and is conducted with fixed hyperparameters.
+\end{description}
+
+\section{Epsilon metric}
+Two existing NAS methods inspire the metric that we share in the present work: \texttt{CV} \citep{gracheva2021trainless} and weight agnostic neural networks \citep{gaier2019weight}. Both metrics aim to exclude individual weight values from consideration when evaluating networks: the former cancels out the individual weights via multiple random initialisations, while the latter sets them to the same value across the network. It is very intriguing to see that an network can be characterised purely by its topology.
+
+As mentioned above, the \texttt{CV} metric has two principal disadvantages. While it shows a fairly consistent trend with trained accuracy, it suffers from high uncertainty. It can be, to some degree, explained by the fact that random weight initialisations bring in some noise. Our idea is that replacing random initialisations with single shared weight initialisations, similarly to \citet{gaier2019weight}, should improve the method's performance.
+
+The second weak point is that \texttt{CV} is developed for classification problems and relies on accuracy. Therefore, it needs to be clarified how to apply this metric to regression problems. The coefficient of variation is a ratio of standard deviation to mean, and \citet{gracheva2021trainless} shows that \texttt{CV} correlates negatively with train accuracy. It implies that the mean untrained accuracy should be maximised. On the other hand, for regression tasks, performance is typically computed as some error, which is sought to be minimised. It is not apparent whether the division by mean untrained \textit{error} would result in the same trend for \texttt{CV} metric.
+
+To address this issue, we decided to consider raw outputs. This modification renders the method applicable to any neural architecture. However, it comes with a difference: accuracy returns a single value per batch of data, while raw outputs are $[N_{\textrm{BS}} \times L]$ matrices, where $N_{\rm{BS}}$ is the batch size and $L$ is the length of a single output.\footnote{This length depends on the task and architecture: for regression tasks $L=1$, for classification, $L$ is equal to the number of classes, and for recurrent networks, it depends on the desired length of generated string.} In our work, we flatten these matrices to obtain a single vector $\mathbf{v}$ of length $L_{v}=N_{\textrm{BS}} \times L$ per initialisation. We then stuck both initialisations into a single output matrix $\mathbf{V}$. 
+
+Before proceeding to statistics computation over initialisations, we also must normalise the output vectors: in the case of constant shared weights, outputs scale with weight values. In order to compare initialisations on par with each other, we use min-max normalisation:
+
+\begin{equation}
+\mathbf{V}_{i}^\prime=\frac{\mathbf{V}_{i}-\min(\mathbf{V}_{i})}{\max(\mathbf{V}_{i})-\min(\mathbf{V}_{i})},
+\label{eqn:minmax}
+\end{equation}
+
+where $i$ is the index for initialisations, $i=\{0,1\}$.
+
+We noticed that two distinct weights are sufficient to grasp the difference between initialisations. Accordingly, instead of standard deviation, we use mean absolute error between the normalised outputs of two initialisations:
+
+\begin{equation}
+\delta = \frac{1}{L_{v}} \sum\limits_{j=0}^{L_{v}}\lvert \mathbf{V}_{1,j}^\prime - \mathbf{V}_{2,j}^\prime\rvert.
+\label{eqn:delta}
+\end{equation}
+
+The mean is computed over the outputs of both initialisations as follows:
+
+\begin{equation}
+\mu = \frac{1}{L_{v}} \sum\limits_{j=0}^{L_{v}} \frac{\mathbf{V}_{1,j}^\prime + \mathbf{V}_{2,j}^\prime}{2} 
+= \frac{1}{2L_{v}} \sum\limits_{i=0}^{2} \sum\limits_{j=0}^{L_{v}}\mathbf{V}_{i,j}^\prime
+\label{eqn:mean}
+\end{equation}
+
+Finally, the metric is computed as the ratio of $\delta$ and $\mu$:
+
+\begin{equation}
+\varepsilon = \frac{\delta}{\mu}.
+\label{eqn:epsilon}
+\end{equation}
+
+We refer to our metric as \texttt{epsilon}, as a tribute to the $\varepsilon$ symbol used in mathematics to denote error bounds. Algorithm \ref{algo} details the \texttt{epsilon} metric computation.
+
+\begin{algorithm}[tb]
+\caption{Algorithm for \texttt{epsilon} metric computation}
+\label{algo}
+\begin{algorithmic}
+    \STATE Select a \texttt{batch} of data from train set
+    \FOR{\texttt{arch} in \texttt{search space}}
+        \STATE Initialise empty output \texttt{matrix}
+        \FOR{\texttt{weight} in [\texttt{val1}, \texttt{val2}]}
+            \STATE Initialise \texttt{arch} with constant shared \texttt{weight}
+            \STATE Forward pass the \texttt{batch} through \texttt{arch}
+            \STATE Get and flatten \texttt{outputs}
+            \STATE Minmax normalise \texttt{outputs} (Eq. \ref{eqn:minmax})
+            \STATE Append \texttt{outputs} to the output \texttt{matrix}
+        \ENDFOR
+        \STATE Compute difference between the rows of the output \texttt{matrix} (Eq. \ref{eqn:delta})
+        \STATE Compute mean over the output \texttt{matrix} (Eq. \ref{eqn:mean})
+        \STATE Compute \texttt{epsilon} metric (Equation \ref{eqn:epsilon})
+    \ENDFOR
+\end{algorithmic}
+\end{algorithm}
+
+\section{Results}
+\subsection{Empirical evaluation}
+Here we evaluate the performance of \texttt{epsilon} and compare it to the results for zero-cost NAS metrics reported in \citet{abdelfattah2021zero}. We use the following evaluation scores (computed with \texttt{NaN} omitted):
+
+\begin{itemize}
+\itemsep-0.2em 
+\item Spearman $\rho$ (global): Spearman rank correlation $\rho$ evaluated on the entire dataset. 
+\item Spearman $\rho$ (top-$10\%$):
+Spearman rank correlation $\rho$ for the top-$10\%$ performing architectures.
+\item Kendall $\tau$ (global): Kendall rank correlation coefficient $\tau$ evaluated on the entire dataset.
+\item Kendall $\tau$ (top-$10\%$): Kendall rank correlation coefficient $\tau$ for the top-$10\%$ performing architectures.
+\item Top-$10\%$/top-$10\%$: fraction of top-$10\%$ performing models within the top-$10\%$ models ranked by zero-cost scoring metric ($\%$).
+\item Top-64/top-$10\%$: number of top-64 models ranked by zero-cost scoring metric within top-$5\%$ performing models.
+\end{itemize}
+
+\subsubsection{NAS-Bench-201}
+The results for overall \texttt{epsilon} performance on NAS-Bench-201 are given in Table \ref{tab:results_201} along with other zero-cost NAS metrics. The Kendall $\tau$ score is not reported in \citet{abdelfattah2021zero}, but it is considered more robust than Spearman $\rho$ and is increasingly used for NAS metric evaluation. We use the data provided by \citet{abdelfattah2021zero} to evaluate their Kendal $\tau$. Note that our results differ from the original paper for some evaluation scores. In such cases, we indicate the original values between brackets. In particular, there is a discrepancy in computing the values in the last column, \textit{Top-64/top-$5\%$}, while the rest of the results are consistent. Figure \ref{fig:other_results_201} in Appendix suggests that our calculations are correct.
+
+\begin{table*}[!t]
+\caption{Zero-cost metrics performance for the NAS-Bench-201 search space with its three datasets: CIFAR-10, CIFAR-100 and ImageNet16-120. We give the original values from \citet{abdelfattah2021zero} for reference between brackets. We highlight the best-performing metrics in bold.}
+\label{tab:results_201}
+\begin{center}
+\small
+\resizebox{0.9\textwidth}{!} {
+\begin{tabular}{lrrrrp{0.1mm}rrrrrr}
+\toprule
+\noalign{\vskip 1 pt} 
+\multirow{2}{*}{Metric} & \multicolumn{4}{c}{Spearman $\rho$} & & \multicolumn{2}{c}{Kendall $\tau$} & \multicolumn{2}{c}{Top-10\%/} & \multicolumn{2}{c}{Top-64/} \\
+\cline{2-5}\cline{7-8}
+\noalign{\vskip 1.5pt} 
+  & \multicolumn{2}{c}{global} & \multicolumn{2}{c}{top-10\%} & & \multicolumn{1}{c}{global} & \multicolumn{1}{c}{top-10\%} & \multicolumn{2}{c}{top-10\%}& \multicolumn{2}{c}{top-5\%} \\
+\midrule
+\noalign{\vskip 1pt} 
+\multicolumn{12}{c}{CIFAR-10}\\
+\midrule
+\noalign{\vskip 1pt} 
+\texttt{grad\_sign} &  0.77  &  &  &  &  &  &  &  &  &  & \\
+\texttt{synflow}    &  0.74  &        &  0.18  &         &  &  0.54  &  0.12 & 45.75 & (46) & 29 & (44) \\
+\texttt{grad\_norm} &  0.59  & (0.58) & -0.36  & (-0.38) &  &  0.43  & -0.21 & 30.26 & (30) &  1 &  (0) \\
+\texttt{grasp}      &  0.51  & (0.48) & -0.35  & (-0.37) &  &  0.36  & -0.21 & 30.77 & (30) &  3 &  (0) \\
+\texttt{snip}       &  0.60  & (0.58) & -0.36  & (-0.38) &  &  0.44  & -0.21 & 30.65 & (31) &  1 &  (0) \\
+\texttt{fisher}     &  0.36  &        & -0.38  &         &  &  0.26  & -0.24 &  4.99 & ( 5) &  0 &  (0) \\
+\texttt{jacov}      & -0.73  & (0.73) &  0.15  &  (0.17) &  &  0.55  & -0.10 & 24.72 & (25) & 11 & (15) \\
+\texttt{epsilon}    &  \pmb{0.87}  &        &  \pmb{0.55}  &         &  &  \pmb{0.70}  &  \pmb{0.40} &  \pmb{67.39} &    & \pmb{59} &      \\
+\midrule
+\noalign{\vskip 1pt} 
+\multicolumn{12}{c}{CIFAR-100}\\
+\midrule
+\texttt{grad\_sign} &  0.79  &  &  &  &  &  &  &  &  &  & \\
+\texttt{synflow}    &  0.76  &        &  0.42  &         &  &  0.57  &  0.29 & 49.71 & (50) & 45 & (54) \\
+\texttt{grad\_norm} &  0.64  &        & -0.09  &         &  &  0.47  & -0.05 & 35.00 & (35) &  0 &  (4) \\
+\texttt{grasp}      &  0.55  & (0.54) & -0.10  & (-0.11) &  &  0.39  & -0.06 & 35.32 & (34) &  3 &  (4) \\
+\texttt{snip}       &  0.64  & (0.63) & -0.08  & (-0.09) &  &  0.47  & -0.05 & 35.25 & (36) &  0 &  (4) \\
+\texttt{fisher}     &  0.39  &        & -0.15  & (-0.16) &  &  0.28  & -0.10 &  4.22 & ( 4) &  0 &  (0) \\
+\texttt{jacov}      & -0.70  & (0.71) &  0.07  &  (0.08) &  &  0.54  &  0.05 & 22.11 & (24) &  7 & (15) \\
+\texttt{epsilon}    &  \pmb{0.90}  &        &  \pmb{0.59}  &         &  & \pmb{0.72}  & \pmb{0.43} & \pmb{81.24} &    & \pmb{62} &      \\
+\noalign{\vskip 1pt} 
+\midrule
+
+\multicolumn{12}{c}{ImageNet16-120}\\
+\midrule
+\texttt{grad\_sign}    &  0.78  &  &  &  &  &  &  &  &  &  & \\
+\texttt{synflow}    &  0.75  &        & \pmb{0.55} &          &  &  0.56  & \pmb{0.39} & 43.57 & (44) & 26 & (56) \\
+\texttt{grad\_norm} &  0.58  &        &  0.12 &  (0.13)  &  &  0.43  &  0.09 & 31.29 & (31) &  0 & (13) \\
+\texttt{grasp}      &  0.55  & (0.56) &  0.10 &          &  &  0.39  &  0.07 & 31.61 & (32) &  2 & (14) \\
+\texttt{snip}       &  0.58  &        &  0.13 &          &  &  0.43  &  0.09 & 31.16 & (31) &  0 & (13) \\
+\texttt{fisher}     &  0.33  &        &  0.02 &          &  &  0.25  &  0.01 &  4.61 & ( 5) &  0 &  (0) \\
+\texttt{jacov}      &  0.70  & (0.71) &  0.08 &  (0.05)  &  &  0.53  &  0.05 & 29.63 & (44) & 10 & (15) \\
+\texttt{epsilon}    & \pmb{0.85}  &        &  0.53 &          &  & \pmb{0.67}  &  0.37 & \pmb{71.51} &    & \pmb{59} &      \\
+\bottomrule
+\end{tabular}
+}
+\end{center}
+\end{table*}
+
+For NAS-Bench-201, we also report average performance when selecting one architecture from a pool of $N$ random architectures. The statistics are reported over $500$ runs. Table \ref{tab:avrg_performance} compares \texttt{epsilon} to other trainless metrics. Note that \texttt{te-nas} starts with a super-network composed of all the edges and operators available within the space. In this case, $N$ is not applicable, and the performance can not be improved. In principle, other methods' performance should improve with higher $N$ values.
+
+\begin{table*}[!t]
+\caption{Comparison of the trainless metrics performances against existing NAS algorithms on CIFAR-10, CIFAR-100 and ImageNet16-120 datasets. On the top, we list the best-performing methods that require training (REA \cite{real2019regularized}, random search, REINFORCE \cite{williams1992simple}, BOHB \cite{falkner2018bohb}). We report the average best-achieved test accuracy over $500$ runs, with $1{,}000$ architectures ($100$ for \texttt{grad\_sign})sampled from the search space at random. For \texttt{tenas}, the results are reported for $4$ random seeds. Random and optimal performances are given as baseline.}
+\vspace{5pt}
+\label{tab:avrg_performance}
+\centering
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{1.2}
+\resizebox{\textwidth}{!} {
+\begin{tabular}{lllp{0.01\textwidth}llp{0.01\textwidth}ll}
+\hline
+\multirow{2}{*}{Method}   & \multicolumn{2}{l}{CIFAR-10} & \multirow{2}{*}{} & \multicolumn{2}{l}{CIFAR-100} & \multirow{2}{*}{} & \multicolumn{2}{l}{ImageNet16-120}  \\
+\cline{2-3}\cline{5-6}\cline{8-9}
+ & validation & test &   & validation & test &   & validation & test \\
+\hline
+\multicolumn{9}{c}{State-of-the-art}\\
+REA                & $91.19 \pm 0.31$ & $93.92 \pm 0.3$  & & $71.81 \pm 1.12$ & $71.84 \pm 0.99$ & & $45.15 \pm 0.89$  & $45.54 \pm 1.03$ \\
+Random Search      & $90.93 \pm 0.36$ & $93.92 \pm 0.31$ & & $70.93 \pm 1.09$ & $71.04 \pm 1.07$ & & $44.45 \pm 1.1$   & $44.57 \pm 1.25$ \\
+REINFORCE          & $91.09 \pm 0.37$ & $93.92 \pm 0.32$ & & $71.61 \pm 1.12$ & $71.71 \pm 1.09$ & & $45.05 \pm 1.02$  & $45.24 \pm 1.18$ \\
+BOHB               & $90.82 \pm 0.53$ & $93.92 \pm 0.33$ & & $70.74 \pm 1.29$ & $70.85 \pm 1.28$ & & $44.26 \pm 1.36$  & $44.42 \pm 1.49$ \\
+\hline
+\multicolumn{9}{c}{Baselines (N=1000)}\\
+Optimal & $91.34 \pm 0.18$ & $94.20 \pm 0.13$ & & $72.53 \pm 0.53$ & $72.84 \pm 0.41$ & & $45.93 \pm 0.51$  & $46.59 \pm 0.34$  \\
+Random  & $84.11 \pm 11.71$ & $87.40 \pm 11.94$ & & $61.57 \pm 11.305$ & $61.67 \pm 11.35$ & & $33.97 \pm 8.68$  & $33.67 \pm 8.98$  \\
+\hline
+\multicolumn{9}{c}{Trainless (N=1000)}\\
+\texttt{naswot}     & $89.69 \pm 0.73$ & $92.96 \pm 0.81$ &  & $69.86 \pm 1.21$ & $69.98 \pm 1.22$ & & $43.95 \pm 2.05$  & $44.44 \pm 2.10$ \\
+\texttt{synflow}    & $89.91 \pm 0.83$ & $90.12 \pm 0.78$ &  & $70.35 \pm 2.25$ & $70.37 \pm 2.08$ & & $41.73 \pm 3.91$  & $42.11 \pm 4.02$ \\
+\texttt{grad\_norm} & $88.13 \pm 2.35$ & $88.42 \pm 2.28$ &  & $66.35 \pm 5.45$ & $66.48 \pm 5.32$ & & $33.88 \pm 11.46$ & $33.90 \pm 11.74$ \\
+\texttt{grasp}      & $87.85 \pm 2.12$ & $88.17 \pm 2.04$ &  & $65.36 \pm 5.57$ & $65.45 \pm 5.48$ & & $32.23 \pm 10.95$ & $32.20 \pm 11.23$ \\
+\texttt{snip}       & $87.47 \pm 2.19$ & $87.81 \pm 2.12$ &  & $64.61 \pm 5.52$ & $64.74 \pm 5.43$ & & $30.65 \pm 11.32$ & $30.55 \pm 11.55$ \\
+\texttt{fisher}     & $87.01 \pm 2.31$ & $87.36 \pm 2.23$ &  & $63.54 \pm 5.69$ & $63.67 \pm 5.62$ & & $26.70 \pm 10.83$ & $29.56 \pm 10.83$ \\
+\texttt{jacov}      & $88.17 \pm 1.67$ & $88.45 \pm 1.69$ &  & $67.73 \pm 2.69$ & $67.90 \pm 2.77$ & & $31.58 \pm 10.65$ & $31.44 \pm 10.83$ \\
+\texttt{epsilon}   & $\pmb{91.03} \pm \pmb{0.42}$ & $\pmb{93.86} \pm \pmb{0.43}$ & & $\pmb{71.76} \pm \pmb{0.90}$ & $\pmb{71.79} \pm \pmb{0.86}$ & & $\pmb{45.11} \pm \pmb{0.99}$  & $\pmb{45.42} \pm \pmb{1.21}$ \\
+\hline
+\multicolumn{9}{c}{Trainless (N=100)}\\
+\texttt{grad\_sign}  & $89.84 \pm 0.61$ & $93.31 \pm 0.47$ & & $70.22 \pm 1.32$ & $70.33 \pm 1.28$ & & $42.07 \pm 2.78$  & $42.42 \pm 2.81$ \\
+\texttt{epsilon}     & $\pmb{90.44} \pm \pmb{0.97}$ & $\pmb{93.39} \pm \pmb{0.82}$ & & $\pmb{70.85} \pm \pmb{1.30}$ & $\pmb{71.00} \pm \pmb{1.26}$ & & $\pmb{44.03} \pm \pmb{2.02}$  & $\pmb{44.20} \pm \pmb{2.04}$ \\
+\hline
+\multicolumn{9}{c}{Trainless (N/A)}\\
+\texttt{tenas}  & & $93.9 \pm 0.47$ & & & $71.24 \pm 0.56$ & & & $42.38 \pm 0.46$ \\
+\hline
+\end{tabular}
+}
+\end{table*}
+
+Comparing the results for \texttt{epsilon} with other zero-cost NAS metrics, we can see that it outperforms them by a good margin. Figure \ref{fig:results_201} further confirms the applicability of the method to the NAS-Bench-201 field (similar figures for other methods can be found in Appendix, Figure \ref{fig:other_results_201}). However, NAS-Bench-201 is a relatively compact search space; furthermore, it has been used for \texttt{epsilon} development.
+
+\begin{figure*}[!t]
+\centering
+\resizebox{\textwidth}{!}{%
+\includegraphics[height=3cm]{figures/results/NAS-Bench-201/epsilon_CIFAR10.png}\hfill
+\includegraphics[height=3cm]{figures/results/NAS-Bench-201/epsilon_CIFAR100.png}\hfill
+\includegraphics[height=3cm]{figures/results/NAS-Bench-201/epsilon_IMAGENET.png}
+}
+\caption{Zero-cost NAS \texttt{epsilon} metric performance illustration for NAS-Bench-201 search space evaluated on CIFAR-10, CIFAR-100 and ImageNet16-120 datasets. The horizontal axis shows test accuracy upon training. Each dot corresponds to an architecture; the darker the colour, the more
+parameters it contains. The figure represents the search space of $15{,}625$ networks (excluding architectures with \texttt{NaN} scores).}
+\label{fig:results_201}
+\end{figure*}
+
+\subsubsection{NAS-Bench-101}
+We use NAS-Bench-101 space to confirm that the success of \texttt{epsilon} metric in the previous section is not due to overfitting the NAS-Bench-201 search space and to see how it applies to a vaster search space. Table \ref{tab:results_101} together with Figure \ref{fig:results_101} confirm that it performs reasonably well on NAS-Bench-101, too.
+
+\begin{table*}[!t]
+\caption{Zero-cost metrics performance evaluated on NAS-Bench-101 search space, CIFAR-10 dataset. Values from \citet{abdelfattah2021zero} are given for reference between brackets. We highlight the best-performing metrics in bold.}
+\label{tab:results_101}
+\begin{center}
+\small
+\resizebox{0.9\textwidth}{!} {
+\begin{tabular}{lrrrrp{0.1mm}rrrrrr}
+\toprule
+\noalign{\vskip 1 pt} 
+\multirow{2}{*}{Metric} & \multicolumn{4}{c}{Spearman $\rho$} & & \multicolumn{2}{c}{Kendall $\tau$} & \multicolumn{2}{c}{Top-10\%/} & \multicolumn{2}{c}{Top-64/} \\
+\cline{2-5}\cline{7-8}
+\noalign{\vskip 1.5pt} 
+  & \multicolumn{2}{c}{global} & \multicolumn{2}{c}{top-10\%} & & \multicolumn{1}{c}{global} & \multicolumn{1}{c}{top-10\%} & \multicolumn{2}{c}{top-10\%}& \multicolumn{2}{c}{top-5\%} \\
+\midrule
+\noalign{\vskip 1pt} 
+\multicolumn{12}{c}{CIFAR-10}\\
+\midrule
+\noalign{\vskip 1pt}
+\texttt{grad\_sign}    &  0.45  &  &  &  &  &  &  &  &  &  & \\
+\texttt{synflow}    &  0.37  &        & \pmb{0.14} &          &  &  0.25  & \pmb{0.10} & 22.67 & 23 &  4 & (12) \\
+\texttt{grad\_norm} & -0.20  &        & -0.05 &  (0.05)  &  & -0.14  & -0.03 &  1.98 &  2 &  0 &  (0) \\
+\texttt{grasp}      &  0.45  &        & -0.01 &          &  &  0.31  & -0.01 & 25.60 & 26 &  0 &  (6) \\
+\texttt{snip}       & -0.16  &        &  0.01 &  (-0.01) &  & -0.11  &  0.00 &  3.43 &  3 &  0 &  (0) \\
+\texttt{fisher}     & -0.26  &        & -0.07 &  (0.07)  &  & -0.18  & -0.05 &  2.65 &  3 &  0 &  (0) \\
+\texttt{jacov}      &  0.38  & (0.38) & -0.08 &  (0.08)  &  & -0.05  &  0.05 &  1.66 &  2 &  0 &  (0) \\
+\texttt{epsilon}   & \pmb{0.62}   &        &  0.12 &          &  & \pmb{0.44}  &  0.08 & \pmb{40.33} &    & \pmb{10} &     \\    
+\bottomrule
+\end{tabular}
+}
+\end{center}
+\end{table*}
+
+\begin{figure*}[!t]
+\begin{center}
+\resizebox{0.7\textwidth}{!}{
+\includegraphics[height=3.5cm]{figures/results/NAS-Bench-101/epsilon_CIFAR10_101.png}\hfill
+\includegraphics[height=3.5cm]{figures/results/NAS-Bench-NLP/epsilon_NLP.png}
+}
+\caption{Zero-cost NAS \texttt{epsilon} metric performance illustration for NAS-Bench-101 search space, CIFAR-10 dataset  and NAS-Bench-NLP search space, PTB dataset. The horizontal axis shows test accuracy upon training. Each dot corresponds to an architecture; the darker the colour, the more parameters it contains. The figure shows $423{,}624$ and $14{,}322$ networks for NAS-Bench-101 and NAS-Bench-NLP, respectively (excluding architectures with \texttt{NaN} scores).}
+\label{fig:results_101}
+\end{center}
+\vspace{-10pt}
+\end{figure*}
+
+\subsubsection{NAS-Bench-NLP}
+Both NAS-Bench-201 and NAS-Bench-101 are created to facilitate NAS in image recognition. They operate convolutional networks of very similar constitutions. To truly probe the generalisability of the \texttt{epsilon} metric, we test it on NAS-Bench-NLP. Both input data format and architecture type differ from the first two search spaces.
+
+Unfortunately, \citet{abdelfattah2021zero} provides no data for NAS-Bench-NLP, disabling us from using their results for calculations. Therefore, in Table \ref{tab:results_nlp}, we give only values provided in the paper together with our \texttt{epsilon} metric (data for \texttt{ficher} is absent). We want to note that, unlike accuracy, perplexity used for language-related ML problems should be minimised. Therefore, the signs of correlations with scoring metrics should be reversed, which is not the case for numbers given in \citet{abdelfattah2021zero}.
+
+The performance of \texttt{epsilon} metric on the NAS-Bench-NLP space is not exceptional. While there is a trend towards better architectures with increasing metric value, the noise level is beyond acceptable. It might stem from the characteristics of the benchmark itself (factors like a relatively small sample of networks given vast space, chosen hyperparameters, dropout rates, and others may distort NAS performance). Nonetheless, the trend is visible enough to conclude that \texttt{epsilon} metric can apply to recurrent type architectures.
+
+\begin{table*}[!t]
+\caption{Zero-cost metrics performance evaluated on NAS-Bench-NLP search space, PTB dataset. We highlight the best-performing metrics in bold.}
+\label{tab:results_nlp}
+\begin{center}
+\small
+\resizebox{!}{0.9in} {
+\begin{tabular}{lrrp{0.1mm}rrrr}
+\toprule
+\noalign{\vskip 1 pt} 
+\multirow{2}{*}{Metric} & \multicolumn{2}{c}{Spearman $\rho$} & & \multicolumn{2}{c}{Kendall $\tau$} & Top-10\%/ & Top-64/ \\
+\cline{2-3}\cline{5-6}
+\noalign{\vskip 1.5pt} 
+  & \multicolumn{1}{c}{global} &  \multicolumn{1}{c}{top-10\%}&  & global & top-10\% & top-10\% & top-5\% \\
+\midrule
+\noalign{\vskip 1pt} 
+\multicolumn{8}{c}{PTB}\\
+\midrule
+\noalign{\vskip 1pt} 
+\texttt{synflow}    &     0.34    &     0.10    &  & \textemdash & \textemdash &     22    & \textemdash \\
+\texttt{grad\_norm} &    -0.21    &     0.03    &  & \textemdash & \textemdash &     10    & \textemdash \\
+\texttt{grasp}      &     0.16    &   \pmb{0.55}    &  & \textemdash & \textemdash &      4    & \textemdash \\
+\texttt{snip}       &    -0.19    &    -0.02    &  & \textemdash & \textemdash &     10    & \textemdash \\
+\texttt{jacov}      &     \pmb{0.38}    &     0.04    &  & \textemdash & \textemdash &  \pmb{38}    & \textemdash \\
+\texttt{epsilon}   &   -0.34    &    -0.12    &  &    -0.23   &    -0.08  &    24.87   &      11    \\
+\bottomrule
+\end{tabular}
+}
+\end{center}
+\end{table*}
+
+\subsection{Integration with other NAS methods}
+\label{sec:implement}
+While it is possible to utilise zero-cost metrics independently, they are often implemented within other NAS. Here we provide examples of random search and ageing evolution algorithms when used in tandem with \texttt{epsilon}.
+
+Similarly to \citet{abdelfattah2021zero}, we compare random search performance with and without warm-up. First, we create a warm-up pool of $3{,}000$ architectures. Then, during the first $64$ steps of random search, the algorithm picks networks from the pool based on the highest trainless score and accordingly updates the best test performance.
+
+For ageing evolution, the same principle applies. En plus, we report the results of implementation where every next parent is decided based on the highest \texttt{epsilon} score ("move"). In other words, the trainless scoring metric replaces validation accuracy in move mode. Finally, the child is created by parent mutation (within an edit distance of $1$) and added to the pool. Finally, the oldest network is removed from the pool.  
+
+For both described algorithms, we run the procedure until the number of trained architectures reaches $300$ and perform $100$ random rounds. Figure \ref{fig:integration} shows that \texttt{epsilon} metric leads to considerable improvements in terms of time and precision. The best performance is achieved in combination with a warm-up. Figure \ref{fig:integration_other} assembles warm-up performances for several trainless metrics.
+
+\begin{figure*}[!t]
+    \centering
+    \begin{minipage}[6.8cm]{.32\linewidth}
+        \subfigure{
+        \includegraphics[width=.95\textwidth]{figures/integration/CIFAR10_EA_Len300_Rounds100.png}
+        }\\
+        \hfill
+        \subfigure{
+        \includegraphics[width=.95\textwidth]{figures/integration/CIFAR10_RS3000+RS_100it.png}
+        } 
+    \end{minipage}
+    \begin{minipage}[6.8cm]{.32\linewidth}
+        \subfigure{
+        \includegraphics[width=.95\textwidth]{figures/integration/CIFAR100_EA_Len300_Rounds100.png}
+        }\\
+        \hfill
+        \subfigure{
+        \includegraphics[width=.95\textwidth]{figures/integration/CIFAR100_RS3000+RS_100it.png}
+        }
+    \end{minipage}
+    \begin{minipage}[6.8cm]{.32\linewidth}
+        \subfigure{
+        \includegraphics[width=.95\textwidth]{figures/integration/IMAGENET16-120_EA_Len300_Rounds100.png}
+        }\\
+        \hfill
+        \subfigure{
+        \includegraphics[width=.95\textwidth]{figures/integration/IMAGENET16-120_RS3000+RS_100it.png}
+        }
+    \end{minipage}
+\caption{\texttt{epsilon} integration within ageing evolution (top) and random search (bottom) NAS algorithms for three datasets from NAS-Bench-201 search space.} 
+\label{fig:integration}
+\end{figure*}
+
+\section{Discussion}
+While \texttt{epsilon} metric shows solid empirical performance, the underlying reasons for this are unclear. 
+
+There are several hints towards its understanding. First, mathematically, \texttt{epsilon} represents the difference in the output distribution shapes between initialisations. The shape of the output is affected by layer widths, activation functions, batch normalisation, skip connections and other factors, which we generally refer to as network geometry. With constant shared weights, one can probe the effects of the geometry without being obstructed by the randomness of initialisation.
+
+Second, during the weight ablation studies (Section \ref{sec:ablations}), we noticed that the best performance is achieved when the weights are set to the lowest and highest values that do not lead to excessive outputs explosion or vanishing. Therefore, \texttt{epsilon} measures the amplitude of the outputs' distribution shape change due to geometry.
+
+Finally, during the synthetic data studies, we see that grey-scale solid images work reasonably well as inputs. The distribution over the input samples is uniform, which makes it easier to track the changes in its shape as the signal propagates through the network.
+
+That said, a coherent theoretical foundation of \texttt{epsilon} is missing and should be developed in future.
+
+\section{Conclusions}
+This work presents a novel zero-cost NAS scoring metric \texttt{epsilon}. It consists of two network initialisations followed by two forward passes. The value of \texttt{epsilon} reflects how neural network outputs' distribution changes between low and high constant shared weight initialisations. It shows that the higher this difference, the better the network will perform upon training.
+
+The metric does not require labels or gradient computation and is fast and lightweight. Evaluation takes $0.1\sim1$ seconds per architecture on a single GPU (depending on the size of the architecture and batch size) and can be realised on a CPU. \texttt{epsilon} can virtually apply for any ML problem (care should be taken with embedding initialisation, as explained in Section \ref{sec:embedding}).
+
+This work evaluates \texttt{epsilon} on three staple NAS search spaces: NAS-Bench-201, NAS-Bench-101 and NAS-Bench-NLP. It shows good stable performance with each of them, regardless of the data set. It also significantly improves the performances of random and evolutionary NAS algorithms (see Section \ref{sec:implement}).
+
+The only significant disadvantage of the method is that it requires the choice of constant weight values during initialisation. Our tests show that it must be set up individually for each search space. We plan to automate the weight selection process in our future work.
+
+
+
+\subsubsection*{Acknowledgments}
+The authors would like to thank Dr. Ayako Nakata and Dr. Guillaume Lambard for their continuous support and advice.
+
+
+\bibliographystyle{unsrtnat}

@@ -1,0 +1,606 @@
+\section{Introduction} \label{sec:intro}
+Learning to perform algorithmic-like computation is a core 
+problem in machine learning that has been widely studied from different perspectives,
+such as learning to reason \citep{khardon1997learning}, program interpreters \citep{reed2015neural} and automated
+theorem proving \citep{rocktaschel2017end}. As a matter of fact, enabling reasoning
+capabilities of neural networks might drastically increase {\it generalisation}, i.e.
+the ability of neural networks to generalise beyond the support of the training data,
+which is usually a difficult challenge with current neural models 
+\citep{neyshabur2017exploring}.
+Neural Algorithmic Reasoning \citep{DBLP:journals/patterns/VelickovicB21} is a recent 
+response to this long-standing question, attempting to train neural networks to exhibit
+some degrees of {\it algorithmic reasoning} by learning to execute classical algorithms. 
+Arguably, algorithms are designed to be general, being able to be executed and return
+``optimal'' answers for any inputs that meet a set of strict pre-conditions. On the other hand,
+neural networks are more flexible, i.e. can adapt to virtually any input. Hence, the
+fundamental question is whether neural models may inherit some of the positive algorithmic properties and use them to solve potentially challenging real-world problems.
+
+Historically, learning algorithms has been tackled as a simple
+supervised learning problem \citep{graves2014neural,
+DBLP:conf/nips/VinyalsFJ15}, i.e. by learning an input-output mapping,
+or through the lens of reinforcement learning \citep{DBLP:conf/iclr/KoolHW19}. 
+However, more recent works build upon the notion
+of {\it algorithmic alignment} \citep{DBLP:conf/iclr/XuLZDKJ20} stating that there must be an ``alignment''  between the learning model structure and the target algorithm in order
+to ease optimisation. Much focus has been placed on Graph Neural
+Networks (GNNs) \citep{DBLP:journals/nn/BacciuEMP20} learning graph
+algorithms, i.e Bellman-Ford \citep{bellman1958routing}.
+\cite{DBLP:conf/iclr/VelickovicYPHB20} show that it is
+indeed possible to train GNNs to execute classical
+graph algorithms. Furthermore, they show that optimisation must occur
+on all the intermediate steps of a graph algorithm, letting the
+network learn to replicate step-wise transformations of the input
+rather than learning a map from graphs to desired outputs. Since
+then, algorithmic reasoning has been applied with success in
+reinforcement learning \citep{DBLP:conf/nips/DeacVMBTN21}, physics
+simulation
+\citep{DBLP:journals/corr/reasoning-repr} and bipartite matching
+\citep{DBLP:journals/corr/GeorgievNBM}.
+
+Moreover, \citet{DBLP:conf/nips/XhonneuxDVT21} verify the importance of training
+on multiple ``similar'' algorithms at once ({\it multi-task learning}).
+The rationale is that many classical algorithms share sub-routines,
+i.e. Bellman-Ford and Breadth-First Search (BFS),
+which help the network learn more effectively and be able to transfer knowledge
+among the target algorithms. 
+\citet{pmlr-v198-ibarz22a} expand on this concept by building a generalist neural algorithmic learner that can effectively learn to execute even a set of unrelated algorithms.
+However, learning some specific algorithms might require learning of very specific properties of the input data, for which multi-task learning may
+not help. 
+For instance, learning the {\it Ford-Fulkerson algorithm}
+\citep{ford1956maximal} for {\it maximum flow} entails learning to identify the
+set of {\it critical} (bottleneck) edges of the flow network, i.e. edges for which a decrease 
+in the {\it edge capacity} would decrease the maximum flow.
+Furthermore, in the single-task regime, i.e. when we are interested in learning only one single algorithm, relying on multi-task learning can unnecessarily increase the computational burden on the training phase.
+
+Motivated by these requirements, we seek alternative learning setups to
+alleviate the need for training on multiple algorithms and enable better
+reasoning abilities of our algorithmic reasoners.
+We find a potentially good candidate in the {\it duality} information of the target
+algorithmic problem. The concept of duality fundamentally enables
+an algorithmic problem, e.g. linear program,
+to be viewed from two perspectives, that
+of a {\it primal} and a {\it dual} problem. These two problems
+are usually complementary, i.e. the solution of one might lead to
+the solution of the other. Hence, we propose to incorporate duality
+information directly in the learning model both as an additional
+supervision signal and input feature (by letting the network
+reuse its dual prediction in subsequent steps of the algorithm),
+an approach we refer to as Dual Algorithmic Reasoning (DAR). To the best of our knowledge, there exists no prior work targeting
+the usage of duality in algorithmic reasoning.
+We show that by training an {\it
+algorithmic reasoner} on both learning of an algorithm and 
+optimisation of the dual problem we can relax the assumption of having multiple algorithms to train on
+while retaining all the benefits of multi-task learning. We demonstrate clear performance gain in both synthetically generated algorithmic tasks and real-world predictive graph learning problems.
+
+\section{Problem statement} \label{sec:background}
+We study the problem of neural algorithmic reasoning on
+graphs. Specifically, we target learning of graph algorithms $A: {\mathbb{G}}
+\rightarrow {\mathbb{Y}}$ that take in graph-structured inputs $G = (V, E, {\bm{x}}_i, {\bm{e}}_{ij})$, with $V$ being the set of nodes and $E$ the set of edges with node features ${\bm{x}}_i$ and edge features
+${\bm{e}}_{ij}$, and compute a desired output ${\bm{y}} \in {\mathbb{Y}}$.
+Usually, the output space of an algorithm $A$ depends on its scope. In the most general cases, it can either
+be $\mathbb{R}^{|V|}$ (node-level output), $\mathbb{R}^{|V| \times |V|}$ (edge-level
+output) or $\mathbb{R}$ (graph-level output).  We mainly consider the class of
+algorithms outputting node-level and edge-level outputs, which
+includes many of the most well-known graph problems,
+e.g. reachability, shortest path and maximum flow.  From a neural
+algorithmic reasoning perspective, we are particularly interested in
+learning a sequence of transformations ({\it steps} of the
+algorithm). Hence, we consider a sequence of graphs $\{G^{(0)}, \dots,
+G^{(T-1)}\}$ where each element 
+represents the intermediate
+state of the target algorithm we aim to learn. At each step $t$ we
+have access to intermediate node and edge features,
+i.e. ${\bm{x}}^{(t)}_i, {\bm{e}}^{(t)}_{ij}$, called {\it hints} as well as
+intermediate targets ${\bm{y}}^{(t)}$. As it is common in classical algorithms, some of the intermediate targets may be used as node/edge features in the subsequent step of the algorithm. Such hints
+are thus incorporated in training as additional features/learning targets,
+effectively learning the whole sequence of steps ({\it algorithm
+trajectory}).
+
+In particular, we focus on learning {\it maximum flow} via the neural
+execution of the {\it Ford-Fulkerson algorithm}.  Differently
+from \citet{DBLP:journals/corr/GeorgievNBM}, who learn Ford-Fulkerson
+to find the independent set of edges in bipartite graphs, we aim to
+learn Ford-Fulkerson for general graphs. We report the
+pseudo-code of Ford-Fulkerson in the appendix.  Ford-Fulkerson poses two key challenges: (i) it comprises two sub-routines, i.e. finding augmenting paths from $s$ to $t$, and updating
+the flow assignment ${\bm{F}}^{(t)} \in {\mathbb{R}}^{|V| \times |V|}$ at each step
+$t$;  (ii) ${\bm{F}}$ must obey a set of strict constraints, namely the
+{\it edge-capacity constraint} and {\it conservation of flows}.  The
+former states that a scalar value $c_{ij}$ (capacity) is assigned to
+every $(i, j) \in E$ and ${\bm{F}}$ must satisfy:
+\begin{equation} \label{eq:cap-cons}
+    \forall (i, j) \in E \;.\; {\bm{F}}_{ij} \leq c_{ij},
+\end{equation}
+i.e. flow assignment to an edge must not exceed its capacity. The
+latter states that the assignment needs to satisfy:
+\begin{align} \label{eq:flow-cons}
+    \forall i \in V \setminus \{s, t\} : \sum_{(i,j) \in E} {\bm{F}}_{ij} + \sum_{(j,i) \in E} {\bm{F}}_{ji} =
+    0 \quad 
+    \land \sum_{(s, j) \in E} {\bm{F}}_{sj} = -\sum_{(j, t) \in E} {\bm{F}}_{jt}
+\end{align}
+i.e. the flow sent out from the source is not lost nor created by
+intermediate nodes. This also leads to ${\bm{F}} = -{\bm{F}}^T$,
+i.e. antisymmetry. An optimal solution ${\bm{F}}^*$ to the max flow problem 
+is the one maximising the total flow in the network, i.e.
+$\sum_{(s, j) \in E} {\bm{F}}_{sj}$.
+We show how we address both challenge (i) and (ii)
+directly in the model architecture, through the concept of {\it
+algorithmic alignment} and by carefully adjusting and rescaling
+the model predictions.
+
+\section{Methodology}\label{sec:methodology}
+\subsection{Leveraging duality in algorithmic reasoning}
+\label{sec:duality}
+We leverage the concept of {\it duality} when learning to neurally
+execute classical graph algorithms. In particular, most of the problems
+solved by
+classical algorithms (including maximum flow) can be expressed in the
+form of constrained optimisation problems such as {\it linear
+  programming} or {\it integer linear programming}. In mathematical
+optimisation, the duality principle ensures that any optimisation
+problem may be viewed from two perspectives: the ``direct'' interpretation
+(called the {\it primal} problem) and the {\it dual} problem, which is
+usually derived from the {\it Lagrangian} of the primal problem.
+The duality principle ensures that the solutions of the two problems 
+are either linked by an upper-bound/lower-bound relation 
+({\it weak duality}) or equal ({\it strong duality}) 
+\citep{boyd2004convex}. Hence, the two problems are interconnected.
+
+In the context of neural algorithmic reasoning, we identify several
+reasons why primal-dual information might be useful to
+consider. First, by incorporating {\it primal-dual}
+objectives, we let the network reason on the task from two different and complementary perspectives. This can substantially simplify learning of algorithms which require identifying and reasoning on properties which are not explicitly encoded in input data.
+For instance, to effectively solve max-flow problems, the network needs the ability to identify and reason on {\it critical edges}. By the {\it max-flow min-cut theorem} \citep{ford2015flows}, this set of edges corresponds to the {\it minimum cut}, i.e. dual problem, that separates the source node $s$ from the sink $t$. Hence, correctly identifying the minimum cut
+is highly relevant for producing a relevant max-flow solution.
+
+Second, being able to output a better step-wise solution means that there is less chance for error propagation throughout the trajectory of the neurally executed algorithm.
+This is especially true for more complex algorithms, such as Ford-Fulkerson, consisting of multiple interlocked sub-routines. There, an imprecise approximation of one sub-routine can negatively cascade on the results of the following ones.
+Finally, learning jointly on the primal-dual can be seen as an instance of {\it multi-task learning}, but relaxing the assumption of having multiple algorithms to train on. 
+
+In the following, we study dual algorithmic reasoning on the max-flow primal complemented with min-cut dual information. 
+Note that graph neural networks have been formally proven to be able to learn minimum cut, even under uninformative input features \citep{DBLP:journals/corr/Fereydounian}. This also implies that solving min-cut can be a useful ``milestone'' for a network learning to solve max-flow.
+
+\subsection{architecture} \label{sec:architecture}
+\begin{figure}
+    \centering
+    \includegraphics[width=.85\linewidth]{img/archv2.png}
+    \caption{High-level architecture of the Dual Algorithmic Reasoner (DAR) for the Ford-Fulkerson algorithm.
+    Refer to the text for a comprehensive explanation.}
+    \label{fig:architecture}
+\end{figure}
+We rely on the neural algorithmic reasoning blueprint
+\citep{DBLP:journals/patterns/VelickovicB21}, building on the encode-process-decode framework \citep{DBLP:conf/cogsci/HamrickABZMTB18}.
+The abstract architecture
+of the Dual Algorithmic Reasoner (DAR) is depicted in
+\autoref{fig:architecture} for the Ford-Fulkerson algorithm. Since the latter is composed of two sub-routines, we introduce two processors to align neural execution with the dynamics of the algorithm. The first processor $P_{BF}$ learns
+to retrieve augmenting paths, while $P_F$ learns to perform flow-update operations ${\bm{F}}^{(t)}$. 
+Both $P_{BF}$ and $P_F$ are implemented as graph networks with Message-Passing Neural Network (MPNN) convolution \citep{DBLP:conf/icml/GilmerSRVD17}:
+\begin{equation} \label{eq:conv}
+    {\bm{h}}_i^{(t+1)} = \psi_\theta\left({\bm{h}}_i^{(t)}, \bigoplus_{(j, i)\in
+      E}\phi_\theta\left({\bm{h}}_i^{(t)}, {\bm{h}}_j^{(t)}, {\bm{e}}_{ij}^{(t)}\right)\right),
+\end{equation}
+where $\psi_\theta$ and $\phi_\theta$ are neural networks with ReLU
+activations and $\bigoplus$ is a permutation-invariant function,
+i.e. summation, mean or max.
+
+Intuitively, the encode-process-decode architecture allows 
+{\it decoupling} learning of the algorithmic steps from the use of specific input features. Through the learned processor, the algorithm can be neurally executed on a latent-space which is a learnt representation of the input features required by the original algorithm.  We will show how we can exploit this property to perform steps of the Ford-Fulkerson algorithm even with missing input features.
+
+More in detail, the DAR computational flow comprises two {\it linear} encoders, $f_v$ and $f_e$, which are applied respectively
+to node features ${\bm{x}}^{(t)}_i$ and edge features ${\bm{e}}^{(t)}_{ij}$ to produce encoded node-level and edge-level features:
+\begin{equation*}
+    {\bm{Z}}^{(t)}_V = \{{\bm{z}}_{i}^{(t)} = f_v({\bm{x}}_{i}^{(t-1)}) \mid \forall
+    i \in V\} \quad , \quad {\bm{Z}}^{(t)}_E = \{{\bm{z}}_{ij}^{(t)} =
+    f_e({\bm{e}}_{ij}^{(t-1)}) \mid \forall (i, j) \in E\}.
+\end{equation*}
+These encoded representations are used as inputs for the processor network $P_{BF}$ which computes the latent node representations ${\bm{H}}^{(t)}$ as:
+\begin{equation*}
+    {\bm{H}}^{(t)} = P_{BF}({\bm{Z}}^{(t)}_V, {\bm{Z}}^{(t)}_E, {\bm{H}}^{(t-1)})
+\end{equation*}
+with ${\bm{H}}^{(0)} = \{{\bm{0}} \mid \forall i \in V\}$. In our DAR instance, this processor performs Bellman-Ford steps to retrieve the shortest augmenting path from $s$ to $t$, following \citet{DBLP:journals/corr/GeorgievNBM}.
+${\bm{H}}^{(t)}$ is then passed to a decoder network $g$
+producing the augmenting path ${\bm{p}}^{(t)}$:
+\begin{equation}
+    {p}_i^{(t)} = g_{BF}({\bm{z}}^{(t)}_{i}, {\bm{h}}^{(t)}_i).
+\end{equation}
+The augmenting path is represented as a vector of predecessors for all
+nodes in the graph, i.e. each entry ${p}^{(t)}_i$ is a pointer to
+another node $j$ in the graph. This way, we are able to reconstruct a
+path from any node (included $t$) back to the source node $s$.  The
+augmenting path ${\bm{p}}^{(t)}$ is then passed to $P_F$ as an input
+feature. The target quantities of the algorithm, i.e. flow assignment
+${\bm{F}}$ and minimum cut ${\bm{c}}$, are finally predicted as:
+\begin{equation*}
+    \{{\bm{F}}^{(t)}, {\bm{c}} \} = g_F\big(P_F( {\bm{Z}}^{(t)}_V \cup
+    \{{\bm{p}}^{(t)}\}, {\bm{Z}}^{(t)}_E, {\bm{H}}^{(t)} )\big).
+\end{equation*}
+W.l.o.g. we choose to represent the minimum {\it s-t} cut ${\bm{c}}$ as node-level
+features, where ${c}_i = 0$ indicates that $i$ is in the cluster of nodes of $s$, and ${c}_i = 1$ otherwise. Note that the minimum
+{\it s-t} cut includes all edges $(i,j)$ for which ${c}_i = 0$ and ${c}_j = 1$. Furthermore, ${\bm{F}}^{(t)}$ is reused as an input feature in the next step of the algorithm (${\bm{F}}^{(0)} = {\bm{0}}$).
+
+We pay additional attention to the prediction of the flow assignment
+matrix ${\bm{F}}^{(t)}$, in order to be compliant with the maximum flow
+problem constraints described in \autoref{sec:duality}. In particular, we transform ${\bm{F}}$ to ensure compliance with anti-symmetry, i.e. ${\bm{F}}' = {\bm{F}} - {\bm{F}}^{T}$. To satisfy edge-capacity constraints we
+further rescale the matrix according to the hyperbolic tangent and the
+actual value of the capacity $c_{ij}$ for each $(i,j) \in E$, as such:
+\begin{equation} \label{eq:F}
+    {\bm{F}} = \tanh({\bm{F}}) \odot C,
+\end{equation}
+where $C_{i,j} = c_{ij}$ for all edges in the graph. We note that this
+only satisfies the box constraint on the edge capacities, however the
+conservation of flows might still be violated, i.e. nodes in the path
+from the source to the target may either retain some amount of in-flow
+(sending out less than what is received) or vice versa.
+To address
+this last constraint, we simulate the entire neural algorithm until
+termination and apply a corrective procedure in order to correct all
+the flow conservation error. We report the pseudocode of this procedure in the Appendix, along with additional details and results.
+
+
+
+\section{Experiments}
+To assess the benefits of the dual algorithmic reasoning approach, we
+test the learning model in two specific scenarios. First, we train and
+test the DAR pipeline on synthetic-generated
+graphs, to evaluate the benefits in the key task of algorithmic
+learning (section \ref{sec:synthetic}). Then, to evaluate the
+generality of the model we test it on a real-world graph learning task. Specifically, we compare our model with several graph
+learning baselines on a biologically relevant {\it vessel}
+classification task \citep{DBLP:conf/nips/PaetzoldMSEBPST21},
+comprehending large-scale vessel graphs (section
+\ref{sec:predictive}). We stress that
+our neural reasoners are not further
+re-trained on real-world data, thus forcing
+the model to use the algorithmic knowledge
+attained on synthetic data to solve the new 
+task.
+
+\subsection{Synthetic graphs}
+\label{sec:synthetic}
+\begin{figure}
+    \centering
+    \subfigure[Ford-Fulkerson validation loss]{
+        \centering
+        \includegraphics[width=.46\linewidth]{img/valid.png}
+        \label{fig:valid-synthetic}
+    }
+    \subfigure[Ford-Fulkerson reconstruction loss]{
+        \centering
+        \includegraphics[width=.46\linewidth]{img/reconstruction.png}
+        \label{fig:loss-reconstruction}
+    }
+    \caption{{\bf (a)} Ford-Fulkerson validation loss on synthetic data for PGNs.
+    {\bf (b)} normalised loss curve of reconstructing Ford-Fulkerson with new encoders
+    for $l_{ij}, d_{ij}, \rho_{ij}$, with both the primal and dual PGN-max. It applies to BVG data.}
+\end{figure}
+
+\begin{table}
+    \caption{Mean Absolute Error (MAE) and accuracy of predicting 
+    the final ${\bm{F}}$ and intermediate flow $\bar{{\bm{F}}}^{(t)}$, and min-cut ${\bm{c}}$ (if applicable) on 
+    {\it 2-community} and {\it bipartite} graphs. {\it (primal)} 
+    corresponds to training on max-flow only.
+    {\it (dual)} corresponds to training with both primal-dual 
+    heads. {\it (pipeline)} corresponds to learning min-cut first. {\it (no-algo)} corresponds to optimising directly max-flow, without learning Ford-Fulkerson.}
+    \centering
+    \setlength{\tabcolsep}{4.2pt}
+    \footnotesizev2
+    \begin{tabular}{l c c c c c c}
+        \toprule
+        & \multicolumn{3}{c}{2-Community {\it (out-of-distribution)}} & \multicolumn{3}{c}{Bipartite {\it \it (out-of-family)}}\\
+        \midrule
+        {\bf Model} & ${\bm{F}}$ & $\bar{{\bm{F}}}^{(t)}$& ${\bm{c}}$ & ${\bm{F}}$ & $\bar{{\bm{F}}}^{(t)}$ & ${\bm{c}}$ \\
+        PGN-max {\it (primal)} & $0.266_{\pm 0.001}$ & $0.294_{\pm 0.002}$ & - 
+            & $0.56_{\pm 0.23}$ & $0.82_{\pm 0.17}$ & - \\
+        PGN-mean {\it (primal)} & $0.274_{\pm 0.001}$ & $0.311_{\pm 0.004}$ & - 
+            & $1.09_{\pm 0.47}$ & $1.13_{\pm 0.18}$ & - \\
+        MPNN-max {\it (primal)} & $0.263_{\pm 0.008}$ & $0.289_{\pm 0.004}$ & - 
+            & $0.75_{\pm 0.47}$ & $0.78_{\pm 0.11}$ & -\\
+        MPNN-mean {\it (primal)} & $0.278_{\pm 0.008}$ & $0.313_{\pm 0.003}$ & - 
+            & $0.75_{\pm 0.47}$ & $0.92_{\pm 0.22}$ & -\\
+        \midrule
+        PGN-max {(\it dual)} & $\mathbf{0.234_{\pm 0.002}}$ & $\mathbf{0.269_{\pm 0.001}}$ & $100\%_{\pm 0.0}$ 
+            & $0.49_{\pm 0.22}$ & $\mathbf{0.78_{\pm 0.29}}$ & $100\%_{\pm 0.0}$ \\ 
+        PGN-mean {(\it dual)} & $0.240_{\pm 0.004}$ & $0.285_{\pm 0.004}$ & $100\%_{\pm 0.0}$ 
+            & $1.10_{\pm 0.30}$ & $1.05_{\pm 0.12}$ & $99\%_{\pm 0.7}$  \\
+        MPNN-max {(\it dual)} & $0.236_{\pm 0.002}$ & $0.288_{\pm 0.005}$ & $100\%_{\pm 0.0}$ 
+            & $0.71_{\pm 0.32}$ & $0.98_{\pm 0.22}$ & $100\%_{\pm 0.0}$ \\ 
+        MPNN-mean {(\it dual)} & $0.258_{\pm 0.008}$ & $\mathbf{0.268_{\pm 0.002}}$ & $100\%_{\pm 0.0}$ 
+            & $0.81_{\pm 0.09}$ & $1.06_{\pm 0.35}$ & $100\%_{\pm 0.0}$\\
+        \midrule
+        PGN-max {(\it pipeline)} & $0.256_{\pm 0.001}$ & $0.293_{\pm 0.003}$ & $61\%_{\pm 0.1}$ 
+            & $\mathbf{0.45_{\pm 0.18}}$ & $\mathbf{0.77_{\pm 0.26}}$ & $95\%_{\pm 0.1}$ \\
+        PGN-mean {\it (pipeline)} & $0.244_{\pm 0.001}$ & $0.304_{\pm 0.001}$ & $100\%_{\pm 0.0}$ 
+            & $0.98_{\pm 0.44}$ & $1.03_{\pm 0.32}$ & $99\%_{\pm 0.8}$ \\
+        MPNN-max {\it (pipeline)} & $0.261_{\pm 0.002}$ & $0.312_{\pm 0.005}$ & $61\%_{\pm 0.3}$ 
+            & $\mathbf{0.47_{\pm 0.23}}$ & $0.95_{\pm 0.34}$ & $90\%_{\pm 1.1}$\\
+        MPNN-mean {\it (pipeline)} & $0.255_{\pm 0.002}$ & $0.292_{\pm 0.002}$ & $100\%_{\pm 0.0}$ 
+            & $0.64_{\pm 0.35}$ & $0.92_{\pm 0.20}$ & $100\%_{\pm 0.0}$\\
+        \midrule
+        Random & $0.740_{\pm 0.002}$ & - & $50\%_{\pm 0.0}$ & $1.00_{\pm 0.00}$ & - & $50\%_{\pm 0.0}$ \\ 
+        PGN-max {\it (no-algo)} & $0.314_{\pm 0.013}$ & - & - & $0.78_{\pm 0.02}$ & - & - \\\bottomrule
+    \end{tabular}
+    \label{tab:syn-res}
+\end{table}
+
+\paragraph{Data generation}
+We consider two different families of graphs: (i) {\it 2-community}
+graphs, in which communities are sampled from the {\it Erdős–Rényi}
+distributions with probability 0.75 and their nodes are interconnected
+with probability 0.05; (ii) {\it bipartite} graphs. To thoroughly assess the generalisation capabilities of our algorithmic reasoners, we exclusively trained all models on small {\it 2-community} graphs and tested on 4x larger
+{\it 2-community} graphs ({\it out-of-distribution}) and 4x larger {\it bipartite} graphs ({\it out-of-family}). We highlight that bipartite graphs are solely used for testing purposes and no further training occurs on them.
+To generate train, validation and test sets we follow the
+standard CLRS benchmark \citep{deepmind2022clrs} setup.
+Specifically, we sample 1000 {\it 2-community} training graphs
+with 16 nodes each. The validation set is used to assess
+in-distribution performance, thus comprising 128 {\it 2-community} graphs with still
+16 nodes. To assess out-of-distribution and out-of-family generalisation we consider respectively 128
+test 2-community samples and 128 bipartite samples, both of size of 64 nodes. Furthermore, we generate data of all intermediate steps of
+the Ford-Fulkerson algorithm to be used as {\it hints} and additional
+training targets, in order to train the network on all intermediate
+data manipulations. Algorithm features are once again generated following the CLRS-30 standard and they comprise: (i) {\it inputs}:
+source node $s$, sink node $t$, edge-capacity matrix $C \in {\mathbb{N}}^{|V|
+  \times |V|}$ and additional weights $W \in [0,1]^{|V| \times |V|}$
+for the Bellman-Ford processor; (ii) {\it hints} (algorithm steps):
+augmenting paths ${\bm{p}}^{(t)}$ and intermediate flow assignments
+${\bm{F}}^{(t)}$; (iii) {\it outputs} (learning targets): final flow matrix
+${\bm{F}}$ and minimum cut ${\bm{c}}$.  Lastly, capacities are sampled as
+integers from $U(0, 10)$ and then rescaled via a min-max normalisation
+for {\it 2-community} graphs, while they are sampled as either 0 or 1
+for {\it bipartite} graphs.
+
+\paragraph{Ablation \& neural architectures} We performed an ablation study to assess the contribution from the dual, by training
+the same DAR architecture without the
+additional {\it min-cut head} (consequently the dual information does
+not flow back in $P_F$ in \autoref{fig:architecture}). To deepen our analysis, we also consider a neural architecture where the minimum cut is learnt prior the
+Ford-Fulkerson algorithm. Specifically, we introduce a third processor
+that is trained solely on minimum cut, whose output is then used as an
+additional feature for the architecture presented in
+\autoref{fig:architecture}.  Furthermore, we compare two different
+types of processors: (i) a fully-connected Message-Passing Neural Network (MPNN)
+\citep{DBLP:conf/icml/GilmerSRVD17}, which implements \eqref{eq:conv}
+and exchanges messages between all pairs of nodes; (ii) Pointer-Graph
+Network (PGN) \citep{DBLP:conf/nips/VelickovicBOPVB20}, which instead
+exchanges messages only between a node and its neighbours defined
+by the {\it inputs} and {\it hints} of the algorithm.
+For all processors, we try different aggregation operators in 
+\eqref{eq:conv}, namely $\bigoplus = \{\max, \mean, \sumt \}$.  We
+train all models for 20,000 epochs with the SGD optimiser and we average the results across 5 runs.
+We also use {\it teacher
+  forcing} with a decaying factor of 0.999. This has the effect of
+providing the network with ground-truth {\it hints} for the early stage of
+the training phase, while letting the network predictions flow in for
+the majority of training. To choose optimal hyperparameters, e.g.
+learning rate, hidden dimension, we employ a bi-level random search
+scheme, where the first level samples values of hyperparameters in a
+large range of values, while the second one ``refines'' the search based
+on the first level results. We choose the best hyperparameters based
+on the validation error on ${\bm{F}}$. Aggregated validation loss curves are shown in Figure \ref{fig:valid-synthetic}.
+For further details on the model selection, refer to the appendix.
+
+\paragraph{Results analysis} We report results on Ford-Fulkerson
+simulation in \autoref{tab:syn-res}. Specifically, we use the Mean
+Absolute Error (MAE) as a metric for assessing the predictions of
+the final flow assignment ${\bm{F}}$, obtained as in \eqref{eq:F}. Similarly, we measure average
+performance on all the intermediate flow assignment 
+$\bar{{\bm{F}}}^{(t)}$ in order to show how well the algorithm is imitated
+across all steps, which is referred to as $\bar{{\bm{F}}}^{(t)}$ in 
+\autoref{tab:syn-res}. Where applicable, we report
+accuracy on the minimum cut as well, i.e. for {\it dual} and 
+{\it pipeline} models. To better evaluate all models, we include a random baseline which samples ${\bm{F}}$ at random and rescales it following \eqref{eq:F} and a GNN trained to directly output the flow matrix ${\bm{F}}$ without learning Ford-Fulkerson (marked as {\it no-algo}). First, 
+\autoref{tab:syn-res} shows clear performance advantage with respect to the two baselines, indicating that learning {\it max-flow} with the support of algorithmic reasoning, i.e. learning of Ford-Fulkerson, is more effective.
+More importantly, we notice how models incorporating
+the prediction of the dual problem consistently outperform the
+{\it primal} baselines on both {\it 2-community} and {\it bipartite}
+graphs. Dual architectures also better imitate the algorithm
+across all intermediate steps compared to primal, as testified
+by lower $\bar{{\bm{F}}}^{(t)}$. This suggests that the dual min-cut information, despite being easy to learn \citep{DBLP:journals/corr/Fereydounian}, helps
+the model achieve a lower prediction error. This finding is also 
+strengthened by the observation that whenever the min-cut prediction is
+imprecise, e.g. \{PGN, MPNN\}-max pipeline for {\it 2-community}, 
+the prediction of ${\bm{F}}$ and ${\bm{F}}^{(t)}$ become consequently worse. From our
+experiments, the {\it dual}  PGN architecture with max aggregator
+emerges as the best-performing model, 
+at least for what concerns {\it 2-community} graphs, being able to 
+perfectly predict also the minimum cuts of all the graphs in the 
+test set. Contrastingly, learning min-cut first is less stable
+(while still outperforming the primal baseline) confirming
+prior work findings on the effectiveness of multi-task learning.
+
+The performance gap also increases when testing {\it out-of-family}
+on bipartite graphs, where {\it dual} and {\it pipeline} with
+max aggregator are both very competitive. We note that for
+bipartite graphs we record higher mean and standard deviations. 
+While this behaviour is emphasised by the fact that capacities
+are sampled as either 0 or 1, i.e. leaving more chances for prediction
+errors, this testifies that generalisation to arbitrary graph
+distributions is still a challenging task.
+
+\paragraph{Qualitative analysis}
+\begin{table}
+    \caption{Qualitative analysis on the prediction of ${\bm{F}}$. 
+    Mean Absolute Error (MAE) is used as the regression error from
+    the ground truth maximum flow value. For simplicity, we only report results of the best-performing models (PGNs).}  
+    \begin{center}
+    \footnotesizev2
+    \begin{tabular}{l c c c c c c}
+        \toprule
+        & \multicolumn{2}{c}{\it primal}
+        & \multicolumn{2}{c}{\it dual}
+        & \multicolumn{2}{c}{\it pipeline}\\
+        {\bf Metric} 
+        & {\bf PGN-max} & {\bf PGN-mean} 
+        & {\bf PGN-max} & {\bf PGN-mean} 
+        & {\bf PGN-max} & {\bf PGN-mean}\\
+        \midrule
+        $|{\bm{F}} - {\bm{F}}^*|$ & $7.86 \pm 0.47$ & $8.68 \pm 0.21$ 
+        & $\mathbf{0.34 \pm 0.04}$ & $0.41 \pm 0.01$ 
+        & $7.58 \pm 0.10$ 
+        & $0.38 \pm 0.08$ \\ 
+        \bottomrule
+    \end{tabular}
+    \end{center}
+    \label{tab:qualitative}
+\end{table}
+To further evaluate the performance of DAR, we perform a qualitative
+study, whose results are presented in \autoref{tab:qualitative}. For {\it 2-community} graphs
+we assess how close the predicted flow matrix ${\bm{F}}$ is
+to the optimal max-flow solution without considering errors for
+intermediate nodes. This gives a measure of how well the network
+can predict the maximal flow value in the graphs and use it in the
+predicted solution. To achieve that, we ignore intermediate errors and
+only measures flow signal exiting the source node $s$ and entering
+the sink node $t$, i.e. $\sum_{(s, j) \in E} {\bm{F}}_{sj}$ and 
+$\sum_{(j, t) \in E} {\bm{F}}_{jt}$. Thus, we take the maximum (absolute value)
+between the two and compare this value to the ground truth
+maximum flow value ${\bm{F}}^*$. From \autoref{tab:qualitative} we observe that
+all the dual architectures exhibit a solution which reflects the true
+maximum flow quantity in the input graphs, i.e. $\approx 0.30$ of MAE
+from the optimum on average. This analysis further solidifies
+our claim that a DAR model can positively transfer knowledge from the dual to the primal problem resulting in more accurate and qualitatively superior solutions. This claim is also supported by the
+fact that both primal architectures and dual architectures for which
+min-cut results are worse miss the optimal solution by a large margin (compare PGN-max {\it pipeline} min-cut results in \autoref{tab:syn-res}
+and higher MAE in \autoref{tab:qualitative}).
+
+\subsection{Real-world graphs} \label{sec:predictive}
+\paragraph{Benchmark description} We assess generality and potential impact of the DAR pipeline by considering a real-world
+edge classification task, for which prior knowledge of the concept of 
+{\it max-flow} might be helpful. We test both the primal and the DAR
+architectures on the Brain Vessel Graphs (BVG) benchmark
+\citep{DBLP:conf/nips/PaetzoldMSEBPST21}. This benchmark contains 9
+large-scale real-world graphs, where edges represent vessels and nodes represent
+bifurcation of the vessel branches in a brain network. The task is to
+classify each edge in three categories: {\it capillaries}, {\it veins}
+and {\it arteries} based on the following features: vessel length
+$l_{ij}$; shortest distance between bifurcation points $d_{ij}$;
+and curvature $\rho_{ij}$. Note that the three classes can be 
+distinguished by the radius of the vessel, or equivalently, by the
+amount of blood flow that can traverse the vessel. Hence, being able
+to simulate the blood flow in the entire brain network is likely to be advantageous to effectively solve the task. As an additional challenge, note that the classification task is highly imbalanced, i.e. 95\% of samples are capillaries, 4\% veins and only 1\% arteries.
+
+We test the models on three BVG graphs, namely CD1-E-1 (the largest, with 5,791,309 edges), CD1-E-2 (2,150,326 edges) and CD1-E-3 (3,130,650 edges). BVG data also include 
+a synthetic brain vessel graph for validation purposes, comprising 3159 nodes and 3234 edges.
+
+\paragraph{Algorithm reconstruction}
+The main difference with our synthetic tasks is that here we need to
+estimate the vessel diameter/radius which is a quantity that can
+be related with the vessel {\it capacity}, i.e. how much blood (flow)
+can traverse the edge. Therefore, the {\it capacity} is a learning
+target rather than one of the features to feed our algorithmic reasoner with.
+Here, we exploit the generality of the encode-process-decode architecture
+and learn to {\it reconstruct} the Ford-Fulkerson neural execution.
+Specifically, we reuse PGN-max networks pre-trained on {\it 2-community} 
+graphs (section \ref{sec:synthetic}).
+
+As the {\it capacity} is no longer an input 
+feature, we drop the {\it capacity} encoder from $f_v$ and introduce three new
+encoder layers in $f_v$, one for each feature of the vessel graph benchmark, 
+i.e. $l_{ij}, d_{ij}, \rho_{ij}$. Thus, we freeze all the parameters in the
+pre-trained models apart from the introduced encoder layers. Hence,
+we only train the weights of $l_{ij}, d_{ij}, \rho_{ij}$ to learn
+Ford-Fulkerson steps
+in absence of input information about capacity.
+In other words, the model learns to use $l_{ij}, d_{ij}, \rho_{ij}$ to estimate
+the edge flows in the network, which act as proxy information for 
+edge capacities, i.e. our primary objective in the BVG task.
+We perform these learning steps of algorithm reconstruction on the synthetic 
+vessel graph provided by the BVG benchmark. Source and sink nodes $s, t$ are chosen as two random nodes whose
+shortest distance is equal to the diameter of the graph. We train to reconstruct the algorithm for 15000 epochs, with Adam optimiser 
+\citep{DBLP:journals/corr/KingmaB14} and learning
+rate 1e-5. Figure \ref{fig:loss-reconstruction} compares the loss curves for the primal and DAR models, on the task. 
+
+Thus, we simulate one single step of Ford-Fulkerson on CD1-E-{\it X} through PGN-max {\it primal} and {\it dual} models and extract hidden learnt representations for each node, which are then summed together to get edge
+embeddings. These edge embeddings will be used as additional input 
+features for the  graph neural networks (described below) which we train to solve brain vessel classification. Finally, we highlight how this approach allows us to easily dump the embeddings, as the reconstructed encoders and processors will not be training further on real-data.
+
+\paragraph{Neural architectures}
+We consider graph neural networks from the BVG benchmark
+paper as our baselines, namely Graph Convolutional Networks (GCNs)
+\citep{DBLP:conf/iclr/KipfW17}, GraphSAGE
+\citep{DBLP:conf/nips/HamiltonYL17} and ClusterGCN 
+\citep{DBLP:conf/kdd/ChiangLSLBH19} with GraphSAGE convolution 
+(C--SAGE).
+The general architecture consists of several graph convolutional layers with ReLU activations
+followed by a linear module.
+Additionally, we use the embeddings extracted by 
+PGN-max {\it (primal)} and PGN-max {\it (dual)} to train a 
+simple linear classifier (LC) to assess how much
+information these embedding add with respect to the original 
+$l_{ij}, d_{ij}, \rho_{ij}$  features. 
+We also use those representations in combination with GraphSAGE and C--SAGE. Specifically, our embeddings are concatenated together with the GraphSAGE's and C--SAGE's learnt embeddings prior the final linear layer. As an additional sanity check, we also train 
+Node2Vec \citep{DBLP:conf/kdd/GroverL16} on each of the three datasets
+and concatenate its learnt embeddings the same way.
+All models are trained with early stopping of 300 epochs and optimal hyperparameters
+taken from the BVG paper, which we report in the appendix for completeness. Finally, we average
+the results across 3 trials.
+
+\paragraph{Results analysis}
+
+\begin{table}
+    \caption{Balanced accuracy (Bal. Acc.) and area under the ROC curve (ROC) performance metrics on large-scale brain vessel graphs. LC refers to a linear classifier. In addition to
+    the standard architectures, we consider variants where
+    the final linear classification layer takes in 
+    additional Node2Vec
+    \citep{DBLP:conf/kdd/GroverL16} learnt embeddings 
+    and embeddings extracted from PGN-max
+    primal and dual architectures.}
+    \centering
+    \footnotesizev2
+    \setlength{\tabcolsep}{5pt}
+    \begin{tabular}{l c c c c c c}
+        \toprule
+        & \multicolumn{2}{c}{CD1-E-3} & \multicolumn{2}{c}{CD1-E-2} & \multicolumn{2}{c}{CD1-E-1}  \\
+        {\bf Model} & {\bf Bal. Acc.} & {\bf ROC}
+        & {\bf Bal. Acc.} & {\bf ROC}
+        & {\bf Bal. Acc.} & {\bf ROC}\\
+        \midrule
+        LC & $39.3\%_{\pm 0.2}$ & $52.3\%_{\pm 0.6}$ & $36.9\%_{\pm 0.5}$ & $55.9\%_{\pm 0.1}$ & $45.5\%_{\pm 0.1}$ & $61.7\%_{\pm 0.0}$\\
+        LC {\it (N2V)} & $43.9\%_{\pm 0.2}$ & $55.5\%_{\pm 0.1}$  & $71.9\%_{\pm 0.1}$ & $62.6\%_{\pm 0.0}$ & $46.1\%_{\pm 0.1}$ & $60.0\%_{\pm 0.0}$\\
+        LC {\it (primal)} & $48.6\%_{\pm 0.4}$ & $59.4\%_{\pm 0.4}$ & $58.7\%_{\pm 0.1}$ & $63.8\%_{\pm 0.2}$ & $45.3\%_{\pm 0.1}$ & $59.9\%_{\pm 0.1}$\\
+        LC {\it (dual)} & $53.8\%_{\pm 0.3}$ & $66.2\%_{\pm 0.2}$ & $67.3\%_{\pm 0.1}$ & $71.8\%_{\pm 0.0}$ & $48.1\%_{\pm 0.5}$ & $62.1\%_{\pm 0.3}$\\
+        \midrule
+        GCN & $58.1\%_{\pm 0.5}$ & $67.9\%_{\pm 0.2}$ & $74.6\%_{\pm 1.7}$ & $78.7\%_{\pm 0.1}$  & $59.0\%_{\pm 0.2}$ & $67.9\%_{\pm 0.2}$ \\
+        \midrule
+        SAGE & $63.5\%_{\pm 0.2}$ & $70.9\%_{\pm 0.3}$ & $73.9\%_{\pm 0.6}$ & $82.5\%_{\pm 0.2}$  & $64.7\%_{\pm 0.7}$ & $74.2\%_{\pm 0.2}$\\
+        SAGE {\it (N2V)} & $65.0\%_{\pm 0.1}$ & $71.9\%_{\pm 0.1}$ & $84.1\%_{\pm 1.9}$ & $82.5\%_{\pm 0.4}$  & $65.9\%_{\pm 0.1}$ & $74.8\%_{\pm 0.1}$  \\
+        SAGE {\it (primal)} & $64.5\%_{\pm 0.2}$ & $72.0\%_{\pm 0.2}$  & $83.8\%_{\pm 0.4}$ & $83.7\%_{\pm 0.4}$ & $66.2\%_{\pm 0.5}$ & $74.8\%_{\pm 0.3}$ \\
+        SAGE {\it (dual)} & $66.7\%_{\pm 0.4}$ & $75.0\%_{\pm 0.2}$ & $85.2\%_{\pm 0.1}$ & $85.5\%_{\pm 0.2}$ & $66.4\%_{\pm 0.3}$ & $74.8\%_{\pm 0.1}$ \\
+        \midrule
+        C--SAGE & $68.6\%_{\pm 0.8}$ & $74.2\%_{\pm 0.5}$ & $81.8\%_{\pm 0.5}$ & $85.6\%_{\pm 0.2}$ & $59.3\%_{\pm 0.9}$ & $68.3\%_{\pm 0.5}$\\
+        C--SAGE {\it (N2V)} & $68.6\%_{\pm 0.2}$ & $74.1\%_{\pm 0.1}$ & $84.8\%_{\pm 0.2}$ & $84.8\%_{\pm 0.5}$ & $67.4\%_{\pm 0.6}$ & $\mathbf{75.9\%_{\pm 0.2}}$\\
+        C--SAGE {\it (primal)} & $67.3\%_{\pm 0.2}$ & $73.6\%_{\pm 1.9}$ & $82.5\%_{\pm 1.9}$ & $84.0\%_{\pm 1.5}$ & $67.7\%_{\pm 0.1}$ & $\mathbf{75.8\%_{\pm 0.2}}$\\
+        C--SAGE {\it (dual)} & $\mathbf{70.2\%_{\pm 0.2}}$ & $\mathbf{76.3\%_{\pm 0.1}}$ & $\mathbf{85.6\%_{\pm 0.2}}$ & $\mathbf{86.7\%_{\pm 0.3}}$ & $\mathbf{68.1\%_{\pm 0.2}}$ & $\mathbf{75.8\%_{\pm 0.1}}$\\
+        \bottomrule
+    \end{tabular}
+    \label{tab:bvg-res}
+\end{table}
+Results on the BVG benchmark are reported in \autoref{tab:bvg-res}. 
+As the learning problem is highly imbalanced, we use the balanced
+accuracy score (average of recall for each class)
+and the area under the ROC curve as metrics to evaluate the performance.
+
+Looking at LC performance, we see that the algorithmic reasoner embeddings (both primal and dual) are informative, resulting in an average 16.6\% increase in
+balanced accuracy and 10.5\% in ROC across the three datasets when compared to simple features. Dual embeddings also show superior
+performance compared to primal embeddings, as testified by consistent increments in both metrics.  Figure \ref{fig:loss-reconstruction} hints that this might be due to a better algorithm reconstruction in the dual, which results in more informative representations. LC performance also gives a clear indication of how well the algorithmic reasoner is able to positively transfer knowledge acquired on synthetic algorithmic tasks to unseen real-world predictive graph learning ones. 
+
+When considering the use of learnt embedding in combination with GNN architecture, we note significant performance improvements over vanilla (i.e. non algorithmically enhanced) GNNs. C--SAGE with {\it dual} embeddings achieves
+the best performance on all three datasets with a consistent
+performance gap for CD1-E-3 and CD1-E-2. Interestingly, 
+dual embeddings consistently outperform Node2Vec embeddings.
+This is remarkable, considering that Node2Vec is trained directly on the CD1-E-{\it X} data, whereas DAR only performs inference on them.  A reason to this performance gap might be that Node2Vec essentially widens the local perceptive field of graph neural networks with random walks as an attempt to capture global graph features. On the contrary, DAR utilises a more principled approach based on the simulation of graph flow. This means that the learnt latent space encodes the information necessary to reconstruct the flow assignment and consequently edge capacities, these being more informative for the specific task. DAR models also exhibit very good generalisation capabilities. In fact, we recall that the networks are only trained on graphs with 16 nodes and extract meaningful representations for graphs with millions of nodes, being able to provide a clear performance advantage over baselines. This might also indicate a way worth
+pursuing to realise sustainable {\it data-efficient} learning models for graphs.
+
+\section{Conclusion}
+We have presented {\bf dual algorithmic reasoning} (DAR), a neural
+algorithmic reasoning approach that leverages
+duality information when learning classical algorithms. Unlike other approaches,
+we relax the assumption of having multiple algorithms to be learnt jointly and
+show that incorporating the dual of the problem targeted by algorithms
+represents a valuable source of information for learnt algorithmic reasoners.
+We showed that learning together the primal-dual max-flow-min-cut problem can substantially
+improve the quality of the predictions, as testified by the quantitative and qualitative evaluations of the models. Furthermore, dual algorithmic reasoners have demonstrated to generalise better, showing positive knowledge transfer across different families of graph distributions and extracting informative representations for large-scale graphs while only being trained on toy-synthetic graphs. 
+In this context, we also demonstrated for the first time how more 
+classical graph learning tasks can be tackled through exploitation of algorithmic reasoning, via {\it algorithm reconstruction}. On a final note, we identify several problems and algorithms that may benefit from a dual reasoning approach. First, max-flow and min-cut may be representative for a wide class of primal/dual pairs, for which {\it strong duality} holds. There, the dual solution can be used to recover the primal optimum (and vice versa), equivalently to max-flow and min-cut. Examples of such problems are {\it shortest path} and {\it min-cost flow} problems. More interestingly, we may generalise this approach to target also {\it weak} primal-dual problems, in which the dual objective is an approximation of the primal objective. Even in the case of weak duality, dual information is valuable, as testified by the numerous algorithms exploiting primal-dual relations \citep{balinski1986competitive, pourhassan2017use}. Particularly interesting problems to target may be the {\it Travelling Salesman Problem} \citep{cormen2009}, for which a dual formulation includes learning to output a 1-tree \citep{bazaraa1977traveling}, and the {\it Weighted Vertex Cover} problem, for which the dual can effectively be used to develop 2-approximation heuristics \citep{pourhassan2017use}.
+We believe that results showed in this manuscript should strongly motivate further work in this direction, extending the analysis to other pairs of primal-dual problems, such as the ones suggested in this section.
+
+\subsubsection*{Acknowledgments}
+This research was partially supported by TAILOR, a project funded by EU Horizon 2020 research and innovation programme under GA No 952215.
+
+

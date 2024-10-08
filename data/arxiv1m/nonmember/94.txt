@@ -1,0 +1,902 @@
+\section{Introduction}\label{introduction}}
+\IEEEPARstart{T}{he} problems of clustering aim at the optimal grouping of the observed data and appear in very diverse fields 
+including pattern recognition and signal compression. Fuzzy c-means \cite{dunn1973fuzzy, bezdek1973fuzzy, bezdek2013pattern, bezdek1984fcm} 
+and deterministic annealing clustering \cite{rose1990deterministic,rose1990statistical,rose1993constrained,beni1994least}
+are the most widely used ones among the objective function-based clustering methods.
+Both of them start with an attempt to alleviate the local minimum trap problem 
+suffered by hard c-means \cite{duda1973pattern}
+and achieved better performance in most cases. 
+However, we haven't yet found solid theoretical foundation for FCM, 
+and the parameter $m$ involved seems unnatural without any physical meaning.
+Another crucial assumption underlying most current theory of clustering problem is that the distribution
+of training samples is identical to the distribution of future test samples, but it is often violated in practice
+where the distribution of future data deviates from the distribution of training data.
+For example, a decision-making system is forecasting future actions in the presence of 
+current uncertainty and imperfect knowledge\cite{garibaldi2019need}.
+In this paper, we propose a clustering model based on importance sampling
+which minimizes the worst case of expected distortions under the constraint of distribution deviation.
+The distribution deviation is measured by the Kullback–Leibler 
+divergence\cite{kullback1951information,williams1980bayesian, sadaaki1997fuzzy,ichihashi2000gaussian,
+coppi2006fuzzy,ortega2013thermodynamics,genewein2015bounded,hihn2019information}
+between the current distribution and a future distribution.
+The proposed model is called \textit{Importance Sampling Deterministic Annealing}, denoted as ISDA for short,
+and we show that fuzzy c-means is a special case of ISDA 
+which gives a physical meaning of the fuzzy exponent $m$ in fuzzy c-means.
+
+
+The proposed ISDA clustering algorithm aims to minimize the loss in maximum degradation
+and hence the resulting optimal problem is a minimax problem.
+Inspired from the importance sampling method\cite{tokdar2010importance,shi2009neural,shi2009hierarchical}, 
+we convert the constraint between the current and future distribution
+to a constraint on the importance sampling weights. 
+The constrained minimax problem can be reformulated to an unconstrained problem using the Lagrange method.
+The advantage of the reformulation of ISDA is that the
+resulting unconstrained optimization problem is dependent on cluster centers only and 
+the solution to the corresponding optimization problem can be found by applying the  
+quasi-newton algorithms\cite{gill1972quasi,fletcher2013practical}. 
+
+We conduct experiments on both synthetic datasets and a real-world dataset
+to validate the effectiveness of ISDA. 
+First, an evaluation metric called M-BoundaryDist is proposed 
+as a measure of how well a clustering algorithm performs
+with respect to the boundary points.
+M-BoundaryDist calculates the sum of distances of boundary points to the dataset centroid. 
+Experiment results on synthetic Gaussian datasets show that
+when $T_2$ is small, the cluster centers of ISDA are closer to the boundary points
+compared with Kmeans\cite{krishna1999genetic} and FCM
+and performs better under large distribution shifts.
+Next, results on load forecasting problem show that 
+ISDA performs better compared with Kmeans and FCM 
+on 9 out of 12 months on future load series. 
+Both synthetic and real-world examples validate the effectiveness of ISDA.
+
+
+\textbf{Outline of the paper.} 
+\Cref{Related Work} gives a brief review of related work on fuzzy c-means and deterministic annealing clustering algorithm. 
+\Cref{ISDA} describes our proposed importance sampling deterministic annealing for clustering model
+and the algorithm to solve it. 
+The relationship between fuzzy c-means and ISDA is also given in this section.
+\Cref{Results} conducts experiments on synthetic Gaussian datasets.
+Specifically, \Cref{metric} compares Kmeans, FCM and ISDA with respect to the boundary points and 
+\Cref{dist-shift} compares the three clustering methods on deviated datasets. 
+\Cref{T2} analyzes how the temperature $T_2$ affects the ISDA clustering result.
+\Cref{load-forecasting} applies ISDA on a real-world load forecasting problem and show that ISDA performs better
+under most scenarios of future distribution shifts.  
+Finally, we conclude this paper in \Cref{conclusion}.
+
+
+\section{Related Work} \label{Related Work}
+Let $D =\{x_1,x_2,\cdots,x_N\}$ be a given set of $N$ points in $S$ dimensional space.
+These data points are to be partitioned into $C$ clusters.
+We denote the prototype of cluster $j$ as $y_j$.
+$Y=\{y_1, y_2, \cdots, y_C\}$ denotes all cluster centers and 
+$d(x_i, y_j)$ denotes the \textbf{squared} distance between $x_i$ and $y_j$,
+which is usually used as the distortion measure.
+
+\textbf{Hard C-Means Clustering}
+In clustering analysis, hard c-means assigns each data point to a single cluster\cite{menard2004non}
+and aims to minimize the following objective function $F_H(Y,U)$
+\begin{align}
+  \begin{split}
+  \label{eqn:HCM-uij}
+   \min_{Y,U}   \quad &   F_{H}(Y,U)=\sum_{i=1}^{N}\sum_{j=1}^{C}u_{ij}d(x_i,y_j) \\
+  \text{s. t.} \quad  &   \sum_{j=1}^{C}u_{ij}=1, 1\leq i \leq N \\
+                      &   0 < \sum_{i=1}^{N} u_{ij} < N, 1\leq j \leq C \\
+                      &    u_{ij}\in\{0,1\}, 1\leq i \leq N, 1\leq j \leq C
+  \end{split}
+\end{align}
+where $u_{ij}$ denotes the membership of the $i$-th data point to the $j$-th cluster center
+and $U=[u_{ij}]_{N \times C}$ is the partition matrix.
+The objective of hard c-means is to find the optimal center $Y$ and the membership $U$.
+
+\textbf{Fuzzy C-Means Clustering}
+Fuzzy clustering is a fruitful extension of hard c-means\cite{duda1973pattern}
+with various applications and is supported by cognitive evidence. 
+The fuzzy clustering algorithms regard each cluster as a fuzzy set
+and each data point may be assigned to multiple clusters 
+with some degree of sharing\cite{menard2004non}.
+In fuzzy c-means\cite{bezdek1984fcm}, an exponent parameter $m$ is introduced and 
+$u_{ij} $ is interpreted as the fuzzy membership with values in $[0,1]$
+which measures the degree to which the $i$-th data point belongs to the $j$-th cluster. 
+The corresponding objective function $F_{FCM}(Y,U)$ and the constraints are as follows
+\begin{align}
+  \begin{split}
+  \label{eqn:FCM}
+  \min_{Y,U}   \quad &   F_{FCM}(Y,U)=\sum_{i=1}^{N}\sum_{j=1}^{C} u_{ij}^{m} d(x_i,y_j)\\
+  \text{s. t.} \quad &  \sum_{j=1}^{C} u_{ij}=1, 1\leq i \leq N \\
+                     & 0 < \sum_{i=1}^{N} u_{ij} < N, 1\leq j \leq C \\
+                     & u_{ij}\in [0,1], 1\leq i \leq N, 1\leq j \leq C
+  \end{split}
+\end{align}
+where $m \in [1, \infty)$ is a fuzzy exponent called the fuzzifier.
+The larger $m$ is, the fuzzier the partition\cite{ichihashi2000gaussian}.
+The necessary optimality conditions for the fuzzy partition matrix 
+$U$ is as follows\cite{bezdek2013pattern}
+\begin{align}
+u_{ij}=\frac{d(x_i,y_j)^{\frac{1}{1-m}}}{\sum_{j=1}^{c}d(x_i,y_j)^{\frac{1}{1-m}}}, 
+\quad 1\leq j \leq C, \quad 1\leq i \leq N. \label{eq:FCM-Uij}
+\end{align}
+Substituting  \eqref{eq:FCM-Uij} into \eqref{eqn:FCM}, we get
+\begin{align}
+R_{FCM}(Y) = \sum_{i=1}^{N} (\sum_{j=1}^{C} d(x_i,y_j)^{1\over 1-m})^{1-m}. \label{eq:FCM-reform}
+\end{align}
+Minimizing $R_{FCM}(Y)$ with respect to $Y$, we can get the optimal cluster prototypes.
+\eqref{eq:FCM-reform} is called the reformulated criteria of FCM\cite{hathaway1995optimization}
+and can be solved by commercially available software.
+The function $F_{FCM}(Y,U)$ depends on both $U$ and $Y$ and the function $R_{FCM}(Y)$ depends on $Y$ only.
+The aim of reformulation is to decrease the number of variables by eliminating $U$
+by the optimal necessary condition with respect to $U$.
+
+
+\textbf{Deterministic Annealing Clustering}
+The deterministic annealing clustering was derived from a statistical physical or information-theoretical view,
+and finds many applications in unsupervised and supervised problems\cite{rose1998deterministic}. 
+Let $x$ denote a data point or source vector, $y(x)$ denote its representation cluster center, 
+and $d(x,y(x))$ denote the distortion measure. 
+For a random variable $X$ with distribution $p(x)$, the expected distortion for this representation can be written as
+\begin{equation}
+L = \int_x\int_y p(x,y)d(x,y)dxdy = \int_x p(x)\int_y p(y|x)d(x,y)dxdy \label{eq:Loss}
+\end{equation} 
+where $p(x,y)$ is the joint probability distribution
+and $p(y|x)$ is the association probability relating input vector $x$ and cluster center $y$. 
+The aim of deterministic annealing for clustering is to 
+minimize $L$ with respect to the conditional probability $p(y|x)$ and $y$
+subject to a specified level of randomness.
+The level of randomness is usually measured by the joint entropy $H(X,Y)$,
+which can be decomposed into sums of entropy and conditional entropy, 
+which is $H(X,Y)=H(X) + H(Y|X)$.
+Since $H(X)$ is independent of clustering, 
+we use the conditional entropy $H(Y|X)$ as a measure of randomness.
+Therefore, the constraint becomes $H(Y|X) \leq C_0$ and 
+the constrained optimization problem becomes
+\begin{align}
+\min_{p(y|x),y} \quad L & = \int_x p(x)\int_y p(y|x)d(x,y)dxdy \label{eq:DA-L} \\
+s.t.            \quad & H(Y|X) \leq C_0. \label{eq:DA-constraints}
+\end{align}
+The above problem can be reformulated to the unconstrained optimization problem
+using the Lagrange method, as shown in \eqref{eq:DA-lagrange}
+\begin{align} 
+  \min_{p(y|x), y} F & = L-T_1H(Y|X). \label{eq:DA-lagrange}
+\end{align}
+Here the Lagrange multiplier $T_1$ is the temperature
+which governs the level of randomness of the conditional entropy.
+In classical clustering problems, 
+the dataset $D$ is assumed to be independently drawn from $p(x)$ 
+and the codebook $Y$ is finite. If we denote the association probability $p(y_j|x_i)$ as $u_{ij}$, 
+then the empirical estimates of \eqref{eq:DA-lagrange} is \eqref{eq:DA-distortion}
+\begin{equation}
+  F_{DA}(Y,U) = \sum_{i=1}^{N}\sum_{j=1}^{C}u_{ij}d(x_i,y_j) + 
+  T_1\sum_{i=1}^{N}\sum_{j=1}^{C}u_{ij}log u_{ij} \label{eq:DA-distortion}
+\end{equation}
+then the optimization problem becomes
+\begin{align}
+  \begin{split}
+  \label{eqn:DA}
+    \min_{U,Y} \quad & F_{DA}(Y,U) \\
+    \text{s.t.} \quad & \sum_{j=1}^{C} u_{ij}=1, 1\leq i \leq N \\
+                      & 0 < \sum_{i=1}^{N} u_{ij} < N, 1 \leq j \leq C \\
+                      & u_{ij} \in [0,1], 1\leq i \leq N ,1 \leq j \leq C.
+  \end{split}
+\end{align}
+This is known as deterministic annealing for clustering\cite{rose1990deterministic,rose1998deterministic}.
+An equivalent derivation of \eqref{eqn:DA} can be obtained by 
+the principle of maximum entropy in which the level of expected distortion $L$ 
+is fixed\cite{rose1998deterministic,jaynes1957information}.
+Minimizing $F_{DA}(Y,U)$ with respect to $u_{ij}$
+is straightforward and gives the Gibbs distribution\cite{rose1998deterministic}
+\begin{equation}
+  u_{ij} =  \frac{exp(-\frac{1}{T_1} d(x_i, y_j))}{\sum_{j=1}^{C} exp(-\frac{1}{T_1} d(x_i, y_j))}. \label{eq:DA-U}
+\end{equation}
+The corresponding minimum of $F_{DA}(Y,U)$ is obtained by 
+putting \eqref{eq:DA-U} back to \eqref{eq:DA-distortion}, 
+also known as the reformulation of determinisic annealing for clustering\cite{zhang2003robust}, which is 
+\begin{equation} 
+  R_{DA}(Y) = - T_1 \sum_{i=1}^{N} log(\sum_{j=1}^{C} exp(-\frac{d(x_i, y_j)}{T_1})). \label{eq:DA-reformulation}
+\end{equation}
+
+The underlying assumption of HCM, FCM and determinisic annealing clustering 
+is that the distribution of training data is the same as future data,
+however it may not hold in many real cases. 
+In the following section, we propose a new clustering algorithm 
+to handle this this problem derived from the importance sampling method. 
+
+\section{Importance Sampling Deterministic Annealing} \label{ISDA}
+In the proposed Importance Sampling Deterministic Annealing (ISDA) clustering method,
+we assume that the observed data set draws from a distribution $q(x)$
+and our aim is to construct a clustering algorithm for a population with unknown distribution $p(x)$.
+We further assume that if $p(x)$ are, instead of being completely unknown,
+restricted to a class of distributions, i.e.
+\begin{equation}
+  \Gamma = \{p(x): KL(p(x)||q(x)) \leq C_1 \}. \label{eq:gamma}
+\end{equation}
+A \textit{minimax} approach is applied through minimizing the 
+worst-case loss restricted to this constraint.
+\Cref{ISDA-model} gives a principled derivation of the minimax approach and
+\Cref{ISDA-algorithm} solves the corresponding optimization problem based on its reformulation.
+The derivation of our proposed approach in this paper is heavily dependent on the work\cite{rose1998deterministic}.
+
+\subsection{Principle of ISDA clustering} \label{ISDA-model}
+
+
+In this section, we give out the principled deviation of the minimax approach.
+In our proposed algorithm, we aim to minimize the \textit{worst-case situation}
+of expected distortion under the given constraints,
+which is 
+\begin{equation}
+  L = \int_x\int_y p(x,y)d(x,y)dydx 
+\end{equation}
+where $d(x,y)$ represents a \textbf{squared} distance between $x$ and $y$
+for convenience and the derivation also holds for other distortion measures. 
+
+First, we find the best partition $U$ to minimize the expected distortion $L$
+under the conditional entropy constraint.
+The corresponding optimization problem is 
+\begin{align}
+  \begin{split}
+  \min_{p(y|x)} \quad & L =\int_x\int_y p(x,y)d(x,y)dydx  \\ 
+  \text{s.t.}   \quad & H(Y|X) \leq C_0.
+  \end{split}
+\end{align}
+Second, for a given partition $p(y|x)$ , we find a $p(x)$
+which maximizing the objective function and corresponds to the \textit{worst-case situation}.
+However, $p(x)$ is unknown in the problem and we assume that
+$p(x)$ is subject to the constraint $KL(p(x)||q(x)) \leq C_1$.
+Therefore, the corresponding optimization problem becomes
+\begin{align}
+  \begin{split}
+  \max_{p(x)} \min_{p(y|x)} \quad & L =\int_x\int_y p(x,y)d(x,y)dydx \\
+  \text{s.t.} \quad & H(Y|X) \leq C_0 \\
+              \quad & KL(p(x)||q(x)) \leq C_1.
+  \end{split}
+\end{align}
+Third, given the fuzzy partition $p(y|x)$ and the worst-case distribution $p(x)$,
+we aim to find the best prototype $y$ which minimizes the objective function. 
+Then the corresponding optimization problem is   
+\begin{align}
+  \begin{split} \label{eq:L-with-constraints}
+  \min_{y} \max_{p(x)} \min_{p(y|x)} \quad &  L=\int_x\int_y p(x,y)d(x,y)dydx \\
+  \text{s.t.} \quad & H(Y|X) \leq C_0 \\
+  \quad & KL(p(x)||q(x)) \leq C_1.
+  \end{split}
+\end{align}
+
+Suppose $Y=\{y_1,y_2,\cdots,y_C\}$ is a finite set and 
+the observed dataset $D =\{x_1,x_2,\cdots,x_N\}$ are $N$ i.i.d samples drawn from $q(x)$.
+Derived from the importance sampling method,  
+the constraint on $p(x)$ becomes the constraint on the importance sampling weights, which is
+\begin{equation}
+  \Gamma = \{w(x_i): KL(w(x_i)||\{ \frac{1}{N} \}) \leq C_1 \} \label{eq:gamma-W}
+\end{equation}
+where $\{ \frac{1}{N} \}$ denotes the discrete uniform distribution with $N$ points.
+The self-normalized importance sampling weight for $x_i$ is
+$w_i = {{p(x_i)\over q(x_i)}\over{{\sum_l {{p(x_l)\over q(x_l)}}}}}$.
+The corresponding importance sampling weight is $W=[w_i]_{N \times 1}$ with $\sum_{i=1}^{N} w_i=1$,
+which is called the importance sampling weight distribution.
+The association probability $p(y_j|x_i)$ is denoted as $u_{ij}$ 
+and the fuzzy membership matrix is $U=[u_{ij}]_{N \times C}$.
+Then the empirical estimate of $L$ is
+\begin{equation}
+  L  \approx \sum_{i=1}^{N} w_i \sum_{j=1}^{C} u_{ij} d(x_i, y_j), \label{eq:L-empirical}
+\end{equation}
+the empirical estimate of $H(Y|X)$ is
+\begin{equation}
+  H(Y|X) \approx \sum_{i=1}^{N} w_i \sum_{j=1}^{C} u_{ij} log u_{ij}, \label{eq:H(Y|X)-empirical}
+\end{equation}
+and the empirical estimate of $KL(p(x)\parallel q(x))$ is 
+\begin{align}
+  KL(p(x) \parallel q(x)) & \approx KL(w(x_i) \parallel \{\frac{1}{N}\}) \nonumber \\  
+  & = \sum_{i=1}^{N} w_i log w_i + log N. \label{eq:KL-pq-empirical}
+\end{align}
+The proof of \eqref{eq:L-empirical}, \eqref{eq:H(Y|X)-empirical} and \eqref{eq:KL-pq-empirical}
+are shown in Appendix A
+
+Then, the constrained optimization problem in \eqref{eq:L-with-constraints}  can be reformulated to 
+the unconstrained optimization problem using the Lagrange method,
+\begin{equation}
+  F_{ISDA}^{0}(Y,W,U) = L-T_1H(Y|X) -T_2 KL(w(x_i)||\{  \frac{1}{N} \}) \label{eq:ISDA-objective} \\
+\end{equation}
+where $T_1 > 0$ and $T_2 > 0$ are the temperature parameters
+which govern the randomness of $U$ and $W$ respectively.
+Plugging \eqref{eq:L-empirical}, \eqref{eq:H(Y|X)-empirical} and \eqref{eq:KL-pq-empirical} 
+back into \eqref{eq:ISDA-objective}, we get the empirical estimates of the objective function for ISDA
+clustering, which is  
+\begin{align}
+  & F_{ISDA}^{0}(Y,W,U) = \sum_{i=1}^{N} w_i\{\sum_{j=1}^{C} u_{ij} d(x_i,y_j) \nonumber \\
+  & +T_1\sum_{j=1}^{C}u_{ij}log u_{ij}\} -T_2\sum_{i=1}^{N} w_i log w_i-T_2log(N). \label{eq:ISDA-empirical-0}
+\end{align}
+Since $T_2$ is predefined and the last term $log(N)$ is a constant, 
+we finally get $F_{ISDA}(Y,W,U)$ by omitting the last term, which is 
+\begin{align}
+  & F_{ISDA}(Y,W,U) = \sum_{i=1}^{N} w_i\{\sum_{j=1}^{C} u_{ij} d(x_i,y_j) \nonumber \\
+  & + T_1\sum_{j=1}^{C}u_{ij}log u_{ij}\} - T_2\sum_{i=1}^{N} w_i log w_i. \label{eq:ISDA-empirical}
+\end{align}
+Adding the constraints on the partition matrix $U$ and the importance sampling weight $W$,
+the optimization problem of ISDA is as follows  
+\begin{align}
+  \min_{Y} \max_{W} \min_{U} \quad & F_{ISDA}(Y,W,U) \label{eq:ISDA} \\
+  \text{s.t.} \quad  & \sum_{j=1}^{C} u_{ij}=1, 1 \leq i \leq N \nonumber \\
+  & 0 < \sum_{i=1}^{N} u_{ij} < N, 1 \leq j \leq C \label{eq:constraints-uij} \\
+  & u_{ij} \in [0,1], 1\leq i \leq N ,1 \leq j \leq C  \nonumber \\
+  & \sum_{i=1}^{N}w_{i}=1, w_i \in [0,1], 1 \leq i \leq N  \label{eq:constraints-wi}
+\end{align}
+where \eqref{eq:constraints-uij} are the constraints for the fuzzy membership $U$\cite{bezdek1984fcm}
+and \eqref{eq:constraints-wi} is the constraint for the importance sampling weight $W$.
+In conclusion, ISDA is an objective-function-based clustering method and 
+the objective funciton can be seen as a trade-off between 
+the expected distortion, the level of randomness and the distribution deviation. 
+When $T_2 \rightarrow 0$, the distribution shift $KL(p(x)) \parallel q(x))$ can be very large 
+and for $T_2 \rightarrow \infty $, the distribution shift should be small,
+the effect of $T_2$ is further illustrated in \Cref{T2}.
+
+\subsection{Reformulation of ISDA clustering} \label{ISDA-algorithm}
+In this section, we give a reformulation of ISDA and 
+a corresponding optimization routine following \cite{hathaway1995optimization} to solve the problem. 
+We derive the membership and weight update equations from the necessary optimality
+conditions for minimization of the criterion function
+by differentiating $F_{ISDA}(U,W,Y)$ with respect to $U$, $W$ and set the derivatives to zero. 
+Specifically, let the Lagrange multiplier be $\{\lambda_i \}_{i=1}^{N}$ and $\lambda$,
+then the Lagrange function becomes $\mathcal{L}_{ISDA}$
+\begin{align}
+\mathcal{L}_{ISDA} & = \sum_{i=1}^{N} w_i\{\sum_{j=1}^{C} u_{ij} d(x_i,y_j)+
+                        T_1\sum_{j=1}^{C}u_{ij}log u_{ij}\} \nonumber \\
+                   & -T_2\sum_{i=1}^{N} w_i log w_i \nonumber \\ 
+                   & - \sum_{i=1}^{N} \lambda_i (\sum_{j=1}^{C} u_{ij} -1) - \lambda (\sum_{i=1}^{N} w_i-1). \label{eq:ISDA-lagrange}
+\end{align}
+Setting the derivative of $\mathcal{L}_{ISDA}$ with respect to $U$ to zero, 
+we get the optimality necesary condition for $U$, which is 
+\begin{equation}    
+  u_{ij} =  \frac{exp(-\frac{d(x_i, y_j)}{T_1})}{\sum_{j=1}^{C} exp(-\frac{d(x_i, y_j)}{T_1})}. \label{eq:ISDA-uij}
+\end{equation}
+Plugging \eqref{eq:ISDA-uij} back into \eqref{eq:ISDA-lagrange}, we get the reformulation for $U$, which is  
+\begin{align}
+R_{ISDA}(Y,W) = & -T_1 \sum_{i=1}^{N} w_i [log \sum_{j=1}^{C} exp(-\frac{d(x_i, y_j)}{T_1})] \nonumber \\
+& \quad -T_2\sum_{i=1}^{N} w_i log w_i - \lambda (\sum_{i=1}^{N} w_i-1). \label{eq:ISDA-Y-W}
+\end{align}
+Setting the derivative of $R_{ISDA}(Y,W)$ with respect to $W$ to zero, 
+we get the optimality necesary condition for $W$, which is 
+\begin{equation}
+  w_i = \frac{[\sum_{j=1}^{C}  exp(-\frac{d(x_i, y_j)}{T_1})]^{-\frac{T_1}{T_2}}}
+  {\sum_{l=1}^{N} [\sum_{j=1}^{C}  exp(-\frac{d(x_l, y_j)}{T_1})]^{-\frac{T_1}{T_2}}}.\label{eq:ISDA-wi}
+\end{equation}
+Substituting  \eqref{eq:ISDA-wi} into \eqref{eq:ISDA-Y-W}, we get the reformulation for $U$ and $W$, which is 
+\begin{equation}
+R_{ISDA}(Y) = T_2 log(\sum_{l=1}^{N} [\sum_{j=1}^{C} exp(-\frac{d(x_i, y_j)}{T_1})]^{-\frac{T_1}{T_2}}). \label{eq:ISDA-Y}
+\end{equation}
+We call $R_{ISDA}(Y)$ the reformulation function of $F_{ISDA}(Y,W,U)$
+and the minimization of $R_{ISDA}(Y)$ with respect to $Y$ is equivalent to 
+the min-max-min of $F_{ISDA}(Y,W,U)$ with respect to $Y,W,U$.
+Therefore, finding the solution to ISDA clustering becomes minimization of 
+$R_{ISDA}(Y)$ with respect to $Y$.
+The proofs of \Crefrange{eq:ISDA-uij}{eq:ISDA-Y} are shown in Appendix B.
+
+
+\textit{Remark:}
+ISDA can be seen as a two-level statistical physical model.
+For the first system, for a given $x_i$, 
+if we regard $d(x_i,y_j)$ as the energy for the prototype $y_j$,
+then
+\begin{equation}
+  \sum_{j=1}^{C} u_{ij} d(x_i,y_j) + T_1\sum_{j=1}^{C}u_{ij}log u_{ij}
+\end{equation}
+becomes the Helmholtz free energy with the temperature $T_1$\cite{rose1998deterministic}.
+In bounded rationality theory\cite{genewein2015bounded,ortega2015information}, 
+$-T_1 log \sum_{j=1}^{C} exp(-\frac{d(x_i,y_j)}{T_1}) $ is called the certainty equivalence.
+For the second system, if we regard $log [\sum_{j=1}^{C} exp(-\frac{d(x_i, y_j)}{T_1})]^{T_1}$
+as the energy for $x_i$, then
+\begin{equation}
+- \sum_{i=1}^{N} w_i [log \sum_{j=1}^{C} exp(-\frac{d(x_i, y_j)}{T_1})]^{T_1} -T_2 \sum_{i=1}^{N} w_i log w_i
+\end{equation}
+becomes the negative Helmholtz free energy with the temperature $T_2$.
+
+
+\subsection{Fuzzy-ISDA}
+In this section, we use the \textbf{logarithmic} transformation\cite{sadaaki1997fuzzy} of distortion $d(x,y)$ as the distortion measure
+and call the resulting ISDA model as Fuzzy-ISDA.
+The expected logarithmic distortion is 
+\begin{equation}
+  L^{Fuzzy} = \int_x\int_y p(x,y)log d(x,y)dydx. 
+\end{equation}
+Similarly in ISDA, the corresponding optimization problem of Fuzzy-ISDA is 
+\begin{align}
+  \begin{split} \label{eq:L-log-with-constraints}
+  \min_{y} \max_{p(x)} \min_{p(y|x)} \quad &  L^{Fuzzy} = \int_x\int_y p(x,y)log d(x,y)dydx \\
+  \text{s.t.} \quad & H(Y|X) \leq C_0 \\
+  \quad & KL(p(x)||q(x)) \leq C_1.
+  \end{split}
+\end{align}
+The empirical estimation of the reformulation of Fuzzy-ISDA with respect to $U$ and $W$ is as follows 
+\begin{equation}
+  R_{ISDA}^{Fuzzy}(Y) =T_2 log  (\sum_{i=1}^{N} (\sum_{j=1}^{C} d(x_i, y_j)^{-\frac{1}{T_1}})^{-\frac{T_1}{T_2}}). \label{eq:ISDA-Y-log}
+\end{equation}
+Let $T_1=m-1$, $T_2=1$, then \eqref{eq:ISDA-Y-log} becomes
+\begin{align}
+  R_{ISDA}^{Fuzzy}(Y)= log (\sum_{i=1}^{N} (\sum_{j=1}^{C} d(x_i, y_j)^{\frac{1}{1-m}})^{1-m}).\label{eq:ISDA-FCM}
+\end{align}
+Comparing \eqref{eq:ISDA-FCM} with the reformulation function of FCM
+\begin{equation}
+R_F(Y)=\sum_{i=1}^{N}(\sum_{j=1}^{C}d(x_i,y_j)^{1\over 1-m})^{1-m} \label{eq:FCM-reformulation}
+\end{equation}
+we can see that the minimization of $R_{F}(Y)$ is equivalent to 
+the minimization of $R_{ISDA}^{Fuzzy}(Y)$ with respect to $Y$. 
+Finally, we obtain the following theorem which 
+\textbf{reveals the relationship between fuzzy clustering and ISDA clustering}.
+\begin{theorem} \label{ISDA-FCM}
+The fuzzy c-means is a special case of ISDA clustering in which distortion is measured by $log d(x_i,y_j)$  
+and the parameters $T_1$, $T_2$ are set as $T_1=m-1$, $T_2=1$.
+\end{theorem}
+Therefore, the fuzzy component $m=T_1+1$ in fuzzy c-means can be interpreted  
+as the recalibration of temperature in thermodynamic system.
+The \autoref{ISDA-FCM} reveals there is a deep relationship between fuzzy c-means
+with thermodynamics\cite{rose1998deterministic} and information theory\cite{genewein2015bounded}.
+
+\subsection{Algorithm} \label{algorithm}
+In this section, we give out the algorithm to solve \eqref{eq:ISDA-Y}.
+Inspired from \cite{hathaway1995optimization}, we use \textit{fminunc's} BFGS\cite{fletcher2013practical} algorithm
+in MATLAB Optimization Toolbox\cite{MatlabOTB} to find the minimum of the unconstrained optimization problem.
+The corresponding $U$ and $W$ are obtained through \eqref{eq:ISDA-uij} and \eqref{eq:ISDA-wi}. 
+The initial cluster centers are uniformly sampled from the domain of the training dataset $\mathcal{X}$.
+$U$ and $W$ are sampled from the standard uniform distribution
+and standardized according to \eqref{eq:constraints-uij} and \eqref{eq:constraints-wi} respectively. 
+The details of the ISDA clustering algorithm are as follows.
+\[
+\left[ \begin{array}{l}
+Inputs:X, C, T_1, T_2 \\[1ex]
+Outputs: U, W, Y
+\end{array} \right]
+\]
+\begin{enumerate}
+\item Sample initial $U$ and $W$ from the standard uniform distribution
+      and normalize them columnwisely to satisfy 
+      \eqref{eq:constraints-uij} and \eqref{eq:constraints-wi}.
+      Choose $C$ centers uniformly at random from $\mathcal{X}$.
+\item Using \textit{fminunc} in MATLAB Optimization Toolbox to get $y_j$ 
+      until a given stopping criterion is satisfied.\\
+      Apply \eqref{eq:ISDA-uij} to compute $u_{ij}$. \\
+      Apply \eqref{eq:ISDA-wi} to compute $w_i$. 
+\end{enumerate}
+
+\section{\textbf{Numerical Results}} \label{Results}
+In this section, we conduct numerical experiments to show the effectiveness
+of our proposed algorithm and analyze its performance.
+Specifically, \Cref{metric} shows that ISDA centers are closer to the boundary points
+which are used to measure the worst-case scenarios.
+\Cref{T2} analyzes how the temperature $T_2$ affects the ISDA results.
+\Cref{dist-shift} shows that ISDA performs better compared with Kmeans and FCM 
+under large future distribution shifts.
+
+\textbf{Dataset}
+In this section, we use the following synthetic dataset if not otherwise specified.
+The dataset contains three clusters and the data points in each cluster are normally 
+distributed over a two-dimensional space.
+The three means and covariance matrices
+are (1, 0), (-0.578,-1), (-0.578, 1) and
+$\begin{pmatrix}
+  1.0  & 0.0 \\
+  0.0  & 0.3
+\end{pmatrix}$, 
+$\begin{pmatrix}
+  0.475 & 0.303 \\
+  0.303 & 0.825
+\end{pmatrix}$, 
+$\begin{pmatrix}
+  0.475 & -0.303 \\
+  -0.303 & 0.825
+\end{pmatrix}$. 
+The default number of points in each cluster is 200.
+This dataset is called the \textit{default} dataset in this paper.
+
+
+\textbf{Experiment settings}
+We follow the python package scikit\cite{scikit-learn} for the implementation 
+of Kmeans using the initialization proposed in Kmeans++\cite{arthur2006k} and use
+\cite{dias2019fuzzy} for the implementation of FCM.
+We use the commonly chosen $m=2$ in fuzzy clustering as the default value in all compared FCM models.
+The effect of $T_1$ is analyzed in detail in \cite{rose1998deterministic} and it behaves similarly in ISDA.
+Therefore, we set $T_1=1.0$ as the default value in all ISDA models.
+For the implementation of ISDA,
+we use the squared Euclidean distance as the distance measure and apply the following 
+stopping criterion, 
+we use the default optimality tolerance $ \Delta F_{ISDA}(Y) \leq 10^{-6}$ in MATLAB
+as the stopping criteria. 
+
+\subsection{Boundary Points} \label{metric}
+\textbf{M-BoundaryDist}
+In this paper, we propose a metric called M-BoundaryDist
+as a measure of how well a clustering algorithm performs
+with respect to the boundary points.
+The boundary points are used to measure the worst-case scenarios.
+First, we define the \textit{centroid} of one dataset as the mean of the dataset
+averaged over each dimension. 
+The \textit{boundary points} of the dataset is the points far away from 
+the centroid of the dataset. 
+We denote the centroid of the dataset $D$ as $D_{centroid}$ and 
+the $M$ boundary points as \textit{M-BoundaryPoints}.
+Suppose the boundary points assigned to the cluster-$j$ are denoted as $x^{j}_1, \ldots ,x^{j}_{c_j}$,
+where $c_j$ is the number of boundary points assigned to the cluster-$j$
+and $y_j$ represents the cluster center.
+Next, M-BoundaryDist is defined as follows
+\begin{align*}
+  \text{M-BoundaryDist} = \sum_{j=1}^{C} \sum_{m=1}^{c_j} d(x^{m}_j,y_j).
+\end{align*}
+Clearly, $\sum_{j=1}^{C}c_{j}=M$.
+When $M=1$, the boundary point is called MaxBoundaryPoint and the corresponding
+distance is called MaxBoundaryDist.
+
+
+\begin{figure}
+  \begin{center}
+  \includegraphics[width=.9\linewidth]{ISDA-MBoundaryPoints.pdf}
+  \end{center}
+\caption{Fuzzy-ISDA ($T_2=0.1$) clustering result of 
+four synthetic Gaussian datasets with 2,3,4,6 clusters.
+The data points are colored under the Fuzzy-ISDA clustering result.}
+\label{fig:ISDA-MBoundaryPoints}
+\end{figure}
+
+\autoref{fig:ISDA-MBoundaryPoints}(a),(b),(c),(d) shows Fuzzy-ISDA($T_2=0.1$) clustering result
+of four synthetic Gaussian datasets with 2,3,4,6 clusters respectively.
+The details of the datasets are in Appendix C.
+The figure shows the dataset centroids, 10-BoundaryPoints, 
+true centers and Fuzzy-ISDA clustering centers.
+\autoref{fig:ISDA-MBoundaryPoints} shows that Fuzzy-ISDA centers are closer
+to the boundary points of the dataset compared with true centers.
+
+\subsection{Effect of $T_2$} \label{T2}
+\begin{figure*}
+  \begin{center}
+  \includegraphics[width=.9999\linewidth]{boundaryPoints_clusterCenter_diffT2.pdf}
+  \end{center}
+\caption{Results of Fuzzy-ISDA, ISDA, FCM and Kmeans centers of $T_2$ changes from 0.1 to 1.0.
+The training dataset are colored under Fuzzy-ISDA clustering results.
+$-\sum_{i=1}^{N} w_i log w_i$ measures the entropy of the importance sampling weight of Fuzzy-ISDA.}
+\label{fig:diffT2}
+\end{figure*}
+
+\begin{table}
+  \caption{\label{tab:ISDA-T2}
+   Comparison of MaxBoundaryDist of Fuzzy-ISDA, ISDA, FCM and Kmeans under different $T_2$.
+   MBD represents MaxBoundaryDist and Entropy represents $-\sum_{i=1}^{N} w_i log w_i$.
+   ``\textit{Fuzzy-}'' means Fuzzy-ISDA. ``\textit{--}'' means not available.}
+  \centering
+  \begin{tabular}{ lccccc }
+      \hline
+      Model&$T_2$& Fuzzy-Entropy & Fuzzy-MBD & Entropy & MBD \\
+      \hline
+      Kmeans&--&--&--&--&8.89\\
+      FCM   &--&--&--&--&8.31\\
+      ISDA&0.1&4.19&2.97&2.97&3.53\\
+      ISDA&0.2&4.44&4.03&3.50&3.69\\
+      ISDA&0.3&4.69&5.26&3.92&3.87\\
+      ISDA&0.4&5.02&6.29&4.30&4.06\\
+      ISDA&0.5&5.32&6.94&4.63&4.26\\
+      ISDA&0.6&5.55&7.38&4.91&4.46\\
+      ISDA&0.7&5.71&7.70&5.16&4.67\\
+      ISDA&0.8&5.83&7.95&5.36&4.87\\
+      ISDA&0.9&5.92&8.15&5.52&5.06\\
+      ISDA&1.0&5.99&8.31&5.65&5.25\\
+      ISDA&1.5&6.17&8.75&6.04&6.06\\
+      ISDA&2.0&6.25&8.80&6.19&6.65\\      
+      \hline 
+  \end{tabular}
+\end{table}
+
+\begin{figure}
+  \begin{center}
+  \includegraphics[width=.99\linewidth]{Dist-W-T2-eps-converted-to.pdf}
+  \end{center}
+\caption{Comparison of weight distributions under different $T_2$.
+The annotation shows the maximum weights $w_i$ under different $T_2$.
+The dashed lines zoom in the weight distributions between [0,0.01].} 
+\label{fig:Dist-W-T2}
+\end{figure}
+
+In this section, we analyze the effect of the temperature $T_2$.
+\autoref{fig:diffT2} displays the ISDA clustering result under different $T_2$ together with FCM and Kmeans. 
+\autoref{tab:ISDA-T2} compares MaxBoundaryDist under different $T_2$. 
+\autoref{fig:Dist-W-T2} shows the weight distributions among different $T_2$.
+
+\autoref{fig:diffT2} compares clustering centers of Fuzzy-ISDA, ISDA, FCM and Kmeans under different $T_2$. 
+The figure shows that as $T_2$ gets smaller, the trend that Fuzzy-ISDA centers(red points)
+moving towards boundary points is very clear.
+When $T_2$ changes from 1.0 to 0.1,
+the cluster center of green points moves upper left, 
+the cluster center of orange points moves lower left and 
+the cluster center of light blue points moves right.
+The cluster centers of Fuzzy-ISDA and ISDA are closer to the boundary points 
+compared with FCM and Kmeans.
+Meanwhile, \autoref{tab:ISDA-T2} compares numeric results of MaxBoundaryDist under different $T_2$.
+As $T_2$ gets smaller, MaxBoundaryDist becomes smaller in both models.
+When $T_2\in [0.1, 1.0]$, MaxBoundaryDist of Fuzzy-ISDA is smaller than that of Kmeans and FCM,
+this observation shows that Fuzzy-ISDA performs better than Kmeans and FCM in terms of 
+distances to MaxBoundaryPoint when $T_2$ is small.
+Moreover, \autoref{fig:diffT2}(a) shows that
+the centers of Fuzzy-ISDA($T_1=1,T_2=1$) overlap with the centers of FCM($m=2$)
+and \autoref{tab:ISDA-T2} shows MaxBoundaryDist of Fuzzy-ISDA($T_1=1,T_2=1$) 
+is equal to MaxBoundaryDist of FCM($m=2$).
+This observation validates the result in \autoref{ISDA-FCM}.
+Since the performance of Fuzzy-ISDA is more stable than that of ISDA, 
+we use Fuzzy-ISDA as the default model in the following experiments.  
+
+
+Then, we analyze how $T_2$ affects the weight distributions in Fuzzy-ISDA.
+\autoref{fig:Dist-W-T2} compares the weight distributions under different $T_2$.
+The figure shows that smaller $T_2$ leads to more sharply peaked weight distribution
+while larger $T_2$ leads to broader weight distribution.
+The maximum weight of three models under $T_2=0.3$, $T_2=0.5$, $T_2=0.7$ in Fuzzy-ISDA are
+0.121, 0.053 and 0.027 respectively.
+This is because as $T_2 \rightarrow 0$, the distribution $KL(w(x_i) \parallel \{\frac{1}{N}\})$
+can be very large, in other words, smaller $T_2$ leads to more sharply peaked distribution.
+Numeric results in \autoref{tab:ISDA-T2} also show that as $T_2$ gets smaller,
+the entropy $-\sum_{i=1}^{N} w_i log w_i$ gets smaller.
+
+\subsection{Distribution Shift} \label{dist-shift}
+In previous sections, we validate that the centers of Fuzzy-ISDA are closer to the boundary points 
+compared with FCM and Kmeans when $T_2$ is small. 
+In this section, we mimic possible future distribution shifts by generating shifted Gaussians
+and show that Fuzzy-ISDA performs better when the distribution shift is large. 
+The distance between the original and the shifted Gaussian distributions is calculated by the KL divergence. 
+Suppose there are two multivariate Gaussian distributions $\mathcal{N} (\mu_1, \Sigma_1)$
+and $\mathcal{N} (\mu_2, \Sigma_2)$, the KL divergence between the above two distributions
+is defined as follows\cite{duchi2007derivations}
+\begin{align*}
+  \medmath{\text{KL-Dist} = \frac{1}{2} \bigl( log \frac{det \Sigma_2}{det \Sigma_1} - n + tr(\Sigma_2^{-1} \Sigma_1)
++ (\mu_2 - \mu_1)^{T} \Sigma_2^{-1} (\mu_2 - \mu_1)\bigr)}
+\end{align*} 
+where $n$ is the number of dimensions of the data. 
+Two types of distribution shift are considered here, first is the translation of the Gaussian mean
+and the second is the scale of the Gaussian covariance matrix. 
+For mean translation, a shifted distribution is generated from a new mean under the same covariance matrix. 
+The new means are selected evenly on the circumference of the circle centered at the original mean $(a,b)$
+with a radius of $R$. Here, we call $R$ the shifted mean distance
+and larger $R$ implies larger distribution shifts.
+The polar coordinates of the circle are defined as 
+$x = R * cos(\phi) + a$ and $y = R * cos(\phi) + b$ where $\phi \in [0, 2\pi]$.
+In this experiment, 13 equiangularly spaced points are selected,
+therefore three Gaussians in the default dataset lead to 13*13*13=2197 shifted Gaussian distributions in total.
+For the covariance scale, the shifted distribution is generated from a scaled covariance matrix
+by simply multiplying a scaling factor under the same mean.
+These 13 scaling factors ($S$) are chosen from \{0.5,0.6,0.7,0.8,0.9,1.0,1.5,2,2.5,3,3.5,4,4.5\}.
+The total KL divergence between the original and the new dataset is calculated by summing
+three KL divergence together, which is 
+$\text{KL-Dist} = \text{KL-Dist}_1 + \text{KL-Dist}_2 + \text{KL-Dist}_3$.
+
+\begin{figure}
+  \begin{center}
+  \includegraphics[width=.9999\linewidth]{dist-shift-eps-converted-to.pdf}
+  \end{center}
+\caption{Original and shifted datasets under maximum and minimum KL divergence.
+(a) and (b) show maximum and minimum distribution shifts under mean translation
+where $R$ represents the shifted distance.
+(c) and (d) show maximum and minimum distribution shifts under scaled covariance where
+$S1$, $S2$ and $S3$ represent the scaling factors.
+(d) shows the same distribution under a different random seed since all three covariance scaling factors are 1.0.
+``A-'' represents WithinClusterDist and 
+``A-diff'' represents the difference between WithinClusterDist between Kmeans and Fuzzy-ISDA($T_2=0.1$).}
+\label{fig:dist-shift}
+\end{figure}
+\begin{figure}
+  \begin{center}
+  \includegraphics[width=.9999\linewidth]{dist-shift-scatter-eps-converted-to.pdf}
+  \end{center}
+\caption{Comparison of WithinClusterDist difference against KL divergence 
+between the original and shifted distributions.  
+X-axis represents the KL divergence between the original distribution
+and the shifted distributions.
+Y-axis in (a) represents Kmeans's WithinClusterDist minus Fuzzy-ISDA($T_2=0.1$)'s WithinClusterDist.
+Y-axis in (b) represents FCM's WithinClusterDist minus Fuzzy-ISDA($T_2=0.1$)'s WithinClusterDist.
+The black dotted horizontal line represents WithinClusterDist difference equals zero.
+In the legend, $R$ represents shifted mean distance, 
+\textit{pos} and \textit{neg}
+represent the ratio of positive and negative distance difference respectively.}
+\label{fig:dist-shift-scatter}
+\end{figure}        
+
+In this experiment, 
+we first get three models (Fuzzy-ISDA($T_2=0.1$), FCM and Kmeans) under the default dataset,  
+then generating new datasets under the shifted distributions, 
+next predicting on the shifted dataset and calculating within cluster sum of distances, 
+denoted as \textbf{WithinClusterDist}.
+The metric WithinClusterDist is used to measure 
+\textit{how well a clustering model performs under a future distribution shift},
+which is calculated by summing all distances within each cluster.
+Specifically, suppose the new data points in the shifted distribution
+assigned to the cluster-$j$ are denoted as ${x^{*}}^{j}_1, \ldots ,{x^{*}}^{j}_{A^{*}_j}$,
+where $A^{*}_j$ denotes the number of points in cluster-$j$ and $y_j$ 
+represents the cluster center of the original dataset,
+WithinClusterDist is defined as follows,
+\begin{align*}
+  \text{WithinClusterDist} = \sum_{j=1}^{C} \sum_{m=1}^{A^{*}_j}d({x^{*}}^{j}_{m}, y_j).
+\end{align*}
+We calculated 2197 WithinClusterDist and show the maximum and the minimum ones
+with respect to the KL divergence, which are shown in \autoref{fig:dist-shift}.
+WithinClusterDist of three clustering models are shown in the title of each subplot.
+\autoref{fig:dist-shift}(a) and \autoref{fig:dist-shift}(b) show maximum and minimum distribution shifts under mean translations.
+The difference on WithinClusterDist between Fuzzy-ISDA and Kmeans is 531.98 and 264.09 when $R=3.0$ and $R=1.5$ respectively.
+\autoref{fig:dist-shift}(c) and \autoref{fig:dist-shift}(d) show maximum and minimum distribution shifts under scaled covariances.
+The difference on WithinClusterDist between Fuzzy-ISDA and Kmeans is 267.20 and -523.72 when $S=4.5$ and $S=1.0$ respectively.
+\autoref{fig:dist-shift} shows that 
+Fuzzy-ISDA performs better than FCM and Kmeans when the distribution shift is large as in (a), (b), (c)
+while performs worse than FCM and Kmeans when the distribution shift is small in (d).
+
+Furthermore, \autoref{fig:dist-shift-scatter} compares WithinClusterDist difference
+between Fuzzy-ISDA and Kmeans(FCM) against KL divergence under different shift translation factor $R$.
+Within each subplot, we can see that larger $R$ leads to larger KL divergence,
+which implies larger distribution shifts.
+Points above zero (black dotted line) mean Fuzzy-ISDA performs better while 
+points below zero mean Fuzzy-ISDA performs worse.
+The ratios of positive and negative WithinClusterDist difference are shown in the legend.
+In (a), when $R$ equals \{1.5, 2.0, 2.5, 3.0\}, the ratio that Fuzzy-ISDA performs better than Kmeans 
+is \{0.40, 0.67, 0.89, 0.98\}. 
+In (b), when $R$ equals \{1.5, 2.0, 2.5, 3.0\}, the ratio that Fuzzy-ISDA performs better than FCM 
+is \{0.42, 0.69, 0.90, 0.99\}. 
+This observation shows that Fuzzy-ISDA performs better
+when the distribution shift becomes larger, which validates our assumption that 
+Fuzzy-ISDA can \textit{do best in the worst case} where the level of ``worse'' 
+is measured by the KL divergence. 
+
+
+\section{Load forecasting} \label{load-forecasting}
+\begin{figure}
+  \begin{center}
+  \includegraphics[width=.9\linewidth]{month_load-eps-converted-to.pdf}
+  \end{center}
+\caption{Normalized load in 2014 for each month on testing dataset.
+X-axis represents the time index.}
+\label{fig:month-load}
+\end{figure}
+
+In this section, we evaluate the properties of our proposed Fuzzy-ISDA clustering algorithm on a real-world load forecasting problem.
+First, we give the outline of the method and then explain it in detail.  
+Following \cite{fan2006short,dong2017short,liu2018short}, we use a two-stage method. 
+First, three clustering models(Kmeans, FCM and Fuzzy-ISDA) are applied to separate the training days
+into several clusters in an unsupervised manner. 
+Second, for each time stamp (96 time stamps in total), 
+a Support Vector Regression\cite{smola2004tutorial} model is used to fit training data in each cluster in a supervised manner. 
+For each testing day, it is first assigned to a cluster according to the trained clusters, 
+then for each time stamp, using the corresponding regression model for the cluster and predicting the result. 
+
+Specifically, the load forecasting dataset \footnote{\url{http://shumo.neepu.edu.cn/index.php/Home/Zxdt/news/id/3.html}}
+we use in this section is from The Ninth Electrician Mathematical Contest in Modeling in China, 
+which is composed of two parts: historical loads and weather conditions.
+Daily load is recorded every 15 minutes, 96 records in total.
+Each record time is called a time stamp in this paper. 
+The weather dataset consists of daily maximum, minimum and mean temperature, 
+humid and rainfall. The time range is from 20120101 to 20141231. 
+We use the consecutive 24 months as the training dataset and the following one month as 
+testing dataset. For example, if the training dataset ranges from 20120201 to 20140131,
+the corresponding testing dataset is from 20140201 to 20140228.
+There are 12 testing datasets, from January to December.
+Take February as an example, the length of the training dataset is 731 and
+the length of testing dataset is 28, therefore 
+the shapes of training and testing load data are [731,96] and [28,96] respectively. 
+We normalize the training dataset for each time stamp by $\frac{x-x_{max}}{x_{max}-x_{min}}$.
+The testing dataset is normalized using the statistics from the training dataset, $x_{max}$ and $x_{min}$.
+The normalized monthly load series is shown in \autoref{fig:month-load}.
+
+
+Next, we explain the features used for clustering and regression models. 
+Inspired from \cite{fan2006short}, we use the following available features for clustering:
+previous day's maximum daily load, last week's average maximum daily load,
+average of the previous two days' mean temperature.
+Therefore, the shape of training feature for the clustering models is [731,3]. 
+Meanwhile, the regression features are historical loads 
+from previous \{24,25,26,48,72,96,120,144,168\} hours,
+which means previous \{96, 100, 104, 192, 288, 384, 480, 576, 672\}
+time stamps. This is because there are 4 records per hour. 
+As a result, the regression feature is of length 9. 
+In this paper, we use Support Vector Regression(SVR) as the regression model
+where the regularization parameter $SVR_{C}$ and the epsilon $SVR_{\epsilon}$ are set to 1 and 0.1,
+which are the default values for the SVR model in sklearn\cite{scikit-learn} package.
+Finally, we explain the training routine in detail. 
+The training days are first separated into $C$ clusters based on the clustering features.
+Then, for each cluster, we train 96 SVRs, one for each time stamp.
+For each test day in the test dataset, we first predict which cluster it belongs to based on its clustering features. 
+Next, for each time stamp, we find its corresponding regression model and make the prediction.
+Mean squared error (MSE) is used to measure the performance of the model,
+\textit{smaller MSE implies more reasonable separation of clusters}.
+In this section, we use $T_2=0.1$ as the default value in Fuzzy-ISDA models and
+for each model, we use different random seeds and report the mean of 6 runs.
+
+
+\begin{figure}
+  \begin{center}
+  \includegraphics[width=.9\linewidth]{max_weight-eps-converted-to.pdf}
+  \end{center}
+\caption{Fuzzy-ISDA($T_2=0.1$) weights and the corresponding average daily load of each training day.
+The model is trained with 3 clusters on February.
+The top 1\%(73) weights and their corresponding daily loads are highlighted by red stars.
+max{\_}W{\_}num means the selected number of largest weights.}
+\label{fig:max-weight}
+\end{figure}
+
+\begin{figure}
+  \begin{center}
+  \includegraphics[width=.9\linewidth]{month_mse.pdf}
+  \end{center}
+\caption{Comparison of test mean squared error of three clustering models for each month.
+X-axis shows the number of clusters $C$.
+Y-axis shows the test mean squared error.
+Dotted lines represent means and shaded areas represent standard deviations of 6 runs.}
+\label{fig:month-mse}
+\end{figure}
+
+\begin{table}
+  \caption{\label{tab:power-test-mse}
+  Fuzzy-ISDA($T_2=0.1$), FCM and Kmeans' test MSE for 12 months.
+  The best mean of 6 runs are reported
+  and the best result in each row is marked in bold.}
+  \centering
+  \small
+  \begin{tabular}{lccc}
+      \hline
+        Month & Kmeans & FCM & Fuzzy-ISDA$(T_2=0.1)$ \\
+      \hline
+      1 & 0.006490 & 0.006254 & \textbf{0.005157} \\   
+      2 & 0.017547 & 0.016247 & \textbf{0.007210}  \\  
+      3 & \textbf{0.003348} & 0.003368 & 0.003398  \\  
+      4 & 0.005413 & 0.005045 & \textbf{0.004742}  \\  
+      5 & 0.008841 & 0.009042 & \textbf{0.007786}  \\  
+      6 & 0.019318 & 0.019131 & \textbf{0.018890}  \\  
+      7 & 0.019871 & \textbf{0.017205} & 0.017815  \\  
+      8 & 0.007177 & 0.007041 & \textbf{0.006707}  \\  
+      9 & 0.010046 & 0.010002 & \textbf{0.009837}  \\  
+      10 & 0.008517 & 0.008667 & \textbf{0.008115}  \\  
+      11 & 0.004919 & 0.005071 & \textbf{0.004880}  \\  
+      12 & 0.003682 & \textbf{0.003654} & 0.004059  \\  
+      \hline
+  \end{tabular}
+\end{table}
+
+First, \autoref{fig:max-weight} shows the importance sampling weight $W$ and 
+the average daily loads of the training dataset. 
+The training dataset contains 731 days and 
+the Fuzzy-ISDA($T_2=0.1$) model is trained with $C=3$ clusters on February.
+\autoref{fig:max-weight}(a) shows Fuzzy-ISDA weights for each day
+and \autoref{fig:max-weight}(b) shows each day's average daily load.
+The largest 1\% weights and its corresponding daily loads 
+are highlighted by red stars.
+\autoref{fig:max-weight}(b) shows that daily loads with higher
+weights are around the valleys, which are the data points with extreme values. 
+This is because the clustering features are partly based on a day's previous daily loads.
+As a result, the data points around valleys and preceding the valleys 
+are of higher weigths. 
+This observation shows that Fuzzy-ISDA clustering algorithm puts higher weights on
+the data points with extreme values. 
+
+Second, we compare the performance of Kmeans, FCM($m=2$) and Fuzzy-ISDA($T_2=0.1$) on testing dataset.
+For each clustering model, \autoref{tab:power-test-mse} reports the lowest test MSE 
+among the models with different number of clusters, which is $C=2,3,4,5,6,7,8,9,10$.
+\autoref{tab:power-test-mse} shows that Fuzzy-ISDA($T_2=0.1$) performs better
+on 9(1,2,4,5,6,8,9,10,11) out of 12 months compared with Kmeans and FCM.
+\autoref{fig:month-mse} shows the test MSE of these models on 12 months and 9 clusters in detail.
+Since the distribution of testing dataset is different from the training dataset,
+results in \autoref{fig:month-mse} and \autoref{tab:power-test-mse} 
+validate the effectiveness of Fuzzy-ISDA under future distribution shifts in most scenarios.
+
+\section{\textbf{Conclusion}} \label{conclusion}
+In this paper, we propose an Importance Sampling Deterministic Annealing(ISDA) clustering method,
+which combines importance sampling and determinisic annealing to solve the problem of 
+data distribution deviation clustering problems. 
+The objective function of ISDA is derived from an information-theoretical viewpoint and 
+\autoref{ISDA-FCM} reveals that FCM is a special case of ISDA and the fuzzy exponent $m$
+can be interpreted as the recalibration of temperature in thermodynamic system.
+This observation shows that Fuzzy c-means has a solid theoretical rationale.
+Experiment results show that ISDA performs better in worst-case scenarios
+compared with Kmeans and FCM on both synthetic and real-world datasets.
+Besides, there are many possible applications for ISDA 
+such as designing a deliver system considering
+not only economic benefits but also reachability to remote areas;
+designing a recommendation system for users with few ratings and 
+designing a fair face recognition system taking care of the minority.
+Applying ISDA to these problems will be studied in our future work. 
+
+\section*{\textbf{Disclosure statement}}
+No potential conflict of interest was reported by the authors.
+
+\section*{Acknowledgments}
+This work is supported by 
+the National Natural Science Foundation of China under Grants 61976174.
+Lizhen Ji is addtionally supported by the 
+Nature Science Basis Research Program of Shaanxi (2021JQ-055).
+
+\bibliographystyle{IEEEtran} 

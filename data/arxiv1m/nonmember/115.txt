@@ -1,0 +1,417 @@
+\section{Introduction}\label{sec:introduction}
+
+A well understood property of learned models is that semantically indistinguishable samples can yield different model outputs~ \cite{biggio2013evasion}. When constructed deliberately, such samples are known as \textit{adversarial examples}. These examples, and their associated adversarial attacks pose a significant risk for models which are deployed within contexts where incentives to manipulate the output exist. This risk grows all the more when the difference between the example and the original sample point is minimised, as this heightens the difficulty of detecting such examples. 
+
+In contrast to detecting examples, \emph{adversarial defences} attempt to mitigate attack effects. While partially successful, these approaches are typically tied to particular attacks, and as such can be evaded by considering different attack pathways. Rather than attempting to defend against specific attacks, \emph{certified guarantees} of adversarial robustness eschew the attacker-defender paradigm by providing a (possibly high-probability) guarantee that no adversarial examples exist within a bounded region.
+
+It is well known that models endowed with certified guarantees can still admit practical attacks~\cite{cohen2019certified}. In fact, as we report on,  \emph{certified guarantees themselves can be exploited} to more efficiently construct adversarial perturbations. While these perturbations exist outside the certification region, exploiting this previously unavailable attack surface allows for the construction of adversarial perturbations that are smaller than state-of-the-art. Such perturbations have a higher chance to evade detection, even in the case of human-in-the-loop verification systems~\cite{gilmer2018motivating}. 
+
+Motivated by the potential for misuse of certifications, we seek to answer the following questions:
+\begin{enumerate}
+    \item How should adversarial examples be defined against models defended by Randomised Smoothing? 
+    \item Can current approaches for attacking neural networks be extended to attack certifiably robust models? 
+    \item Is it possible to exploit the nature of certifications to improve the efficacy of constructing adversarial attacks? 
+\end{enumerate}
+The last of these questions is both the most intriguing and concerning, as it suggests that the very tools that we deploy to hinder adversarial attacks may also benefit the attackers.%
+
+While uncovering new attacks has the potential to compromise deployed systems, there is a prima facie argument that any security provided by ignoring new attack vectors is illusory. Taking such a perspective has allowed security researchers to uncover attack vectors ranging from adversarial examples through to data poisoning, backdoor attacks, model stealing, transfer attacks and more. Within this work we demonstrate how the nature of certified guarantees admits a heretofore undiscovered attack surface, which allows norm-minimising adversarial examples to be detected through what we dub a \emph{Certification Aware Attack}.
+
+
+
+\section{Adversarial Examples}\label{sec:related_work}
+
+
+It has been consistently demonstrated that learned models can be exploited to produce highly confident but incorrect predictions~\cite{szegedy2013intriguing}, which can oftentimes be driven by the existence of piecewise-linear intra-model  interactions \cite{goodfellow2014explaining}.
+While many vectors exist to exploit this vulnerability, within this work we focus exclusively upon mechanisms that construct adversarial perturbations to evaluation-time (rather than training-time) data in a fashion that changes the model's output class. 
+
+The distance between an adversarial example and its corresponding sample point can be a reliable proxy for the \emph{detectability} of the adversarial example~\cite{gilmer2018motivating} and attacker cost~\cite{huang2011adversarial}. While their motivations vary, both attackers and defenders seek to find the distance to the nearest possible adversarial attack
+\begin{align}\label{eqn:r_definition}
+    r &= \argmin_{\mathbf{x}' \in \Omega} \|\mathbf{x}' - \mathbf{x} \|_p \\
+    &\text{   where } \Omega = \{\mathbf{x}' \in [0,1]^d | F(\mathbf{x}') \neq F(\mathbf{x}) \}\nonumber %
+\end{align}
+to a sample point $\mathbf{x} \in [0,1]^d$ to be attacked. Here $r$ is the $p$-norm distance to the nearest possible adversarial example; and $F(\mathbf{x})$ is a mechanism that outputs a predicted class. %
+
+
+While many approaches exist for constructing $\mathbf{x}'$, within this work we focus upon a set of key, representative techniques, that will serve as the basis of comparison to our new adversarial attack. The first of these is known as the Iterative Fast Gradient Method \cite{dong2018boosting} variant of Projected Gradient Descent (PGD) \cite{carlini2017towards}, which iteratively constructs adversarial examples by way of
+\begin{equation}\label{eqn:PGD_its}\boldsymbol{x}_{k+1} = P \left( \boldsymbol{x}_{k} - \epsilon \left(\frac{\nabla_{\boldsymbol{x}} J(\theta, \boldsymbol{x}, y)}{\norm{\nabla_{\boldsymbol{x}} J(\theta, \boldsymbol{x}, y)}_{2}}\right) \right)\enspace.\end{equation}
+This process exploits gradients of the loss $J(\theta, \boldsymbol{x}, y)$ to construct steps, subject to a step-size weighting parameter $\epsilon$, and a projection operator $P$ that ensures that $\boldsymbol{x}_{k+1}$ is restricted to the feasible input space, which is typically $[0,1]^d$ for a $d$-dimensional input space. Many PGD extensions exist, including momentum-based variants \cite{dong2018boosting} and AutoAttack \cite{croce2020reliable}. 
+
+Of these extensions, AutoAttack has received significant attention due to its prowess in identifying adversarial examples. In contrast to PGD, which sets a fixed step-size $\epsilon$, AutoAttack algorithmically specifies the step-size at each stage of its iterative process in the aide of converging upon adversarial examples with a pre-specified $L_2$ norm perturbation magnitude (which obtusely is also labelled as $\epsilon$). This pre-specified perturbation is problematic within contexts for which a norm-minimising perturbation is desirable. Our preliminary investigations have suggested that the only way to minimise the perturbation magnitude is to perform a greedy search over a range of possible pre-specified magnitudes, which is inherently problematic due to the computational cost of employing AutoAttack. 
+
+
+
+\citet{carlini2017towards} (C-W) construct adversarial perturbations by way of the  minimisation problem
+\begin{align}\label{eqn:CW}
+    \min_{\boldsymbol{x}'} & \left\{ \norm{\boldsymbol{x}' - \boldsymbol{x}}_{2}^{2} + \right. \\
+    & \left. \max \left\{ \max \{ f_{\theta}(\boldsymbol{x}')_{j} : j \neq i\} - f_{\theta}(\boldsymbol{x}')_{i}, -\kappa \right\} 
+    \vphantom{ \norm{\boldsymbol{x}' - \boldsymbol{x}}_{2}^{2} }
+    \right\} \enspace, \nonumber %
+\end{align}
+which constructs an attack $\mathbf{x}'$ in terms of the trained model $f_{\theta}(\boldsymbol{x})$ (with weights $\theta$). Equation~\ref{eqn:CW} then compares the logit value of the target class $i$ with that of the next most likely class, subject to the parameter $\kappa$. The gradients of the solution to this are then solved in the fashion of Equation~\ref{eqn:PGD_its}. %
+
+The final baseline attack that we will consider is DeepFool, which constructs untargetted $L_2$-norm attacks by attacking a linearised variant of the model. This proxy model is then updated using information from the attacks~\cite{moosavi2016deepfool} in a manner that allows for automatic step-size control.%
+
+\subsection{Certification Mechanisms}
+
+
+Rather than focusing upon any one adversarial example, certification mechanisms conceptually invert Equation~\ref{eqn:r_definition}, using it instead as a framework for attempting to provably guarantee the lack of adversarial examples up to some radius $r$. However, attempting such a process directly by rigorously exploring the input space of $\mathbf{x}'$ to comprehensively define $\Omega$ would be prohibitively expensive. Instead certification mechanisms typically examine the neighbourhood of $\mathbf{x}$ to find some proxy to $r$, that guarantee (or to high probability ensures) that the predicted class changes.
+
+One common mechanism for constructing such certifications is \emph{randomised smoothing}~\cite{lecuyer2019certified}, which employs repeated sampling to certify against \emph{additive} perturbations up to some $L_p$-norm $r$ against a \emph{smoothed} version of the classifier, yielding an isotropic region of guaranteed class invariance covering
+\begin{equation}
+    B_P(\mathbf{x}, r) := \left\{\mathbf{y} \in [0,1]^d | r \geq \|\mathbf{y} - \mathbf{x}\|_{P} \right\}\enspace.
+\end{equation}
+The smoothed classifier involves estimating the expected output of the model under repeated samples of Gaussian noise, such that
+\begin{align}\label{eqn:expectations}
+    E_{\mathbf{X}}[&\argmax f_{\theta}(\mathbf{X}) = i] \approx \frac{1}{N} \sum_{j=1}^{N} \mathds{1}[\argmax f_{\theta}(\mathbf{X}) = i] \nonumber \\
+        &\mathbf{X} \stackrel{i.i.d.}{\sim} \mathbf{x} + \mathcal{N}(0, \sigma^2)\enspace.
+\end{align}
+Making this approximation makes constructing certifications computationally tractable, but comes at the cost of relaxing the associated guarantees from an absolute absence of adversarial examples to a high probability guarantee. 
+
+Numerous mechanisms exist for constructing certifications within such a framework, including differential privacy~\cite{lecuyer2019certified,dwork2006calibrating}, R\'{e}nyi divergence \cite{li2018certified}, and parametrising worst-case behaviours \cite{cohen2019certified, salman2019provably, cullen2022double}. The latter of these approaches has proved the most performant, and yields certifications that resemble
+\begin{equation}\label{eqn:Cohen_Bound}
+r = \frac{\sigma}{2} \left( \Phi^{-1}\left(\widecheck{E}_{0}[\mathbf{x}]\right) - \Phi^{-1}\left(\widehat{E}_{1}[\mathbf{x}]\right) \right)\enspace.
+\end{equation}
+In the interests of simplifying notation, we define $(E_0, E_1) = \topk\left(E_{\mathbf{X}}[\argmax f_{\theta}(\mathbf{X}) = i], 2\right)$ for the two largest class expectations. These quantities are mapped into what are respectively the lower and upper bounds $(\widecheck{E}_0, \widehat{E}_1)$ to some confidence level $\alpha$ (as calculated by way of the Goodman \etal \cite{goodman1965simultaneous} confidence interval). Beyond this $\sigma$ represents the level of additive noise, and $\Phi^{-1}$ is the inverse normal CDF, or Gaussian quantile function. 
+
+This is not to say that randomised smoothing is the only mechanism for achieving certifications. Other approaches typically attempt to construct bounding polytopes using either propagating interval bounds through the model (Interval Bound Propagation or IBP); or employing linear relaxation to construct bounding output polytopes over input bounded perturbations~\cite{salman2019convex, mirman2018differentiable, weng2018towards, CROWN2018, zhang2018efficient, singh2019abstract, mohapatra2020towards}, which generally provides tighter bounds than IBP~\cite{lyu2021towards}.
+
+In contrast to randomised smoothing, IBP and convex relaxation employ augmented training processes to incentivise tight bounds \cite{xu2020automatic}, which requires significant model re-engineering. Moreover both of these approaches exhibit a time and memory complexity that makes them infeasible for complex model architectures or high-dimensional data~\cite{wang2021beta, chiang2020certified, levine2020randomized}. While the mechanisms that we will describe in the following sections can be applied to these methods, for the remainder of this work we will focus upon the more popular and scalable randomised smoothing.
+
+\section{Attacking Randomised Smoothing}\label{sec:attacking_randomised}
+
+That randomised smoothing constructs high-concentrated outputs that are nonetheless still random suggests that particular care is required to define what a successful adversarial attack looks like. One approach would be to attack the individual model draws under noise, in a fashion similar to Expectation Over Transformation~\cite{athalye2018synthesizing}. However, doing so would be inherently inefficient, as the attacker would eschew the advantages gained by the deterministic model structure in certification mechanisms. 
+
+Instead we suggest that a successful attack in this context should be one in which an adversarial perturbation $\boldsymbol{\delta}$ induces an expected class output change, of the form
+\begin{align} \label{eqn:general_robust}
+&\argmax_{i \in \mathcal{K}} E\left[f_j\left(\boldsymbol{X} + \boldsymbol{\delta} \right) = i \right] \\
+\neq & \argmax_{i \in \mathcal{K}} E\left[ f\left(\boldsymbol{X}\right) = i \right] \nonumber
+\end{align}
+for some model $f(\mathbf{x}) \in \mathcal{K}$. To ensure that this attack is \emph{confident}, and not a product of the uncertainties inherent in the Monte-Carlo expectation process of Equation~\ref{eqn:expectations}, we add the additional condition that 
+\begin{equation}\label{eqn:attack_criteria}
+    \widecheck{\mathbb{E}_{k}}[f_{\theta}(\mathbf{X} + \boldsymbol{\delta})] > \widehat{\mathbb{E}_{i}}[f_{\theta}(\mathbf{X} + \boldsymbol{\delta})] \; \text{, for some } k \in \mathcal{K} \setminus i \enspace.
+\end{equation}
+That the underlying attack framework is still deterministic (with high probability) allows any of the attack frameworks within Section~\ref{sec:related_work} to be applied to this problem space. 
+
+The very nature of randomised smoothing would at first principles suggest that it may be easier to attack models employing it as a certification mechanism, as the smoothing process is analogous to a Gaussian blur of the decision space. Such a blurring would likely decrease the local variance of gradients in this space, and make it easier to identify nearby adversarial examples. However, one complicating factor is the presence of nondifferentiable $\argmax$ layers at the final layer of models $f(\mathbf{x})$. This limitation can be circumvented by any attacker with sufficient access, by replacing $\argmax$ layers with the Gumbel Softmax~\cite{jang2016categorical}%
+\begin{equation}\label{eqn:gumbel}
+    y_i = \frac{\exp\left((\log(\pi_i) + g_i) / \tau \right)}{\sum_{j \in \mathcal{K}} \exp\left((\log(\pi_i) + g_i) / \tau \right)} \text{ for all } i \in \mathcal{K}\enspace.
+\end{equation}
+
+The ability of an attacker to modify the final layer to admit differentiation implies that the attacker must have some level of access to the model. However, such a level of access should be considered as a subset---rather than an extension---of the white-box assumption that is implicitly required to access gradient-based information. The only extension to a traditional white-box access model is the need to understand the level of added noise $\sigma$. 
+
+
+
+
+While such a white-box attack framework is limiting, prior works have demonstrated that it may be possible to successfully attack black-box models by way of surrogate models~\cite{papernot2017practical}, effectively converting black-box models into white-box models, that are suitable for attack. Moreover, as will be discussed in Appendix~\ref{app:sigma_accuracy}, the attacker does not require exact knowledge of $\sigma$, with even approximate values still yielding an attack which exhibits improved performance relative to comparable attacks. 
+
+We also emphasise that a number of other approaches can also be employed to circumvent concerns relating to differentiability, including stochastic gradient estimation~\cite{fu2006gradient, chen2019fast} and surrogate modelling. However, as the focus of this work is upon the applicability of attacks themselves, we choose to facilitate gradient-based adversarial attacks by way of the Gumbel-Softmax.
+
+
+
+\section{Certification Aware Attacks}\label{sec:CAA}
+
+The aforementioned approach allows any attack to be applied to models defended by randomised smoothing. However, %
+we may further improve attack efficiency by exploiting the guarantees of certified robustness to construct smaller adversarial perturbations. 
+This is made possible by considering certifications not as guarantees regarding where adversarial attacks can not exist, but but as lower bounds on the space where attacks may exist. 
+
+
+Certifications exist not just at a point of interest, but across the instance space~\cite{cullen2022double}. Accordingly, we can exploit not just the sample point's certification, but at all points along an attack's iterative sequence. Moreover, once we identify an adversarial example, the certifications associated with successful attacks can be \emph{exploited to minimise the perturbation norm of the attacks themselves}. 
+To achieve this, we begin by solving the surrogate problem 
+\begin{align}\label{eqn:surrogate_problem}
+\hat{\mathbf{x}} = & \argmin_{\hat{\mathbf{x}}} |E_0(\hat{\mathbf{x}}) - E_1(\hat{\mathbf{x}})| \\
+& \text{s.t.}\; \argmax f(\hat{\mathbf{x}}) = f(\mathbf{x})\enspace. \nonumber
+\end{align}
+This formalism may seem counter-intuitive: the constraint ensures that $\hat{\mathbf{x}}$ cannot be an adversarial example. However, consider the gradient-based solution of the previous problem
+\begin{equation}\label{eqn:CAA_iter}
+    \mathbf{x}_{i+1} = P\left(\mathbf{x}_{i} - \epsilon_i \left(\frac{\nabla_{\boldsymbol{x}_i} | E_0[\mathbf{x}_i] - E_1[\mathbf{x}_i] |}{\norm{ \nabla_{\boldsymbol{x}_i} | E_0[\mathbf{x}_i] - E_1[\mathbf{x}_i] |}} \right)\right)
+\end{equation}
+for which each $\mathbf{x}_i$ has associated certifications $r_i$. If we were to set that $\epsilon_i \leq r_i$, then by Equation~\ref{eqn:surrogate_problem} we can confidently state that $\mathbf{x}_{i+1}$ will always predict the same class as $\mathbf{x}_{i} \forall \text{ } i \in \mathbb{N}$, as each new sample does not move beyond the certified radius of the prior point, and thus $\mathbf{x}_{i+1}$ cannot elicit a change in the output class. However if we instead impose that $\epsilon_i \geq r_i$, we ensure that the new candidate solution $\mathbf{x}_{i+1}$ outside the region of certification of the previous point. Doing so is a \emph{necessary but not sufficient} condition for identifying an adversarial example.
+
+
+
+\subsection{Specifying $\epsilon_i$}\label{sec:specifying}
+
+One mechanism for ensuring that $\epsilon_i \geq r_i$ would simply be to set the $\epsilon_i$ of Equation~\ref{eqn:CAA_iter} to be
+\begin{equation}\label{eqn:epsilon_basic}
+    \epsilon_i = r(\mathbf{x}_i) \left(1 + \delta\right)\enspace,
+\end{equation}
+for some $\delta > 0$. However, in doing so we are only taking into account the region of certification at  $\mathbf{x}_{i}$, rather than for all $\mathbf{x}_{j}$ for $j = 0, \ldots, i$. The additional information about the potential region within which adversarial examples exist can be factored in by instead defining
+\begin{align}\label{eqn:epsilon_complex}  
+    \epsilon_i = & \left(1 + \delta \right) \argmax_{\hat{\epsilon}} \|\hat{\mathbf{x}}(\hat{\epsilon}) - \mathbf{x}_{i}\| \nonumber \\ 
+    &\text{ s.t. } \hat{\mathbf{x}} (\tilde{\epsilon}) \in \bigcup_{j=0}^{i} B_P(\mathbf{x}_{j}, \mathds{1}_{c_{0} = c_{j}} r_j) \text{ } \forall \text{ } \tilde{\epsilon} \in [0, \hat{\epsilon}], \nonumber \\
+    &\text{ where } c_i = \argmax_{i \in \mathcal{K}} E[f(\mathbf{x}) = i] \\ 
+    &\text{ and } \mathds{1}_{c_{0} = c_{i}} = \begin{cases}
+1\hspace{0.5cm} \text{if } c_{0} = c_{i}\\
+0\hspace{0.5cm} \text{if } c_{0} \neq c_{i}
+\end{cases}\nonumber %
+\end{align}
+for an $\mathbf{x}_{i+1}(\epsilon_i)$ as defined by Equation~\ref{eqn:CAA_iter}. 
+
+This condition attempts to find the step size $\epsilon_i$ that maximises the distance between $\mathbf{x}_i$ and a new candidate solution $\hat{\mathbf{x}}$, while ensuring that the vector spanning $\mathbf{x}_i$ and $\hat{\mathbf{x}}$ remains strictly inside the region of previously certified examples predicting the same class as the original sample point $\mathbf{x}_0$. 
+
+The multiplicative factor of $(1 + \delta)$ ensures that the new candidate solution remains outside the region of prior certification if $\delta > 0$. However, in practice taking such large steps may be disadvantageous in certain contexts, and as such in practice we define $\epsilon_i$ such that
+\begin{equation}\label{eqn:step_size_limits}
+\tilde{\epsilon}_i = \clip\left(\epsilon_i, \epsilon_{\text{min}}, \epsilon_{\text{max}} \right)\enspace,
+\end{equation}
+where $\check{\epsilon}_i$ and $\hat{\epsilon}_i$ are pre-defined lower- and upper-bounds upon $\epsilon_i$. The details of how these parameters can be set experimentally can be found in Appendix~\ref{app:parameter_exploration}. %
+
+\subsection{Refining Adversarial Examples}\label{sec:refining}
+
+
+
+
+
+The logic behind exploiting certifications to help guide identifying adversarial examples can also be applied to \emph{refine} any identified examples. In doing so, we are able to minimise the perturbation norm, and ideally decrease the detectability of the attack. To achieve this, consider 
+the point $\mathbf{x}_i$, which results in a class prediction $c_i \neq c_0$ and certification radii $r_i$. The very nature of this certification guarantees that a step of size $\epsilon_i \leq r_i$ will produce a class prediction $c_{i+1} = c_{i} \neq c_0$, leading to the iterative scheme%
+\begin{align}\label{eqn:correction}
+\mathbf{x}_{i+1}(\epsilon) &= \mathbf{x}_{i} + \epsilon \frac{\mathbf{x}_0 - \mathbf{x}_i}{\|\mathbf{x}_0 - \mathbf{x}_i\|}\\ 
+    \text{where } \epsilon_i &= (1 - \delta) \argmin_{\hat{\epsilon}} \|\hat{\mathbf{x}}(\hat{\epsilon}) - \mathbf{x}_0\| \nonumber \\
+    \text{ s.t. } \mathbf{x}_{i} + \tilde{\epsilon} \frac{\mathbf{x}_0 - \mathbf{x}_i}{\|\mathbf{x}_0 - \mathbf{x}_i\|} &\in \bigcup_{j=0}^{i} B_P(\mathbf{x}_{j}, \mathds{1}_{c_{0} \neq c_{j}} r_j) \text{ } \forall \text{ } \tilde{\epsilon} \in [0, \hat{\epsilon}] \nonumber %
+\end{align}
+At first glance, this may appear to be a restatement of Equation~\ref{eqn:epsilon_complex} subject to a modified condition on the set of $B_P$, however there are key differences in both the equations themselves and their implications. While Equation~\ref{eqn:epsilon_complex} attempts to identify the largest adversarial step size that ensures that $\mathbf{x}_{i+1}$ moves outside the region certified by all previous elements in the sequence, Equation~\ref{eqn:correction} instead identifies the largest step size perturbation that minimises the norm distance to $\mathbf{x}_0$ while retaining an adversarial perturbation relative to this points predicted class. %
+
+
+
+It must be emphasised though that this framing ensures that $c_{i} = c_{j} \text{ } \forall \text{ } j > i$---that is, once an adversarial example predicting a particular class has been identified, any subsequent adversarial examples will share the same prediction class. As such, even if the model is able to find the smallest adversarial example for the predicted class reached by this sequence, if the model is not a binary classifier it may be that there exists some adversarial example $\mathbf{x}''$ such that 
+$$\|\mathbf{x}'' - \mathbf{x}_0\| < \|\mathbf{x}_{i} - \mathbf{x}_0\| \qquad \forall \text{ } i \in \mathbb{N} \enspace.$$
+While the above may be true, we emphasise that this process still has the potential to yield significantly smaller adversarial perturbations than can be identified through other techniques, a result that is made possible by exploiting the additional attack surface introduced by certified robustness. 
+
+
+\subsection{Algorithm}\label{sec:main_algorithms_section}
+
+The aforementioned processes can be distilled into Algorithms~\ref{alg:CAA}, \ref{alg:model_predict} and \ref{alg:step_size}, the latter of which can be found within Appendix~\ref{app:algorithms}. Algorithm~\ref{alg:CAA} summarises the process of identifying a norm-minimisng adversarial example $\mathbf{x}'$, that induces a change in class prediction from $\mathbf{x}$. To ensure that a confident adversarial attack---in which $\widecheck{E}_0 > \widehat{E}_1$---is achieved the iterative process begins with Line $17$ minimising the gap between $\widecheck{E}_0$ and $\widehat{E}_1$, with each iterative step constructed such that the candidate attack is taken outside the certified radii of each prior sample. 
+
+Once a sample is found that changes the predicted class, but does not yet yield a confident solution, Line $13$ then attempts to maximise $\widecheck{E}_0 - \widecheck{E}_1$. Once a confident solution has been found Line $7$ minimises the norm difference between $\mathbf{x}'$ and $\mathbf{x}$. This step, while ostensibly trivial, is given utility by the constraint of Line $11$, which ensures that the candidate solution remains within region of samples which predict the adversarial class. A high level summary of this process can be seen within Figure~\ref{fig:circle_progressions}. Starting from an initial sample point of interest, we construct a $B_P(\mathbf{x}, r)$ describing the region of guaranteed class invariance for our learned function $f(\mathbf{x})$. 
+
+
+\begin{figure}
+    \centering
+    \includegraphics[width=.6\linewidth]{Figures/circles} 
+  \caption{Diagrammatic Representation of the process outlined within Algorithm~\ref{alg:CAA}. Here blue and red circles respectively represent certifications of the label class and certifications of an adversarial class, with arrows representing steps of the iterative process. }\label{fig:circle_progressions}   
+\end{figure}
+
+
+\begin{algorithm}[tb]
+   \caption{Certification Aware Attack Algorithm.}%
+   \label{alg:CAA}
+\begin{algorithmic}[1]
+   \STATE {\bfseries Input:} data $\mathbf{x}$, level of additive noise $\sigma$, samples $N$, iterations $M$, true-label $i$, minimum and maximum step size $\left(\epsilon_{\text{min}}, \epsilon_{\text{max}} \right)$, scaling factors $(\delta_1, \delta_2)$ [where $\delta_1 \in (0, 1)$ and $\delta_2 \in (1, \infty)$
+   \STATE $\mathbf{x}', \mathbf{x}'_s, m = \mathbf{x}, \mathbf{0}, \infty$
+   \STATE $\mathcal{S}_i = [] \text{ } \forall i \in \mathcal{K}$
+   \FOR{$1$ {\bfseries to} $M$}
+   \STATE  $\mathbf{y}, \widecheck{E}_0, \widehat{E}_1, r = \text{Model}(\mathbf{x}'; \sigma, N)$ \algorithmiccomment{Detailed in Algorithm~\ref{alg:model_predict}}
+   \STATE Append $(\mathbf{x}', r)$ to $\mathcal{S}_{\argmax \mathbf{y} = i}$
+   \IF{$\argmax_{j \in \mathcal{K}} y_j \neq i$}
+   \IF{$\widecheck{E}_0 > \widehat{E}_1$}
+   \STATE $d = \nabla_{\mathbf{x}'} \left( \norm{\mathbf{x}' - \mathbf{x}}\right)$ 
+   \IF{$\|\mathbf{x}' - \mathbf{x}\| < m$}
+   \STATE $m, \mathbf{x}'_s = \|\mathbf{x}' - \mathbf{x}\|, \mathbf{x}'$ \algorithmiccomment{New smallest perturbation has been identified}
+   \ENDIF
+    \STATE $\epsilon = $ Algorithm~\ref{alg:step_size}$(\mathcal{S}_{\argmax \mathbf{y} \neq i}, \mathbf{x}', d, r)$ %
+    \STATE $\epsilon = \clip(\delta_1 \epsilon, \epsilon_{\text{min}}, \epsilon_{\text{max}})$ %
+   \ELSE
+   \STATE $d = -\nabla_{\mathbf{x}'} \left( \widecheck{E}_0 - \widehat{E}_1 \right)$ %
+\STATE $\epsilon = \epsilon_{\text{min}}$ \algorithmiccomment{When $\widecheck{E}_0 < \widehat{E}_1$ it must be that $r=0$. Setting $\epsilon = \epsilon_{min}$ avoids this}   
+   \ENDIF
+   \STATE $\mathbf{x'} = P(\mathbf{x'} - \epsilon \frac{d}{\|d\|_2})$ \algorithmiccomment{Project upon $[0,1]^d$}
+   \ELSIF{$\argmax y = i$}
+    \STATE $\epsilon = $ Algorithm~\ref{alg:step_size}$(\mathcal{S}_{\argmax \mathbf{y} = i}, \mathbf{x}', d)$ %
+    \STATE $\epsilon = \clip(\delta_2 \epsilon, \epsilon_{\text{min}}, \epsilon_{\text{max}})$
+    \STATE $\mathbf{x}' = P\left(\mathbf{x}' + \epsilon \frac{\mathbf{x}_0 - \mathbf{x}'}{\|\mathbf{x}_0 - \mathbf{x}'\|}\right)$
+   \ENDIF
+   \ENDFOR  
+   \STATE \textbf{return} $m, \mathbf{x}'_s$
+\end{algorithmic}
+\end{algorithm}
+
+
+
+
+
+
+\section{Results}
+
+
+
+\begin{table}
+  \caption{Metrics for MNIST (M), CIFAR-$10$ (C), and Imagenet (I) across $\sigma$, covering the proportion of successful attacks, and the proportion of attacks which outperform all other approaches (\emph{Succ.} and \emph{Best}); the median attack size and time ($r_{50}$ and \emph{Time} (s)); and the percentage difference to the certified guarantee of Cohen \etal} 
+  \label{tab:main_times}
+  \centering
+  \begin{tabular}{lllllll}
+    \toprule
+    \multicolumn{2}{c}{ } & \multicolumn{5}{c}{Smallest Attack} \\
+Data & Type & Succ. & Best & $r_{50}$ & $\%$-C & Time \\%(s) \\
+\cmidrule(r){1-2} \cmidrule(r){3-7}
+M-$.5$ & 	 Ours & 	 $65\%$ & 	 $51\%$ & 	 $1.86$ & 	 $56$ & 	 $0.46$ \\
+ & 	 PGD & 	 $51\%$ & 	 $15\%$ & 	 $1.81$ & 	 $54$ & 	 $2.50$ \\
+ & 	 C-W & 	 $93\%$ & 	 $17\%$ & 	 $8.67$ & 	 $605$ & 	 $1.37$ \\
+ & 	 Auto & 	 $81\%$ & 	 $17\%$ & 	 $5.50$ & 	 $357$ & 	 $47.2$ \\
+ & 	 Fool & 	 $4\%$ & 	 $0\%$ & 	 $8.42$ & 	 $2126$ & 	 $0.16$ \\
+\cmidrule(r){1-2} \cmidrule(r){3-7}
+M-$1$ & 	 Ours & 	 $100\%$ & 	 $97\%$ & 	 $2.46$ & 	 $58$ & 	 $0.45$ \\
+ & 	 PGD & 	 $68\%$ & 	 $2\%$ & 	 $2.19$ & 	 $68$ & 	 $2.41$ \\
+ & 	 C-W & 	 $94\%$ & 	 $0\%$ & 	 $9.50$ & 	 $494$ & 	 $1.06$ \\
+ & 	 Auto & 	 $100\%$ & 	 $0\%$ & 	 $6.80$ & 	 $338$ & 	 $45.5$ \\
+ & 	 Fool & 	 $43\%$ & 	 $0\%$ & 	 $16.53$ & 	 $1503$ & 	 $0.15$ \\
+\cmidrule(r){1-2} \cmidrule(r){3-7}
+C-$.5$ & 	 Ours & 	 $91\%$ & 	 $83\%$ & 	 $0.91$ & 	 $56$ & 	 $0.22$ \\
+ & 	 PGD & 	 $88\%$ & 	 $7\%$ & 	 $0.96$ & 	 $65$ & 	 $2.65$ \\
+ & 	 C-W & 	 $91\%$ & 	 $1\%$ & 	 $6.74$ & 	 $865$ & 	 $1.35$ \\
+ & 	 Auto & 	 $99\%$ & 	 $9\%$ & 	 $4.00$ & 	 $495$ & 	 $49.6$ \\
+ & 	 Fool & 	 $85\%$ & 	 $0\%$ & 	 $2.94$ & 	 $486$ & 	 $0.16$ \\
+\cmidrule(r){1-2} \cmidrule(r){3-7}
+C-$1$ & 	 Ours & 	 $100\%$ & 	 $94\%$ & 	 $1.32$ & 	 $67$ & 	 $0.30$ \\
+ & 	 PGD & 	 $94\%$ & 	 $4\%$ & 	 $1.45$ & 	 $90$ & 	 $2.60$ \\
+ & 	 C-W & 	 $96\%$ & 	 $0\%$ & 	 $7.19$ & 	 $751$ & 	 $1.16$ \\
+ & 	 Auto & 	 $96\%$ & 	 $1\%$ & 	 $4.99$ & 	 $493$ & 	 $48.9$ \\
+ & 	 Fool & 	 $98\%$ & 	 $0\%$ & 	 $3.32$ & 	 $457$ & 	 $0.17$ \\
+\cmidrule(r){1-2} \cmidrule(r){3-7} 
+I-$.5$ & 	 Ours & 	 $54\%$ & 	 $71\%$ & 	 $1.03$ & 	 $123$ & 	 $3.12$ \\
+ & 	 PGD & 	 $59\%$ & 	 $13\%$ & 	 $1.25$ & 	 $141$ & 	 $31.0$ \\
+ & 	 C-W & 	 $56\%$ & 	 $16\%$ & 	 $33.56$ & 	 $4248$ & 	 $28.2$ \\
+ & 	 Fool & 	 $54\%$ & 	 $0\%$ & 	 $3.08$ & 	 $663$ & 	 $4.59$ \\
+\cmidrule(r){1-2} \cmidrule(r){3-7}
+I-$1$ & 	 Ours & 	 $40\%$ & 	 $48\%$ & 	 $1.10$ & 	 $227$ & 	 $4.08$ \\
+ & 	 PGD & 	 $46\%$ & 	 $12\%$ & 	 $1.68$ & 	 $254$ & 	 $31.0$ \\
+ & 	 C-W & 	 $70\%$ & 	 $20\%$ & 	 $36.10$ & 	 $2998$ & 	 $24.4$ \\
+ & 	 Fool & 	 $67\%$ & 	 $20\%$ & 	 $5.88$ & 	 $748$ & 	 $4.61$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+
+To assess our newly identified attack vector, we focus our experiments in two primary directions: against the representative approaches outlined within Section~\ref{sec:related_work}; and against the certified guarantees provided by Equation~\ref{eqn:Cohen_Bound}. The first of these comparisons is intended to demonstrate progression over state of the art, while the second is intended to elucidate the difference between the size of certified guarantees---which are a \emph{conservative bound} upon the size of adversarial perturbations---against realisable adversarial attacks. The gap between the best performant attacks and the certified guarantees in turn can be considered as evidence for the potential to improve either certifications, attacks, or both. 
+
+To aide in these comparisons, we introduce the concept of the \textit{attack proportion}: the proportion of correctly predicted samples that have an identified attack below a given $L_2$-norm radius. As the certified radius provides a lower bound on the size of any individual attack, the largest attack proportion at any radius must be that associated with the certification. %
+
+To achieve this, we performed comprehensive experimental validation against MNIST \citep{lecun1998gradient} (GNU v3.0 license), CIFAR-$10$ \citep{krizhevsky2009learning} (MIT license), and the Large Scale Visual Recognition Challenge variant of Imagenet \citep{deng2009imagenet, russakovsky2015imagenet} (which uses a custom, non-commercial license). Each model was trained in PyTorch~\citep{NEURIPS2019_9015} using a ResNet-$18$ architecture, with experiments considering two distinct levels of $\sigma$. Additional experiments involving the MACER~\cite{zhai2020macer} certification framework and a ResNet-$110$ architecture can be found in Appendix~\ref{app:macer}. The confidence intervals of expectations in all experiments was set according to the $\alpha = 0.005$ significance level. 
+
+Our experiments involving our \textbf{Certification Aware Attack} set the offsets $\delta_1$ and $\delta_2$ to $1.05$ and $0.95$. That $\delta_1 > 1$ ensures that the step is large enough to potentially induce a change in class, while setting $\delta_2 \leq 1$ ensures that the predicted class does not change after an adversarial example has been identified. The resultant step sizes are then clipped to sit between $0.1$ and $0.25$ through Equation~\ref{eqn:step_size_limits}, to ensure that over-stepping doesn't occur. Details of the experiments that yielded these specific hyperparameter choices can be found in Appendix~\ref{app:parameter_exploration}.
+
+
+Following previous experimental works, we employed the following hyperparameters for each attack framework.  For \textbf{Carlini-Wagner}, we set the $\kappa$ of Equation~\ref{eqn:CW} to $0$, and weighted the loss from the one-hot encoding by $10^{-4}$. The Carlini-Wagner training process was conducted using a learning rate of $0.01$ over $100$ iterations. Similarly \textbf{DeepFool} also employed $100$ iterations, and employed an overshoot factor of $0.02$. The parameter space of \textbf{PGD} was informed by the parameter study of Appendix~\ref{app:parameter_exploration}, leading to $\epsilon$ being set at $\frac{20}{255}$ over $100$ iterative steps. %
+\textbf{AutoAttack} was performed using the randomised model variant, with the \emph{maximum attack radii} set at $\max\{5 \times R, 0.1\}$, where $R$ was calculated by Equation~\ref{eqn:Cohen_Bound}. AutoAttack was eschewed for Imagenet for runtime considerations. 
+
+
+
+
+
+Experiments on both MNIST and CIFAR-$10$ were performed upon a single NVIDIA A$100$ GPU core with $48$ GB of GPU RAM (with maximum GPU RAM utilisation being on the order of $12$ GB across all experiments), with expectations estimated over $1500$ samples. Over the course of $50$ epochs of training, each sample was perturbed with a single perturbation drawn from $\mathcal{N}(0, \sigma^2)$ and added prior to normalisation. Training then utilised a batch size of $128$, with losses assessed against the Cross Entropy loss. Parameter optimisation was performed with Adam \citep{kingma2014adam}, with the learning rate set as $0.001$. Imagenet was trained using a single A$100$ GPU, with $2$ additional GPU's being employed for evaluation. Training occurred using SGD over $80$ epochs, with a starting learning rate of $0.1$, decreasing by a factor of $10$ after $30$ and $60$ epochs, and momentum set to $0.9$. As our current attack implementation does not incorporate any batching, to preserve system resources we decreased the number of samples associated with the expectation calculations in Imagenet to $600$. 
+
+
+
+
+
+\paragraph{Performance against other attacks} Across our full set of tested experiments, Figure~\ref{fig:consolidated} and Table~\ref{tab:main_times} demonstrate that our new Certificate Aware Attack framework consistently constructs smaller adversarial perturbations than any other technique, with an average percentage reduction in the median radius of $8.5 \%$ relative to the next most performant approach in PGD. However, it must be emphasised that this is not strictly a like-for-like comparison, as each technique is capturing a different proportion of adversarial examples. 
+
+The magnitude of the performance increase relative to PGD appears to increase with the complexity of the input space, culminating with a $17.6 \%$ (at $\sigma = 0.5$) and $34.5 \%$ (at $\sigma = 1.0$) reduction in the median certified radius for Imagenet. This performance for Imagenet is revealing, in the context of the observation in Section~\ref{sec:refining} that all adversarial examples identified by our Certification Aware Attack framework must share the same class prediction as the first identified adversarial example for a given sample point. Intuitively such a drawback would appear to be substantially more limiting for the $1000$ class Imagenet, as compared to MNIST or CIFAR-$10$, however it appears that this disadvantage is outweighed by the Certification Aware Attacks' increased efficiency in exploring the potential search space.%
+
+The primary drivers of outperformance by our technique, relative to other comparable attacks, is our ability to iteratively refine the step size as we approach potential adversarial examples. For fixed step size attacks even if its iteration count was set to infinity, the fixed step size will ensure that the candidate solution oscillates about a local optima, rather than converging upon it. These efficiencies translate to an on average $87 \%$ reduction in the computational time across our experiments, relative to PGD. 
+
+Across the remainder of techniques, AutoAttack, Carlini-Wagner, and DeepFool all exhibit median perturbation radii that are multiples of what is observed from our technique, although it is notable that for Imagenet at $\sigma = 1.0$ both Carlini-Wagner and DeepFool are able to identify significantly more adversarial examples than our approach, even if the associated perturbation radii was significantly higher. This is likely a product of suboptimal positioning in our $(\delta_1, \delta_2, \epsilon_{\text{min}}, \epsilon_{\text{max}})$ parameter space in the high-dimensional, $1000$-class Imagenet.
+
+We also emphasise that the process espoused by our Certification Aware Attacks yields significant increases in the numerical efficiency of attacking these models, relative to the other attacks. In practice, Table~\ref{tab:main_times} demonstrates that our approach can produce a more than $10$-fold decrease in the computational time required to identify these attacks, relative to all approaches except DeepFool. However, that DeepFool's perturbations are $3$-times larger than our attacks underscores that the performance improvements yielded by our conceptual approach balance numerical efficiency against identifying norm-minimising perturbations.
+
+\paragraph{Performance relative to certified guarantees} 
+
+While considering the differential performance of these adversarial attacks is valuable in and of itself, these experiments can also be used to explore how tight the certified guarantees provided by Equation~\ref{eqn:Cohen_Bound} are. Such an analysis must also consider the influence of increasing $\sigma$, as it is well understood that increasing the level of noise to a certifiably robust model decreases the accuracy, while increasing the certification of the samples that it can certify. However, in the context of \emph{attacking} these models, additional levels of noise inherently smooth the gradients, which should decrease the difficulty of attacking these models with gradient based methods. In practice Figure~\ref{fig:consolidated} demonstrates that the percentage difference between our new attack and the Cohen \etal certification radius of Equation~\ref{eqn:Cohen_Bound} is relatively constant across the tested $\sigma$ for all techniques. If it is true that increasing $\sigma$ makes it easier to attack a model, this would suggest that this ease is being offset by the certification bounds tightening with $\sigma$.
+
+
+
+To further illuminate the nature of the performance of our attack, Figure~\ref{fig:comp_scatter} considers the sample-wise performance of both PGD and our Certification Aware Attack. Within this data there is a clear self-similar trend, in which the percentage difference to Equation~\ref{eqn:Cohen_Bound} increases as the largest class expectation decreases. This difference could indicate the potential for improving the certification of samples within this region. There also appears to be a correlation between the outperformance of our approach and the semantic complexity of the prediction task, which suggests that tightening these guarantees could be increasingly relevant for complex datasets of academic and industrial interest. 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+\begin{figure}
+    \centering
+    \includegraphics[width=.725\linewidth]{Figures/Attacks/Cifar10/Percent_scatter-cifar10-1.0-samples-1500-validating.pdf}
+  \caption{Percentage difference between constructed adversarial perturbations and the certified radii of Equation~\ref{eqn:Cohen_Bound} for CIFAR-$10$ at $\sigma=0.5$, with Our technique in red and PGD in blue.}%
+  \label{fig:comp_scatter}   
+\end{figure}
+
+
+\begin{figure*}
+\begin{center}
+    \includegraphics[width=0.90\textwidth]{Figures/NewData/consolidatedlarge.pdf}
+\end{center}      
+\caption{Best achieved Attack Proportion for our new Certification Aware Attack (blue), PGD (red), DeepFool (cyan), Carlini-Wagner (green), and AutoAttack (magenta). The black dotted line represents the theoretical best case performance following Equation~\ref{eqn:Cohen_Bound}.}%
+\label{fig:consolidated} 
+\end{figure*}
+
+
+
+
+
+
+
+\section{Limitations} %
+
+To this point, our work has considered $L_2$-norm measures of perturbation size, as such distances are aligned with the most common guarantees of certified robustness, which also exist within an $L_2$-space. While this inherently biases our approach towards datasets with image-structured data, the core concepts of attacking randomised smoothing, and of augmenting attack methodologies with the knowledge of regions of class invariance should be readily extensible to a broad array of data types and structures.
+
+It must also be noted that an $L_2$-norm centred definition may not be appropriate in all contexts, and does not reflect the potential of rotational or translational modifications \citep{tian2018detecting}, nor functional attacks \citep{laidlaw2019functional}. 
+
+
+
+
+
+Finally, this attack requires access to significant amounts of GPU memory. Attacking a ResNet-$18$ model trained for CIFAR-$10$ required approximately $10$ GB of GPU memory when smoothing was performed over $1500$ samples, with significantly more memory required for attacking Imagenet-size datasets. This memory consumption is driven by our current implementation requiring all samples to be loaded into memory at once, prior to performing the gradient-based iterative step. While this process can be improved through batching, we chose not to follow this to focus upon the performance of the attack vector itself.%
+
+
+
+\section{Conclusion}
+
+The addition of calibrated noise through randomised smoothing has a well documented history of improving adversarial robustness. Recently, randomised smoothing has been introduced as a simple yet effective means to certifying the robustness of arbitrary models with high probability.  However, within this work we demonstrate that this very process of certification through randomised smoothing can also introduce a new attack surface, that allows models incorporating randomised smoothing to be \emph{more easily attacked}.
+
+Implementing this framework into Certification Aware Attacks allows us to leverage certifications of samples which both predict the benign and malicious classes to significantly decrease the size of the identified adversarial perturbations relative to state-of-the-art test-time attacks. Taking this approach would likely allow an attacker to influence more samples before being detected than any other attack, as it is produces perturbations up to $34 \%$ smaller than the next best technique, while also requiring significantly less computational time to attack. Based upon these observations, it is clear that the benefits and risks of deploying certifiably robust models should be considered in the context of our newly discovered attack vector.
+
+
+
+
+
+
+
+
+
+
+
+\newpage %
+

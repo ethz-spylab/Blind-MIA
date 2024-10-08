@@ -1,0 +1,593 @@
+
+
+
+
+
+\subsection{Adversarial Graph Signal Denoising Problem} 
+Note that the second term in the GSD problem (Eq.~(\ref{graph signal denoising})) which controls the smoothness of the feature matrix over graphs, is related to both the graph Laplacian and the node features. Therefore, the slight changes in the graph Laplacian matrix could lead to an unstable denoising effect. Inspired by the recent studies in adversarial training~\citep{madry2018towards},
+we formulate the adversarial graph signal denoising problem as a min-max optimization problem:
+\begin{equation}
+\label{adv gsd}
+    \min_{\mathbf{F}} \left[\left\|\mathbf{F}-\mathbf{X}\right\|_{F}^{2}+\lambda \cdot \max_{\mathbf{L}^{\prime}} \  \operatorname{tr}\left(\mathbf{F}^{\top} \mathbf{L}^{\prime} \mathbf{F}\right)\right] \quad \operatorname{s.t.} \quad \left\|\mathbf{L}^{\prime}-\widetilde{\mathbf{L}}\right\|_{F} \leq \varepsilon.
+\end{equation}
+Intuitively, the inner maximization on the Laplacian $\mathbf{L}'$ generates perturbations on the graph structure\footnote{Here we do not need exact graph structure perturbations as in graph adversarial attacks~\citep{zugner2018adversarial,zugner2019adversarial} but a virtual perturbation that could lead to small changes in the Laplacian.}, and enlarges the distance between the node representations of connected neighbors. 
+Such maximization finds the worst case perturbations on the graph Laplacian that  hinders the global smoothness of $\mathbf{F}$ over the graph. Therefore, by training on those worse case Laplacian perturbations, one could obtain a robust graph signal denoising solution. Ideally, through solving Eq.~(\ref{adv gsd}), the smoothness of the node representations as well as the implicit denoising effect can be enhanced.
+
+\subsection{Minimization of the Optimization Problem}
+\label{Minimization of the Optimization Problem}
+The min-max formulation in Eq.~(\ref{adv gsd}) also makes the adversarial graph signal denoising problem much harder to solve. Fortunately, unlike adversarial training~\citep{madry2017towards} where we need to first adopt PGD to solve the inner maximization problem before we solve the outer minimization problem, here inner maximization problem is simple and has a closed form solution. In other words, we do not need to add random perturbations on the graph structure at each training epoch and can find the largest perturbation which maximizes the inner adversarial loss function. Denote the perturbation as $\bm{\delta}$, and $\mathbf{L}'=\widetilde{\mathbf{L}} + \bm{\delta}$. Directly solving\footnote{More details on how to solve the inner maximization problem can be found in Appendix~\ref{appendix:how to solve the optimization problem}.} the inner maximization problem, we get  $\bm{\delta}=\varepsilon\nabla h(\bm{\delta})=\frac{\varepsilon\mathbf{F}\mathbf{F}^{\top}}{\left\|\mathbf{F}\mathbf{F}^{\top}\right\|_{F}}$. Plugging this solution into Eq.~(\ref{adv gsd}), we can rewrite the outer optimization problem as follows:
+\begin{equation}
+         \rho(\mathbf{F})=\min_{\mathbf{F}} \left[\left\|\mathbf{F}-\mathbf{X}\right\|_{F}^{2}+\lambda \max \operatorname{tr}\left(\mathbf{F}^{\top} \widetilde{\mathbf{L}} \mathbf{F}\right)+\lambda\varepsilon\operatorname{tr}\frac{\mathbf{F}^{\top}\mathbf{F}\mathbf{F}^{\top}\mathbf{F}}{\left\|\mathbf{F}\mathbf{F}^{\top}\right\|_{F}}\right].
+\end{equation}
+Taking the gradient of $\rho(\mathbf{F})$ to zero, we get the solution of the outer optimization problem as follows:
+\begin{equation}\label{eq:advF}
+    \mathbf{F} = \left(\mathbf{I}+\lambda\widetilde{\mathbf{L}}+\lambda\varepsilon\frac{\mathbf{F}\mathbf{F}^{\top}}{\left\|\mathbf{F}\mathbf{F}^{\top}\right\|_{F}}\right)^{-1}\mathbf{X}.
+\end{equation}
+Both sides of Eq.~(\ref{eq:advF}) contains $\mathbf{F}$, directly computing the solution is difficult. Note that in Eq.~(\ref{adv gsd}) we also require $\mathbf{F}$ to be close to $\mathbf{X}$, we can approximate Eq.~(\ref{eq:advF}) by replacing the $\mathbf{F}$ with $\mathbf{X}$ in the inverse matrix on the right hand side. With the Neumann series expansion of the inverse matrix, we get the final approximate solution as
+\begin{equation}
+\label{RNGC filter}
+    \mathbf{H} \approx \frac{1}{\lambda+1}\sum_{s=0}^{S}\left[\frac{\lambda}{\lambda+1}\left(\widetilde{\bm{\mathcal{A}}}-\frac{\varepsilon\mathbf{X}\mathbf{X}^{\top}}{\left\|\mathbf{X}\mathbf{X}^{\top}\right\|_{F}}\right)\right]^{s}\mathbf{X}\mathbf{W}.
+\end{equation}
+The difference between Eq.~(\ref{RNGC filter}) and Eq.~(\ref{NGC filter}) is that there is one more term in Eq.~(\ref{RNGC filter}) derived from solving the inner optimization problem of Eq.~(\ref{adv gsd}). Based on this, we proposed our robust Neumann graph convolution (RNGC). 
+
+\paragraph{Scalability.}{Although RNGC introduces extra computational burdens for large graphs due to the $\mathbf{X} \mathbf{X}^{\top}$ term, if the feature matrix is sparse, the extra computational effort is minimal as the $\mathbf{X} \mathbf{X}^{\top}$ term can also be sparse. For the scalability of RNGC on large graphs with dense feature matrix, we only compute the inner product of feature vectors ($\mathbf{X}_i, \mathbf{X}_{j|j\in\mathcal{N}_{i}}$) between adjacent neighbors like masked attention in GAT. Compared with \name, the additional computation cost is $\mathcal{O}(|\mathcal{E}|)$.} 
+\subsection{Denoising Effectiveness Comparison of Various GNN Models}
+In this section, we compare the denoising effectiveness of different GNN models through their test accuracy by training on the noisy feature matrix with Gaussian noise. 
+
+\paragraph{Datasets.} In our experiments, we utilize three public citation network datasets Cora, Citeseer, and Pubmed~\citep{sen2008collective} which are homophily graphs for semi-supervised node classification. For the semi-supervised learning experimental setup, we follow the standard fixed splits employed in~\citep{yang2016revisiting}, with 20 nodes per class for training, 500 nodes for validation, and 1,000 nodes for testing. We also use four datasets: Cornell, Texas, Wisconsin, and Actor which are heterophily graphs for full-supervised node classification. For each dataset, we randomly split nodes into 60\%, 20\%, and 20\% for training, validation, and testing as suggested in \citep{pei2020geom}. Moreover, we utilize three large-scale graph datasets: Coauthor-CS, Coauthor-Phy~\citep{shchur2018pitfalls}, and ogbn-products~\citep{hu2020open} for evaluation. For Coauthor datasets, we split nodes into 60\%, 20\%, and 20\% for training, validation, and testing. For ogbn-products dataset, we follow the dataset split in OGB~\citep{hu2020open}.
+
+\paragraph{Baselines.}
+For the baselines, we consider graph neural networks derived from graph signal denoising, including GLP~\citep{li2019label}, S$^2$GC~\citep{zhu2021simple}, and IRLS~\citep{yang2021graph}; popular GNN architectures, such as GCN~\citep{kipf2017semi} and GAT~\citep{velivckovic2018graph}; and MLP which has no aggregation operation. 
+
+\paragraph{Experimental Setup and Implementations.}
+We assume that the original feature matrix is clean and do not have noise and we synthesize the noise from the standard Gaussian distribution and add them on the original feature matrix. By default, we apply row normalization for data after adding the Gaussian noise\footnote{We also perform an analysis on the effect of row normalization in noisy feature matrix in Appendix~\ref{appendix:row norm}.}, and train all the models based on these noisy feature matrix. For the hyper-parameters of each model, we follow the setting that reported in their original papers. To eliminate the effect of randomness, we repeat such experiment for 100 or 10 times and report the mean accuracy. Note that in each repeated run, we add different Gaussian noises. While for the same run, we apply the same noisy feature matrix for training all the models. For our \name and R\name model, the hyper-parameter details can be found in Appendix~\ref{appendix:hyperparameter}.
+
+
+\input{heterophily_results}
+\input{large-scale_results}
+\paragraph{Results on Supervised Node Classification.}
+Figure~\ref{fig:noise} illustrates the comparison of classification accuracy against the various noise levels for semi-supervised node classification tasks. 
+The noise level $\xi$ controls the magnitude of the Gaussian noise we add to the feature matrix: $\mathbf{X}+\xi\bm{\eta}$ where $\bm{\eta}$ is sampled from standard i.i.d., Gaussian distribution. For Cora and Citeseer, we test $\xi \in \{0.1, 0.2, 0.3, 0.4, 0.5\}$ and for Pubmed, we test $\xi \in \{0.01, 0.02, 0.03, 0.04, 0.05\}$. From Figure~\ref{fig:noise}, we can observe that the test accuracy of MLP is close to randomly guessing (RG) when the noise level is relatively large. This implies the weak denoising effect of MLP models. For shallow GNN models, such as GCN and GAT (which usually contain 2 layers), their denoising performance is limited especially on Pubmed since they do not aggregate information (features and noise) from higher-order neighbors. For models with deep layers{\footnote{We also perform an analysis on the denoising effect of depth in \name and R\name in Appendix~\ref{appendix:depth analysis}.}}, such as IRLS ($\geq 8$ layers), the denoising performance is much better compared to shallow models. Lastly, our \name and R\name model with 16 layers ($S=16$) achieve significantly better denoising performance compared with other baseline methods, which backup our theoretical analyses. In most cases, \name and R\name achieve very similar denoising performance but in general, R\name still slightly outperforms \name, suggesting that we indeed gain more benefits by solving the adversarial graph denoising problem. 
+
+{Table~\ref{tab:heterophily} reports the comparison of classification accuracy against the various noise levels for full-supervised node classification tasks on heterophily graphs. The first- and second-highest accuracies are highlighted in bold. For these datasets, we test $\xi \in \{0.01, 1\}$. From Table~\ref{tab:heterophily}, we can observe that MLP is better than most GNN models in most cases due to the heterophily properties of these graphs. However, our proposed R\name achieves significantly better or matches denoising performance compared with other baseline methods, which demonstrates the superiority of our R\name.}
+
+{For ogbn-products, we only choose MLP, GCN, and S$^2$GC as baselines, since the results are sensitive concerning model size and various tricks from the OGB leaderboard. For fair comparison, the size of parameters for these baselines and R\name is the same. We also use full-batch training for the baselines and our model. Table~\ref{tab:coauthor} and \ref{tab:ogb} report the comparison of classification accuracy against the various noise levels for full-supervised node classification tasks on large-scale graphs. The first- and second-highest accuracies are highlighted in bold. For these datasets, we test $\xi \in \{0.1, 1\}$. Compared with the above small datasets, the node degree on these three datasets is larger, which means they have better connectivity. From Table~\ref{tab:coauthor} and \ref{tab:ogb}, we can observe that the test accuracy of MLP is far lower than GCN and R\name. This implies the weak denoising effect of MLP. The test accuracy of GCN is slightly smaller than R\name on these datasets since they are well-connected and have a large graph size and we can achieve a good denoising performance with shallow-layer GNN models. For the scalability of R\name on large graphs such as ogbn-products, we use the acceleration method mentioned in Sec.~\ref{Minimization of the Optimization Problem}.}
+ \input{flip_defense_results}
+\subsection{Denoising Performance on Feature Flipping Perturbation}
+In this section, we compare the denoising effectiveness of different models through their test accuracy by training on the noisy feature matrix which is perturbated through flipping the individual feature with a small Bernoulli probability on three citation datasets.
+\paragraph{Setting and Results.} We flip the individual feature on three citation datasets: Cora, Citeseer, and Pubmed as the noise. And we compare the denoising performance of R\name with MLP and GCN. From Table~\ref{tab:flip}, we can observe that the denoising performance of R\name is much better than baselines when the flip probability is 0.4. In fact, the added perturbations by flipping the individual feature approximately follow a Bernoulli distribution, which is also a Sub-Gaussian distribution. The results verify our theoretical analysis further.
+
+
+\subsection{Defense Performance of R\name against Graph Structure Attack}
+Although we do not perform actual graph structure perturbations as in graph adversarial attacks~\citep{zugner2018adversarial,zugner2019adversarial} but a virtual perturbation in the Laplacian. Therefore, it's not clear how much perturbations on the Laplacian correspond to the actual perturbations on graph structure. Nevertheless, we still conduct the experiments of R\name against graph structure meta-attack where the ptb rate is 25\%. As shown in the Table~\ref{tab:attack}, our R\name model outperforms than GCN, GAT, RobustGCN \citep{zugner2019robustgcn}, GCN-Jaccard \citep{wu2019adversarial}, GCN-SVD \citep{entezari2020all}, and S$^2$GC on Cora, Citeseer, and Pubmed.
+
+
+
+\section{The details on how to solve the inner maximization problem in Sec.~\ref{Minimization of the Optimization Problem}}
+\label{appendix:how to solve the optimization problem}
+Different from the non-concave inner maximization problem in the adversarial attack, our inner maximization problem is indeed a convex optimization problem. Hence, we do not need to add random perturbations on the graph structure at each training epoch and can find the largest perturbation which maximizes the inner adversarial loss function. Denote the perturbation as $\bm{\delta}$, and $\mathbf{L}'=\widetilde{\mathbf{L}} + \bm{\delta}$. We can rewrite the inner maximization problem as
+\begin{equation}
+    \max_{\mathbf{L}^{\prime}} \operatorname{tr}\left(\mathbf{F}^{\top} \mathbf{L}^{\prime} \mathbf{F}\right) =\langle\widetilde{\mathbf{L}}, \mathbf{F}^{\top}\mathbf{F}\rangle + \max_{\bm{\delta}}\langle\bm{\delta}, \mathbf{F}^{\top}\mathbf{F}\rangle \quad \operatorname{s.t.} \quad \left\|\bm{\delta}\right\|_{F} \leq \varepsilon.
+\end{equation}
+We denote $h(\bm{\delta})=\langle\bm{\delta}, \mathbf{F}^{\top}\mathbf{F}\rangle$. Obviously, $h(\bm{\delta})$ reaches the largest value when $\bm{\delta}$ has the same direction with the gradient of $h(\bm{\delta})$, e.g. $\bm{\delta}=\varepsilon\nabla h(\bm{\delta})=\frac{\varepsilon\mathbf{F}\mathbf{F}^{\top}}{\left\|\mathbf{F}\mathbf{F}^{\top}\right\|_{F}}$, which is illustrated in Fig.~\ref{figure:adv inner problem}.
+\begin{figure}[htbp]
+ \begin{center}
+\includegraphics[width=.45\columnwidth]{images/adv_inner_problem.pdf}
+ \end{center}
+\caption{The illustration of the inner maximization problem. The adversarial loss function reaches the largest value when the direction of $\bm{\delta}$ is the same with $\nabla h(\bm{\delta})$}
+\label{figure:adv inner problem}
+\end{figure}
+
+
+
+\section{Additional Details on the Neumann Series}
+\label{appendix:neumann series}
+We provide additional details and derivations on how to obtain the Neumann Series which leads to our Neumann Graph Convolution (NGC) method. Before we derive the Neumann Series, we first introduce the following lemmas which are crucial to the derivation of the Neumann Series.
+
+\begin{lemma} \rm {\textbf{(Gelfand formula)~\citep{bhatia2013matrix}} } 
+\label{Gelfand formula}
+\emph{Given any matrix norm $\||\cdot|\|$, then $\rho(\mathbf{A})=\lim\limits_{k \rightarrow \infty}\||\mathbf{A}^{k}|\|^{1 / k}=\inf\limits_{k \geq 1}\||\mathbf{A}^k|\|^{1/k}\leq \||\mathbf{A}|\|$}.
+\end{lemma}
+Lemma~\ref{Gelfand formula} describes the relationship between the spectral radius of a matrix and its matrix norm, $i.e.$ $\rho(\mathbf{A})=\lim\limits_{k \rightarrow \infty}\||\mathbf{A}^{k}|\|^{1 / k}$.
+
+
+\begin{lemma}
+\label{convergence of neumann series}
+Let $\mathbf{A} \in \mathbb{C}^{n \times n}$, the spectral radius $\rho(\mathbf{A})=\max (\operatorname{abs}(\operatorname{spec}(\mathbf{A})))$, if $\rho(\mathbf{A})<1$, then $\sum_{k=0}^{\infty} \mathbf{A}^{k}$ converges to $(\mathbf{I}-\mathbf{A})^{-1}$.
+\end{lemma}
+\begin{proof}
+We first prove that $(\mathbf{I}-\mathbf{A})^{-1}$ exists as follows: Based on the definition of eigenvalues of $\mathbf{A}$, we have $|\lambda \mathbf{I} - \mathbf{A}| = 0$ and the solution is the eigenvalue of $\mathbf{A}$. Since $\rho(\mathbf{A}) < 1$, if $\lambda \geq 1$, then $|\lambda \mathbf{I} - \mathbf{A}| \neq 0$, so $|\mathbf{I} - \mathbf{A}| \neq 0$, which means $(\mathbf{I}-\mathbf{A})^{-1}$ exists.
+ 
+Since $\rho(\mathbf{A}) < 1$ and by Lemma~\ref{Gelfand formula}, we have $\lim\limits_{k \rightarrow \infty}\||\mathbf{A}^{k}|\|=\rho(\mathbf{A})^k=0$. Let $\mathbf{S}_k$ = $\mathbf{A}^0 + \mathbf{A}^1 + \cdots + \mathbf{A}^k$, then we have
+\begin{equation*}
+    \begin{split}
+        \lim_{k \rightarrow \infty}(\mathbf{S}^k-\mathbf{A}\mathbf{S}^k) &= \lim\limits_{k \rightarrow \infty}(\mathbf{I}-\mathbf{A})\mathbf{S}^k \\
+        &=\lim_{k \rightarrow \infty}(\mathbf{I}-\mathbf{A}^{k+1}) \\
+        &= \mathbf{I}
+    \end{split}
+\end{equation*}
+Since $(\mathbf{I}-\mathbf{A})^{-1}$ exists, so we have $(\mathbf{I}-\mathbf{A})\lim\limits_{k \rightarrow \infty}\mathbf{S}^k=\mathbf{I}$, and $\lim\limits_{k \rightarrow \infty}\mathbf{S}^k=(\mathbf{I}-\mathbf{A})^{-1}$, which finishes the proof.
+\end{proof}
+
+Lemma~\ref{convergence of neumann series} describes the convergence of Neumann Series and the condition to get the convergence.
+\begin{lemma} \rm {\textbf{(Gerschgorin Disc)~\citep{bhatia2013matrix}}} 
+\label{Gerschgorin Disc}
+\emph{Let $\mathbf{A} \in \mathbb{C}^{n \times n}$, with entries $a_{ij}$. For any eigenvalue $\lambda$, there exits $i$ and the corresponding Gerschgorin disc $D\left(a_{i i}, R_{i}\right) \subseteq \mathbb{C}$ such that $\lambda$ lies in this disc, i.e.}
+\begin{equation*}
+    |\lambda-a_{ii}| \leq \sum_{j\neq i}^{n}|a_{ij}|.
+\end{equation*}
+\end{lemma}
+Lemma~\ref{Gerschgorin Disc} describes the estimated range of eigenvalues. Now we start to derive the Neumann Series expansion of the solution of GSD as follows.
+
+\begin{lemma}
+\label{Neumann derivation}
+Let $\mathbf{A} \in\{0,1\}^{n \times n}$ be the adjacency matrix of a graph and $\widetilde{\bm{\mathcal{A}}}=\widetilde{\mathbf{D}}^{-\frac{1}{2}} \widetilde{\mathbf{A}} \widetilde{\mathbf{D}}^{-\frac{1}{2}}$ or $\widetilde{\bm{\mathcal{A}}} = \widetilde{\mathbf{D}}^{-1} \widetilde{\mathbf{A}}$, then
+\begin{equation*}
+    (\mathbf{I}-\frac{\lambda}{\lambda+1}\widetilde{\bm{\mathcal{A}}})^{-1}=\sum_{k=0}^{\infty} \left(\frac{\lambda}{\lambda+1}\widetilde{\bm{\mathcal{A}}}\right)^{k}.
+\end{equation*}
+\end{lemma}
+\begin{proof}
+We first prove that $\rho(\widetilde{\bm{\mathcal{A}}})\leq1$ where $\widetilde{\bm{\mathcal{A}}}=\widetilde{\mathbf{D}}^{-\frac{1}{2}} \widetilde{\mathbf{A}} \widetilde{\mathbf{D}}^{-\frac{1}{2}}$.
+Let $\lambda$ be the eigenvalue of $\widetilde{\bm{\mathcal{A}}}$, and $\mathbf{v}$ be the corresponding eigenvector. Then we have
+\begin{equation*}
+\begin{split}
+    \left(\widetilde{\mathbf{D}}^{-\frac{1}{2}} \widetilde{\mathbf{A}} \widetilde{\mathbf{D}}^{-\frac{1}{2}}\right)\mathbf{v}=\lambda\mathbf{v} &\Longrightarrow \widetilde{\mathbf{D}}^{-\frac{1}{2}} \left(\widetilde{\mathbf{D}}^{-\frac{1}{2}} \widetilde{\mathbf{A}} \widetilde{\mathbf{D}}^{-\frac{1}{2}}\right)\mathbf{v}=\lambda\widetilde{\mathbf{D}}^{-\frac{1}{2}}\mathbf{v}\\
+    &\Longrightarrow \left(\widetilde{\mathbf{D}}^{-1} \widetilde{\mathbf{A}}\right) \widetilde{\mathbf{D}}^{-\frac{1}{2}}\mathbf{v} = \lambda\widetilde{\mathbf{D}}^{-\frac{1}{2}}\mathbf{v},
+\end{split}
+\end{equation*}
+which means $(\lambda, \widetilde{\mathbf{D}}^{-\frac{1}{2}}\mathbf{v})$ is the eigen-pair of $\widetilde{\mathbf{D}}^{-1}\mathbf{A}$. By Lemma~\ref{Gerschgorin Disc}, there exists $i$, such that
+\begin{equation*}
+\begin{split}
+    &\left|\lambda-\left(\widetilde{\mathbf{D}}^{-1}\widetilde{\mathbf{A}}\right)_{ii}\right|\leq \sum_{j\neq i}\left|\left(\widetilde{\mathbf{D}}^{-1}\widetilde{\mathbf{A}}\right)_{ij}\right|\\
+    &\Longrightarrow \left(\widetilde{\mathbf{D}}^{-1}\widetilde{\mathbf{A}}\right)_{ii} - \sum_{j\neq i}\left|\left(\widetilde{\mathbf{D}}^{-1}\widetilde{\mathbf{A}}\right)_{ij}\right| \leq 
+    \lambda \leq \left(\widetilde{\mathbf{D}}^{-1}\widetilde{\mathbf{A}}\right)_{ii} + \sum_{j\neq i}\left|\left(\widetilde{\mathbf{D}}^{-1}\widetilde{\mathbf{A}}\right)_{ij}\right|.
+\end{split}
+\end{equation*}
+Since $\left(\widetilde{\mathbf{D}}^{-1}\widetilde{\mathbf{A}}\right)_{ij}>0$ and $\sum_{j}\left|\left(\widetilde{\mathbf{D}}^{-1}\widetilde{\mathbf{A}}\right)_{ij}\right|=\sum_{j}\left(\widetilde{\mathbf{D}}^{-1}\widetilde{\mathbf{A}}\right)_{ij}=1$, obviously
+\begin{equation*}
+    -1<\left(\widetilde{\mathbf{D}}^{-1}\widetilde{\mathbf{A}}\right)_{ii} - \sum_{j\neq i}\left|\left(\widetilde{\mathbf{D}}^{-1}\widetilde{\mathbf{A}}\right)_{ij}\right| \leq 
+    \lambda \leq \left(\widetilde{\mathbf{D}}^{-1}\widetilde{\mathbf{A}}\right)_{ii} + \sum_{j\neq i}\left|\left(\widetilde{\mathbf{D}}^{-1}\widetilde{\mathbf{A}}\right)_{ij}\right|=1.
+\end{equation*}
+So if $\widetilde{\bm{\mathcal{A}}}=\widetilde{\mathbf{D}}^{-\frac{1}{2}} \widetilde{\mathbf{A}} \widetilde{\mathbf{D}}^{-\frac{1}{2}}$, we have $\rho(\widetilde{\bm{\mathcal{A}}})\leq1$. When $\widetilde{\bm{\mathcal{A}}}=\widetilde{\mathbf{D}}^{-1}\widetilde{\mathbf{A}}$, we denote $(\lambda, \mathbf{v})$ as the eigen-pair of $\mathbf{\widetilde{\mathbf{D}}^{-1}\mathbf{A}}$. Similarly, by Lemma~\ref{Gerschgorin Disc}, there exists $i$, such that
+\begin{equation*}
+\begin{split}
+    &\left|\lambda-\left(\widetilde{\mathbf{D}}^{-1}\widetilde{\mathbf{A}}\right)_{ii}\right|\leq \sum_{j\neq i}\left|\left(\widetilde{\mathbf{D}}^{-1}\widetilde{\mathbf{A}}\right)_{ij}\right|\\
+    &\Longrightarrow \left(\widetilde{\mathbf{D}}^{-1}\widetilde{\mathbf{A}}\right)_{ii} - \sum_{j\neq i}\left|\left(\widetilde{\mathbf{D}}^{-1}\widetilde{\mathbf{A}}\right)_{ij}\right| \leq 
+    \lambda \leq \left(\widetilde{\mathbf{D}}^{-1}\widetilde{\mathbf{A}}\right)_{ii} + \sum_{j\neq i}\left|\left(\widetilde{\mathbf{D}}^{-1}\widetilde{\mathbf{A}}\right)_{ij}\right|.
+\end{split}
+\end{equation*}
+Obviously, we can get the same conclusion for $\widetilde{\bm{\mathcal{A}}}=\widetilde{\mathbf{D}}^{-1}\widetilde{\mathbf{A}}$. So it is true for $\rho\left(\frac{\lambda}{\lambda+1}\widetilde{\bm{\mathcal{A}}}\right) \leq \frac{\lambda}{\lambda+1}<1$ By Lemma~\ref{convergence of neumann series}, we get the result $(\mathbf{I}-\frac{\lambda}{\lambda+1}\widetilde{\bm{\mathcal{A}}})^{-1}=\sum_{k=0}^{\infty} \left(\frac{\lambda}{\lambda+1}\widetilde{\bm{\mathcal{A}}}\right)^{k}$, which finishes the proof.
+\end{proof}
+
+
+By Lemma~\ref{Neumann derivation}, we approximate the inverse matrix $(\mathbf{I}+\lambda \tilde{\mathbf{L}})^{-1}$ up to $S$-th order with
+\begin{equation*}
+    \left(\mathbf{I}+\lambda \widetilde{\mathbf{L}}\right)^{-1} =\frac{1}{\lambda+1}\left(\mathbf{I}-\frac{\lambda}{\lambda+1}\widetilde{\bm{\mathcal{A}}}\right)^{-1}\approx\frac{1}{\lambda+1}\sum_{s=0}^{S} \left(\frac{\lambda}{\lambda+1}\widetilde{\bm{\mathcal{A}}}\right)^{s}.
+\end{equation*}
+
+
+
+
+
+
+
+
+\section{The Row Summation of the Neumann Series}
+\label{appendix:row sum}
+We provide the derivations of the row sum of $\widetilde{\bm{\mathcal{A}}}_{S}$ in this section. Before we derive the row summation of $\widetilde{\bm{\mathcal{A}}}_{S}$, we first derive the row summation of $\widetilde{\bm{\mathcal{A}}}^{k}$.
+\begin{lemma}
+\label{transition matrix}
+Consider a probability matrix $\mathbf{P} \in \mathbb{R}^{n \times n}$, where $\mathbf{P}_{ij}\geq0$. Besides, for all $i$, we have $\sum_{j=1}^n\mathbf{P}_{ij}=1$. Then for any $s \in \mathbb{Z}_{+}$, we have $\sum_{j=1}^n\mathbf{P}^s_{ij}=1$,
+\end{lemma}
+\begin{proof}
+We give a proof by induction on $k$.\\
+\textbf{Base case:} When $k=1$, the case is true.\\
+\textbf{Inductive step:} Assume the induction hypothesis that for a particular $k$, the single case n = k holds, meaning $\mathbf{P}^k$ is true:
+\begin{equation*}
+    \forall i, \sum_{j=1}^n \mathbf{P}_{ij}^k =1.
+\end{equation*}
+As $\mathbf{P}^{k+1}=\mathbf{P}^{k}\mathbf{P}$, so we have
+\begin{equation*}
+    \sum_{j=1}^n\mathbf{P}^{k+1}_{ij}=\sum_{j=1}^n\sum_{k=1}^n\mathbf{P}^{k}_{ik}\mathbf{P}_{kj} = \sum_{k=1}^n\sum_{j=1}^n\mathbf{P}^{k}_{ik}\mathbf{P}_{kj} = \sum_{k=1}^n\mathbf{P}^{k}_{ik}\left(\sum_{j=1}^n\mathbf{P}_{kj}\right) = \sum_{k=1}^n\mathbf{P}^{k}_{ik} = 1,
+\end{equation*}
+which finishes the proof.
+\end{proof}
+
+Lemma~\ref{transition matrix} describes the row summation of $\widetilde{\bm{\mathcal{A}}}^{k}$ is 1. Now we can obtain the row summation for $\widetilde{\bm{\mathcal{A}}}_{S}$.
+
+
+
+Then for any $i$, we have
+\begin{equation}
+\begin{split}
+    \sum_{j=1}^{n}\left[\widetilde{\bm{\mathcal{A}}}_{S}\right]_{ij} 
+    &=\frac{1}{\lambda+1}\sum_{s=0}^{S} \left(\frac{\lambda}{\lambda+1}\left[\widetilde{\bm{\mathcal{A}}}\right]_{ij}\right)^{s}\\
+    &=\frac{1}{\lambda+1}\sum_{s=0}^{S}\left(\frac{\lambda}{\lambda+1}\right)^{s} \\
+    &=1-\left(\frac{\lambda}{\lambda+1}\right)^{S+1}.
+\end{split}
+\end{equation}
+
+
+
+
+
+
+
+\section{Proof of Lemma 1}
+\label{appendix:upper bound with hoeffding}
+We provide the details of proof of Lemma 1. We first introduce the General Hoeffding Inequality~\citep{hoeffding1994probability}, which is essential for bounding $\left\|\widetilde{\bm{\mathcal{A}}}_S\bm{\eta}\right\|_{F}^{2}$.
+
+\begin{lemma}
+\label{hoeffding}
+\rm{\textbf{(General Hoeffding Inequality~\citep{hoeffding1994probability})}} \emph{Suppose that the variables $X_{1}, \cdots, X_{n}$ are independent, and $X_i$ has mean $\mu_{i}$ and sub-Gaussian parameter $\sigma_{i}$. Then for all $t\geq0$, we have}
+\begin{equation}
+ \mathbb{P}\left[\sum_{i=1}^{n}\left(X_{i}-\mu_{i}\right) \geq t\right] \leq \exp \left\{-\frac{t^{2}}{2 \sum_{i=1}^{n} \sigma_{i}^{2}}\right\}.
+\end{equation}
+\end{lemma}
+
+
+Now let's prove Lemma~\ref{upper bound of aggregated noised matirx}.
+\begin{proof}[Proof of Lemma~\ref{upper bound of aggregated noised matirx}.]
+For any entry $\left[\widetilde{\bm{\mathcal{A}}}_S\bm{\eta}\right]_{ij}=\sum_{p=1}^{n}\left(\widetilde{\bm{\mathcal{A}}}_S\right)_{ip}\bm{\eta}_{pj}$, where $\bm{\eta}_{pj}$ is a sub-Gaussian variable with parameter $\sigma^{2}$. By the General Hoeffding inequality~\ref{hoeffding}, we have
+\begin{equation}
+\mathbb{P}\left(\left|\left[ \frac{1}{\lambda+1}\sum_{s=0}^{S}\left(\frac{\lambda}{\lambda+1}\widetilde{\bm{\mathcal{A}}}_{S}\right)^{s}\bm{\eta}\right]_{ij}\right|\geq t\right) \leq 2\exp \left\{-\frac{nt^{2}}{2\tau\left(1-\left(\frac{\lambda}{\lambda+1}\right)^{S+1}\right)^2\sigma^2}\right\}.
+\end{equation}
+where $\tau = \max_i \tau_i$ and $ \tau_i = {n\sum_{j=1}^{n}\left[\widetilde{\bm{\mathcal{A}}}_{S}\right]_{ij}^2}\Bigg/{\left(1-\left(\frac{\lambda}{\lambda+1}\right)^{S+1}\right)^2}$. 
+
+Applying union bound~\citep{vershynin2010introduction} to all possible pairs of $i \in [n]$, $j \in [n]$, we get
+\begin{equation}
+ \mathbb{P}\left(\left\|\widetilde{\bm{\mathcal{A}}}_S\bm{\eta}\right\|_{\infty, \infty}\geq t\right) \leq \sum_{i,j}\mathbb{P}\left(\left[\widetilde{\bm{\mathcal{A}}}_S\bm{\eta}\right]_{ij}\geq t\right) \leq 2n^2\exp \left\{-\frac{nt^{2}}{2\tau\left(1-\left(\frac{\lambda}{\lambda+1}\right)^{S+1}\right)^2\sigma^2}\right\}.  
+\end{equation}
+Applying union bound again, we have
+\begin{equation}
+   \mathbb{P}\left(\left\|\widetilde{\bm{\mathcal{A}}}_S\bm{\eta}\right\|_{F}^{2}\geq t\right) \leq \sum_{i,j}\mathbb{P}\left(\left\|\widetilde{\bm{\mathcal{A}}}_S\bm{\eta}\right\|_{\infty, \infty}\geq \sqrt{t}\right)\leq2n^4\exp \left\{-\frac{nt}{2\tau\left(1-\left(\frac{\lambda}{\lambda+1}\right)^{S+1}\right)^2\sigma^2}\right\}.
+\end{equation}
+Choose $t=2\tau\left(1-\left(\frac{\lambda}{\lambda+1}\right)^{S+1}\right)^2\left(4\log n+\log{2d}\right)/n$ and with probability $1-1/d$, we have 
+\begin{equation}
+    \left\|\widetilde{\bm{\mathcal{A}}}_S\bm{\eta}\right\|_{F}^{2}\leq \frac{2\tau\left(1-\left(\frac{\lambda}{\lambda+1}\right)^{S+1}\right)^2\sigma^2\left(4\log n+\log{2d}\right)}{n},
+\end{equation}
+which finishes the proof.
+\end{proof}
+
+\section{Proof of the Main Theorem~\ref{theorem:main}}
+\label{appendix:upper bound with optimization}
+We provide the details of proof of main theorem~\ref{theorem:main}.\\
+\input{optimization_upper_bound}
+
+
+\section{More Details on Equation~(\ref{graph signal denoising}).}
+We provide more details on how to obtain Equation~(\ref{graph signal denoising}).
+
+
+Note that if we set $\widetilde{\mathbf{L}}=\mathbf{I}-\widetilde{\mathbf{D}}^{-\frac{1}{2}}\widetilde{\mathbf{A}} \widetilde{\mathbf{D}}^{-\frac{1}{2}}$, we have $\operatorname{tr}\left(\mathbf{F}^{\top} \widetilde{\mathbf{L}} \mathbf{F}\right)=\operatorname{tr}\left(\mathbf{F}^{\top} (\mathbf{I}-\widetilde{\mathbf{D}}^{-\frac{1}{2}}\widetilde{\mathbf{A}} \widetilde{\mathbf{D}}^{-\frac{1}{2}}) \mathbf{F}\right)=\operatorname{tr}\left(\mathbf{F}^{\top}\mathbf{F}\right)-\operatorname{tr}\left(\mathbf{F}^{\top} \widetilde{\mathbf{D}}^{-\frac{1}{2}}\widetilde{\mathbf{A}} \widetilde{\mathbf{D}}^{-\frac{1}{2}} \mathbf{F}\right)=\operatorname{tr}\left(\mathbf{F}\mathbf{F}^{\top}\right)-\operatorname{tr}\left( \widetilde{\mathbf{D}}^{-\frac{1}{2}}\widetilde{\mathbf{A}} \widetilde{\mathbf{D}}^{-\frac{1}{2}} \mathbf{F}\mathbf{F}^{\top}\right)$. 
+On the other hand, if we set $\widetilde{\mathbf{L}}=\mathbf{I}-\widetilde{\mathbf{D}}^{-1}\widetilde{\mathbf{A}}$, we have $\operatorname{tr}\left(\mathbf{F}^{\top} \widetilde{\mathbf{L}} \mathbf{F}\right)=\operatorname{tr}\left(\mathbf{F}^{\top} (\mathbf{I}-\widetilde{\mathbf{D}}^{-1}\widetilde{\mathbf{A}}) \mathbf{F}\right)=\operatorname{tr}\left(\mathbf{F}^{\top}\mathbf{F}\right)-\operatorname{tr}\left(\mathbf{F}^{\top} \widetilde{\mathbf{D}}^{-1}\widetilde{\mathbf{A}} \mathbf{F}\right)=\operatorname{tr}\left(\mathbf{F}\mathbf{F}^{\top}\right)-\operatorname{tr}\left( \widetilde{\mathbf{D}}^{-1}\widetilde{\mathbf{A}}\mathbf{F}\mathbf{F}^{\top}\right)$. We denote
+$\mathbf{F}=\left[\begin{array}{c}
+\mathbf{F}_{1} \\
+\vdots \\
+\mathbf{F}_{n} \\
+\end{array}\right]$ and $\mathbf{F}^{\top}=\left[\mathbf{F}_{1}^{\top} \cdots \mathbf{F}_{n}^{\top}\right]$, where $\mathbf{F}_i=\left[\mathbf{F}_{i1} \cdots \mathbf{F}_{id}\right]$, then we have $\operatorname{tr}\left(\mathbf{F}\mathbf{F}^{\top}\right) = \sum_{i=1}^n \mathbf{F}_{i}\mathbf{F}^{\top}_{i}$. \\
+When $\widetilde{\mathbf{L}}=\mathbf{I}-\widetilde{\mathbf{D}}^{-\frac{1}{2}}\widetilde{\mathbf{A}} \widetilde{\mathbf{D}}^{-\frac{1}{2}}$, we have
+\begin{equation*}
+\begin{split}
+&\quad\operatorname{tr}\left( \widetilde{\mathbf{D}}^{-\frac{1}{2}}\widetilde{\mathbf{A}} \widetilde{\mathbf{D}}^{-\frac{1}{2}} \mathbf{F}\mathbf{F}^{\top}\right)\\
+&=\operatorname{tr}\left(\left[\begin{array}{cccc}
+\frac{\mathbf{A}_{11}}{\sqrt{d_{1}+1}\sqrt{d_{1}+1}} & \frac{\mathbf{A}_{12}}{\sqrt{d_{1}+1}\sqrt{d_{2}+1}}  & \cdots & \frac{\mathbf{A}_{1n}}{\sqrt{d_{1}+1}\sqrt{d_{n}+1}} \\
+\frac{\mathbf{A}_{21}}{\sqrt{d_{2}+1}\sqrt{d_{1}+1}} & \frac{\mathbf{A}_{22}}{\sqrt{d_{2}+1}\sqrt{d_{2}+1}}  & \cdots & \frac{\mathbf{A}_{2n}}{\sqrt{d_{2}+1}\sqrt{d_{n}+1}} \\
+\vdots  & \ddots  & \ddots & \vdots \\
+\frac{\mathbf{A}_{n1}}{\sqrt{d_{n}+1}\sqrt{d_{1}+1}} & \frac{\mathbf{A}_{n2}}{\sqrt{d_{n}+1}\sqrt{d_{2}+1}} & \cdots & \frac{\mathbf{A}_{nn}}{\sqrt{d_{n}+1}\sqrt{d_{n}+1}}
+\end{array}\right] \left[\begin{array}{cccc}
+\mathbf{F}_{1}\mathbf{F}_{1}^{\top} & \mathbf{F}_{1}\mathbf{F}_{2}^{\top}  & \cdots & \mathbf{F}_{1}\mathbf{F}_{n}^{\top} \\
+\mathbf{F}_{2}\mathbf{F}_{1}^{\top} & \mathbf{F}_{2}\mathbf{F}_{2}^{\top} & \cdots & \mathbf{F}_{2}\mathbf{F}_{n}^{\top} \\
+\vdots  & \ddots  & \ddots & \vdots \\
+\mathbf{F}_{n}\mathbf{F}_{1}^{\top} & \mathbf{F}_{n}\mathbf{F}_{2}^{\top} & \cdots & \mathbf{F}_{n}\mathbf{F}_{n}^{\top}
+\end{array}\right]\right)\\
+&=\sum_{i=1}^{n}\sum_{j=1}^{n}\frac{\mathbf{A}_{ij}}{\sqrt{d_{i}+1}\sqrt{d_{j}+1}}\mathbf{F}_{j}\mathbf{F}_{i}^{\top}.
+\end{split}
+\end{equation*}
+On the other hand, when $\widetilde{\mathbf{L}}=\mathbf{I}-\widetilde{\mathbf{D}}^{-1}\widetilde{\mathbf{A}}$, we have
+\begin{equation*}
+\begin{split}
+&\quad\operatorname{tr}\left( \widetilde{\mathbf{D}}^{-1}\widetilde{\mathbf{A}} \mathbf{F}\mathbf{F}^{\top}\right)\\
+&=\operatorname{tr}\left(\left[\begin{array}{cccc}
+\frac{\mathbf{A}_{11}}{d_{1}+1} & \frac{\mathbf{A}_{12}}{d_{1}+1}  & \cdots & \frac{\mathbf{A}_{1n}}{d_{1}+1} \\
+\frac{\mathbf{A}_{21}}{d_{2}+1} & \frac{\mathbf{A}_{22}}{d_{2}+1} & \cdots & \frac{\mathbf{A}_{2n}}{d_{2}+1}\\
+\vdots  & \ddots  & \ddots & \vdots \\
+\frac{\mathbf{A}_{n1}}{d_{n}+1} & \frac{\mathbf{A}_{n2}}{d_{n}+1} & \cdots & \frac{\mathbf{A}_{nn}}{d_{n}+1}
+\end{array}\right] \left[\begin{array}{cccc}
+\mathbf{F}_{1}\mathbf{F}_{1}^{\top} & \mathbf{F}_{1}\mathbf{F}_{2}^{\top}  & \cdots & \mathbf{F}_{1}\mathbf{F}_{n}^{\top} \\
+\mathbf{F}_{2}\mathbf{F}_{1}^{\top} & \mathbf{F}_{2}\mathbf{F}_{2}^{\top} & \cdots & \mathbf{F}_{2}\mathbf{F}_{n}^{\top} \\
+\vdots  & \ddots  & \ddots & \vdots \\
+\mathbf{F}_{n}\mathbf{F}_{1}^{\top} & \mathbf{F}_{n}\mathbf{F}_{2}^{\top} & \cdots & \mathbf{F}_{n}\mathbf{F}_{n}^{\top}
+\end{array}\right]\right)\\
+&=\sum_{i=1}^{n}\sum_{j=1}^{n}\frac{\mathbf{A}_{ij}}{d_{i}+1}\mathbf{F}_{j}\mathbf{F}_{i}^{\top}.
+\end{split}
+\end{equation*}
+So when $\widetilde{\mathbf{L}}=\mathbf{I}-\widetilde{\mathbf{D}}^{-\frac{1}{2}}\widetilde{\mathbf{A}} \widetilde{\mathbf{D}}^{-\frac{1}{2}}$, we have 
+\begin{equation*}
+    \begin{split}
+        &\quad\operatorname{tr}\left(\mathbf{F}^{\top} \widetilde{\mathbf{L}} \mathbf{F}\right)\quad \left(\widetilde{\mathbf{L}}=\mathbf{I}-\widetilde{\mathbf{D}}^{-\frac{1}{2}}\widetilde{\mathbf{A}} \widetilde{\mathbf{D}}^{-\frac{1}{2}}\right)\\
+        &= \operatorname{tr}\left(\mathbf{F}^{\top} (\mathbf{I}-\widetilde{\mathbf{D}}^{-\frac{1}{2}}\widetilde{\mathbf{A}} \widetilde{\mathbf{D}}^{-\frac{1}{2}}) \mathbf{F}\right) \\
+        &=\operatorname{tr}\left(\mathbf{F}\mathbf{F}^{\top}\right)-\operatorname{tr}\left( \widetilde{\mathbf{D}}^{-\frac{1}{2}}\widetilde{\mathbf{A}} \widetilde{\mathbf{D}}^{-\frac{1}{2}} \mathbf{F}\mathbf{F}^{\top}\right) \\
+        &= \sum_{i=1}^n \mathbf{F}_{i}\mathbf{F}^{\top}_{i} -\sum_{i=1}^{n}\sum_{j=1}^{n}\frac{\mathbf{A}_{ij}}{\sqrt{d_{i}+1}\sqrt{d_{j}+1}}\mathbf{F}_{j}\mathbf{F}_{i}^{\top} \\
+        &= \frac{1}{2}\sum_{i=1}^n \mathbf{F}_{i}\mathbf{F}^{\top}_{i} + \frac{1}{2}\sum_{j=1}^n \mathbf{F}_{j}\mathbf{F}^{\top}_{j} -\sum_{i=1}^{n}\sum_{j=1}^{n}\frac{\mathbf{A}_{ij}}{\sqrt{d_{i}+1}\sqrt{d_{j}+1}}\mathbf{F}_{j}\mathbf{F}_{i}^{\top} \\
+        &=\frac{1}{2}\left(\sum_{i=1}^n \mathbf{F}_{i}\mathbf{F}^{\top}_{i} + \sum_{j=1}^n \mathbf{F}_{j}\mathbf{F}^{\top}_{j} -2\sum_{i=1}^{n}\sum_{j=1}^{n}\frac{\mathbf{A}_{ij}}{\sqrt{d_{i}+1}\sqrt{d_{j}+1}}\mathbf{F}_{j}\mathbf{F}_{i}^{\top}\right) \\
+        &= \frac{1}{2}\left( \sum_{i=1}^n \sum_{j=1}^n \frac{\mathbf{A}_{ij}\mathbf{F}_{i}\mathbf{F}^{\top}_{i}}{d_i+1} +  \sum_{i=1}^n \sum_{j=1}^n \frac{\mathbf{A}_{ij}\mathbf{F}_{j}\mathbf{F}^{\top}_{j}}{d_j+1} -2\sum_{i=1}^{n}\sum_{j=1}^{n}\frac{\mathbf{A}_{ij}}{\sqrt{d_{i}+1}\sqrt{d_{j}+1}}\mathbf{F}_{j}\mathbf{F}_{i}^{\top}\right) \text{undirected graph}\\
+        &=\frac{1}{2}\left(\sum_{i=1}^{n}\sum_{j=1}^{n}\left(\frac{\mathbf{A}_{ij}\mathbf{F}_{i}\mathbf{F}^{\top}_{i}}{d_i+1} +\frac{\mathbf{A}_{ij}\mathbf{F}_{j}\mathbf{F}^{\top}_{j}}{d_j+1}-\frac{\mathbf{A}_{ij}}{\sqrt{d_{i}+1}\sqrt{d_{j}+1}}\mathbf{F}_{j}\mathbf{F}_{i}^{\top}-\frac{\mathbf{A}_{ij}}{\sqrt{d_{i}+1}\sqrt{d_{j}+1}}\mathbf{F}_{i}\mathbf{F}_{j}^{\top}\right)\right)\\
+        &=\frac{1}{2}\left(\sum_{i=1}^{n}\sum_{j=1}^{n}\mathbf{A}_{ij}\left(\frac{\mathbf{F}_{i}\mathbf{F}^{\top}_{i}}{d_i+1} +\frac{\mathbf{F}_{j}\mathbf{F}^{\top}_{j}}{d_j+1}-\frac{\mathbf{F}_{j}\mathbf{F}_{i}^{\top}}{\sqrt{d_{i}+1}\sqrt{d_{j}+1}}-\frac{\mathbf{F}_{i}\mathbf{F}_{j}^{\top}}{\sqrt{d_{i}+1}\sqrt{d_{j}+1}}\right)\right)\\
+        &=\frac{1}{2}\left(\sum_{i=1}^{n}\sum_{j=1}^{n}\mathbf{A}_{ij}\left(\frac{\mathbf{F}_i}{\sqrt{d_i+1}}-\frac{\mathbf{F}_j}{\sqrt{d_j+1}}\right)\left(\frac{\mathbf{F}_i^{\top}}{\sqrt{d_i+1}}-\frac{\mathbf{F}_j^{\top}}{\sqrt{d_j+1}}\right)\right)\\
+        &=\frac{1}{2}\left(\sum_{i=1}^{n}\sum_{j=1}^{n}\mathbf{A}_{ij}\left\|\frac{\mathbf{F}_{i}}{\sqrt{d_{i}+1}}-\frac{\mathbf{F}_{j}}{\sqrt{d_{j}+1}}\right\|_{2}^{2}\right) = \sum_{(i, j) \in \mathcal{E}} \mathbf{A}_{i j}\left\|\frac{\mathbf{F}_{i}}{\sqrt{d_{i}+1}}-\frac{\mathbf{F}_{j}}{\sqrt{d_{j}+1}}\right\|_{2}^{2}.
+    \end{split}
+\end{equation*}
+On the other hand, when $\widetilde{\mathbf{L}}=\mathbf{I}-\widetilde{\mathbf{D}}^{-1}\widetilde{\mathbf{A}}$, we have
+\begin{equation*}
+    \begin{split}
+        &\operatorname{tr}\left(\mathbf{F}^{\top} \widetilde{\mathbf{L}} \mathbf{F}\right)\quad \left(\widetilde{\mathbf{L}}=\mathbf{I}-\widetilde{\mathbf{D}}^{-1}\widetilde{\mathbf{A}} \right)\\
+        &= \operatorname{tr}\left(\mathbf{F}^{\top} (\mathbf{I}-\widetilde{\mathbf{D}}^{-1}\widetilde{\mathbf{A}}) \mathbf{F}\right) \\
+        &= \sum_{i=1}^n \mathbf{F}_{i}\mathbf{F}^{\top}_{i} -\sum_{i=1}^{n}\sum_{j=1}^{n}\frac{\mathbf{A}_{ij}}{d_{i}+1}\mathbf{F}_{j}\mathbf{F}_{i}^{\top} \\
+        &= \frac{1}{2}\sum_{i=1}^n \mathbf{F}_{i}\mathbf{F}^{\top}_{i} + \frac{1}{2}\sum_{j=1}^n \mathbf{F}_{j}\mathbf{F}^{\top}_{j} -\sum_{i=1}^{n}\sum_{j=1}^{n}\frac{\mathbf{A}_{ij}}{d_{i}+1}\mathbf{F}_{j}\mathbf{F}_{i}^{\top} \\
+        &= \frac{1}{2}\left( \sum_{i=1}^n \sum_{j=1}^n \frac{\mathbf{A}_{ij}\mathbf{F}_{i}\mathbf{F}^{\top}_{i}}{d_i+1} +  \sum_{i=1}^n \sum_{j=1}^n \frac{\mathbf{A}_{ij}\mathbf{F}_{j}\mathbf{F}^{\top}_{j}}{d_i+1} -2\sum_{i=1}^{n}\sum_{j=1}^{n}\frac{\mathbf{A}_{ij}}{\sqrt{d_{i}+1}\sqrt{d_{i}+1}}\mathbf{F}_{j}\mathbf{F}_{i}^{\top}\right) \text{undirected graph}\\
+        &=\frac{1}{2}\left(\sum_{i=1}^{n}\sum_{j=1}^{n}\mathbf{A}_{ij}\left(\frac{\mathbf{F}_i}{\sqrt{d_i+1}}-\frac{\mathbf{F}_j}{\sqrt{d_i+1}}\right)\left(\frac{\mathbf{F}_i^{\top}}{\sqrt{d_i+1}}-\frac{\mathbf{F}_j^{\top}}{\sqrt{d_i+1}}\right)\right)\\
+        &=\frac{1}{2}\left(\sum_{i=1}^{n}\sum_{j=1}^{n}\mathbf{A}_{ij}\left\|\frac{\mathbf{F}_{i}}{\sqrt{d_{i}+1}}-\frac{\mathbf{F}_{j}}{\sqrt{d_{i}+1}}\right\|_{2}^{2}\right) = \sum_{(i, j) \in \mathcal{E}} \mathbf{A}_{i j}\left\|\frac{\mathbf{F}_{i}}{\sqrt{d_{i}+1}}-\frac{\mathbf{F}_{j}}{\sqrt{d_{i}+1}}\right\|_{2}^{2}.
+    \end{split}
+\end{equation*}
+
+
+
+
+
+\section{Datasets Details}
+Cora, Citeseer, and Pubmed are standard citation network benchmark datasets~\citep{sen2008collective}. Coauthor-CS and Coauthor-Phy are extracted from Microsoft Academic Graph~\citep{shchur2018pitfalls}. Cornell, Texas, Wisconsin, and Actor are constructed by \citet{pei2020geom}. ogbn-products is a large-scale product, constructed by \citet{hu2020open}. 
+\begin{table}[!hbtp]
+\caption{Datasets statistics}
+\label{tab:stat}
+\setlength{\tabcolsep}{2mm}
+\begin{center}
+\begin{tabular}{lcccc}
+\toprule
+  \multicolumn{1}{l}{\textbf{Dataset}}  & \# Nodes    & \# Edges   & \# Features  & \# Classes \\
+\midrule
+Cora  &  2708   & 5429 & 1433 & 7       \\
+Citeseer    & 3327 & 4732 & 3703 & 6 \\
+Pubmed   & 19717 & 44338 & 500 & 3   \\
+Cornell   & 183 & 295 & 1703 & 5   \\
+Texas & 183 & 309 & 1703 & 5 \\
+Wisconsin & 251 & 499 & 1703 & 5 \\
+Actor & 7600 & 33544 & 931 & 5 \\
+Coauthor-CS & 18333 & 81894 & 6805 & 15 \\
+Coauthor-Phy & 34493 & 247962 & 8415 & 5 \\
+ogbn-products & 2449029 & 61859140 & 100 & 42\\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{table}
+
+
+\section{Reproducibility}
+\subsection{Implementation Details}
+We use Pytorch~\citep{paszke2019pytorch} and PyG~\citep{fey2019fast} to implement \name and R\name. The codes of baselines are implemented referring to the implementation of MLP\footnote{https://github.com/tkipf/pygcn}\footnote{https://github.com/snap-stanford/ogb/blob/master/examples/nodeproppred/products/mlp.py}, GCN\footnote{https://github.com/tkipf/pygcn}\footnote{https://github.com/snap-stanford/ogb/blob/master/examples/nodeproppred/products/gnn.py}, GAT\footnote{https://github.com/pyg-team/pytorch\_geometric/blob/master/examples/gat.py}, GLP\footnote{https://github.com/liqimai/Efficient-SSL}, S$^2$GC\footnote{https://github.com/allenhaozhu/SSGC}, and IRLS\footnote{https://github.com/FFTYYY/TWIRLS}. All the experiments in this work are conducted on a single NVIDIA Tesla A100 with 80GB memory size. The software that we use for experiments are Python 3.6.8, pytorch 1.9.0, pytorch-scatter 2.0.9, pytorch-sparse 0.6.12, pyg 2.0.3, ogb 1.3.4, numpy 1.19.5, torchvision 0.10.0, and CUDA 11.1.
+
+\subsection{Hyperparameter Details}
+\label{appendix:hyperparameter}
+We provide details about hyparatemeters of \name and R\name in Table~\ref{tab:citation_hyper}, \ref{tab:heterophily_hyper}, \ref{tab:co-author_hyper}, \ref{tab:products_hyper}, and \ref{tab:citation_hyper_flip}.
+\begin{table}[t]
+\setlength{\tabcolsep}{0.6mm}
+\caption{The hyper-parameters for \name and R\name on three citation datasets.}
+\label{tab:citation_hyper}
+\vskip 0.15in
+    \centering
+    \begin{tabular}{l|c|c|c|c|c|c|c|c|c|c}
+    \toprule
+    Model & dataset & runs  & lr & epochs & wight decay & hidden & dropout & $S$ & $\lambda$ & $\epsilon$\\
+    \midrule
+    \name & Cora & 100 & 0.2 & 100 & 1e-5 & 0 & 0 & 16 & 32 & - \\
+    \name & Citeseer & 100 & 0.2 & 100 & 1e-5 & 0 & 0 & 16 & 32 & - \\
+    \name & Pubmed & 100 & 0.2 & 100 & 1e-5 & 0 & 0 & 16 & 32 & - \\
+    \hline
+    R\name & Cora & 100 & 0.2 & 100 & 1e-5 & 0 & 0 & 16 & 32 & 1 \\
+    R\name & Citeseer & 100 & 0.2 & 100 & 1e-5 & 0 & 0 & 16 & 32 & 1 \\
+    R\name & Pubmed & 100 & 0.2 & 100 & 1e-5 & 0 & 0 & 16 & 32 & 1 \\
+    \bottomrule
+    \end{tabular}
+\end{table}
+
+\begin{table}[t]
+\setlength{\tabcolsep}{0.6mm}
+\caption{The hyper-parameters for \name and R\name on four heterophily graphs.}
+\label{tab:heterophily_hyper}
+\vskip 0.15in
+    \centering
+    \begin{tabular}{l|c|c|c|c|c|c|c|c|c|c|c|c}
+    \toprule
+    Model & dataset & noise level & runs  & lr & epochs & wight decay & hidden & dropout & $S$ & $\lambda$ & $\epsilon$ & +MLP\\
+    \midrule
+    \name & Cornell & 0.01 & 10 & 0.2 & 200 & 5e-4 & 16 & 0.5 & 16 & 1 & - & y \\
+    \name & Cornell & 1 & 10 & 0.2 & 200 & 5e-4 & 16 & 0.5 & 16 & 1024 & - & y \\
+    \name & Texas & 0.01 & 10 & 0.2 & 200 & 5e-4 & 16 & 0.5 & 16 & 1 & - & y \\
+    \name & Texas & 1 & 10 & 0.2 & 200 & 5e-4 & 16 & 0.5 & 16 & 1024 & - & y \\
+    \name & Wisconsin & 0.01 & 10 & 0.2 & 1000 & 5e-4 & 16 & 0.5 & 2 & 1 & - & y \\
+    \name & Wisconsin & 1 & 10 & 0.2 & 1000 & 5e-4 & 16 & 0.5 & 2 & 1024 & - & y \\
+    \name & Actor & 0.01 & 10 & 0.2 & 1000 & 5e-4 & 16 & 0.5 & 2 & 1 & - & y \\
+    \name & Actor & 1 & 10 & 0.2 & 1000 & 5e-4 & 16 & 0.5 & 2 & 1024 & - & y \\
+    \hline
+    R\name & Cornell & 0.01 & 10 & 0.2 & 200 & 5e-4 & 16 & 0.5 & 16 & 1 & 1 & y \\
+    R\name & Cornell & 1 & 10 & 0.2 & 200 & 5e-4 & 16 & 0.5 & 16 & 1024 & 1 & y \\
+    R\name & Texas & 0.01 & 10 & 0.2 & 200 & 5e-4 & 16 & 0.5 & 16 & 1 & 1 & y \\
+    R\name & Texas & 1 & 10 & 0.2 & 200 & 5e-4 & 16 & 0.5 & 16 & 1024 & 1 & y \\
+    R\name & Wisconsin & 0.01 & 10 & 0.2 & 1000 & 5e-4 & 16 & 0.5 & 2 & 1 & 1e-5 & y \\
+    R\name & Wisconsin & 1 & 10 & 0.2 & 1000 & 5e-4 & 16 & 0.5 & 2 & 1024 & 1e-5 & y \\
+    R\name & Actor & 0.01 & 10 & 0.2 & 1000 & 5e-4 & 16 & 0.5 & 2 & 1 & 1e-5 & y \\
+    R\name & Actor & 1 & 10 & 0.2 & 1000 & 5e-4 & 16 & 0.5 & 2 & 1024 & 1e-5 & y \\
+    \bottomrule
+    \end{tabular}
+\end{table}
+
+
+\begin{table}[t]
+\setlength{\tabcolsep}{0.6mm}
+\caption{The hyper-parameters for \name and R\name on two co-author datasets.}
+\label{tab:co-author_hyper}
+\vskip 0.15in
+    \centering
+    \begin{tabular}{l|c|c|c|c|c|c|c|c|c|c|c}
+    \toprule
+    Model & dataset & noise level & runs  & lr & epochs & wight decay & hidden & dropout & $S$ & $\lambda$ & $\epsilon$ \\
+    \midrule
+    \name & Coauthor-CS & 0.1 & 10 & 0.2 & 1000 & 1e-7 & 0 & 0 & 16 & 1 & -  \\
+    \name & Coauthor-CS & 1 & 10 & 0.2 & 1000 & 1e-7 & 0 & 0 & 16 & 128 & -  \\
+    \name & Coauthor-Phy & 0.1 & 10 & 0.2 & 200 & 5e-4 & 16 & 0.5 & 16 & 1 & -  \\
+    \name & Coauthor-Phy & 1 & 10 & 0.2 & 200 & 5e-4 & 16 & 0.5 & 16 & 1024 & -  \\
+    \hline
+    R\name & Coauthor-CS & 0.1 & 10 & 0.2 & 1000 & 1e-7 & 0 & 0 & 16 & 1 & 1  \\
+    R\name & Coauthor-CS & 1 & 10 & 0.2 & 1000 & 1e-7 & 0 & 0 & 16 & 128 & 1  \\
+    R\name & Coauthor-Phy & 0.1 & 10 & 0.2 & 200 & 5e-4 & 16 & 0.5 & 16 & 1 & 1  \\
+    R\name & Coauthor-Phy & 1 & 10 & 0.2 & 200 & 5e-4 & 16 & 0.5 & 16 & 1024 & 1  \\
+    \bottomrule
+    \end{tabular}
+\end{table}
+
+
+\begin{table}[t]
+\setlength{\tabcolsep}{0.6mm}
+\caption{The hyper-parameters for \name and R\name on ogbn-products dataset.}
+\label{tab:products_hyper}
+\vskip 0.15in
+    \centering
+    \begin{tabular}{l|c|c|c|c|c|c|c|c|c|c|c}
+    \toprule
+    Model  & noise level & runs  & lr & epochs & hidden & dropout & $S$ & $\lambda$ & $\epsilon$ & layers & +MLP \\
+    \midrule
+    \name & 0.1 & 10 & 0.01 & 300 & 256 & 0.5 & 128 & 32 & -  & 3 & y \\
+    \name & 1 & 10 & 0.01 & 300 & 256 & 0.5 & 128 & 256 & -  & 3 & y\\
+    \hline
+    R\name & 0.1 & 10 & 0.01 & 300 & 256 & 0.5 & 128 & 32 & 1e-2  & 3 & y \\
+    R\name & 1 & 10 & 0.01 & 300 & 256 & 0.5 & 128 & 256 & 1e-2  & 3 & y\\
+    \bottomrule
+    \end{tabular}
+\end{table}
+
+
+\begin{table}[t]
+\setlength{\tabcolsep}{0.6mm}
+\caption{The hyper-parameters for \name and R\name on three citation datasets of the flipping experiments.}
+\label{tab:citation_hyper_flip}
+\vskip 0.15in
+    \centering
+    \begin{tabular}{l|c|c|c|c|c|c|c|c|c|c|c}
+    \toprule
+    Model & dataset & flip probability & runs  & lr & epochs & wight decay & hidden & dropout & $S$ & $\lambda$ & $\epsilon$\\
+    \midrule
+    \name & Cora  & 0.1 & 100 & 0.2 & 100 & 1e-5 & 0 & 0 & 32 & 64 & - \\
+    \name & Cora  & 0.2 & 100 & 0.2 & 100 & 1e-5 & 0 & 0 & 16 & 32 & - \\
+    \name & Cora  & 0.4 & 100 & 0.2 & 100 & 1e-5 & 0 & 0 & 16 & 32 & - \\
+    \name & Citeseer  & 0.1 & 100 & 0.2 & 100 & 1e-5 & 0 & 0 & 16 & 32 & - \\
+    \name & Citeseer  & 0.2 & 100 & 0.2 & 100 & 1e-5 & 0 & 0 & 16 & 32 & - \\
+    \name & Citeseer  & 0.4 & 100 & 0.2 & 100 & 1e-5 & 0 & 0 & 16 & 32 & - \\
+    \name & Pubmed  & 0.1 & 100 & 0.2 & 100 & 1e-5 & 0 & 0 & 16 & 32 & - \\
+    \name & Pubmed  & 0.2 & 100 & 0.2 & 100 & 1e-5 & 0 & 0 & 16 & 32 & - \\
+    \name & Pubmed  & 0.4 & 100 & 0.2 & 100 & 1e-5 & 0 & 0 & 16 & 32 & - \\
+    \hline
+    R\name & Cora  & 0.1 & 100 & 0.2 & 100 & 1e-5 & 0 & 0 & 32 & 64 & 1e-5 \\
+    R\name & Cora  & 0.2 & 100 & 0.2 & 100 & 1e-5 & 0 & 0 & 16 & 32 & 1e-5 \\
+    R\name & Cora  & 0.4 & 100 & 0.2 & 100 & 1e-5 & 0 & 0 & 16 & 32 & 1e-1 \\
+    R\name & Citeseer  & 0.1 & 100 & 0.2 & 100 & 1e-5 & 0 & 0 & 16 & 32 & 1e-5 \\
+    R\name & Citeseer  & 0.2 & 100 & 0.2 & 100 & 1e-5 & 0 & 0 & 16 & 32 & 1e-5 \\
+    R\name & Citeseer  & 0.4 & 100 & 0.2 & 100 & 1e-5 & 0 & 0 & 16 & 32 & 1e-5 \\
+    R\name & Pubmed  & 0.1 & 100 & 0.2 & 100 & 1e-5 & 0 & 0 & 16 & 32 & 1e-1 \\
+    R\name & Pubmed  & 0.2 & 100 & 0.2 & 100 & 1e-5 & 0 & 0 & 16 & 32 & 1e-1 \\
+    R\name & Pubmed  & 0.4 & 100 & 0.2 & 100 & 1e-5 & 0 & 0 & 16 & 32 & 1e-1 \\
+    \bottomrule
+    \end{tabular}
+\end{table}
+
+\section{Additional Experiments}
+
+\subsection{Analysis on Row Normalization}
+\label{appendix:row norm}
+
+\begin{table}[htbp]
+\normalsize
+\caption{Summary of results of NGC w/o raw normalization on three datasets in terms of classification accuracy (\%)}
+\label{tab:row normalization}
+\setlength{\tabcolsep}{2.5mm}
+\begin{center}
+\begin{tabular}{cccccccccc}
+\toprule
+\multirow{2}{*}{Noise Level} & \multicolumn{3}{c}{Cora} & \multicolumn{3}{c}{Citeseer} & \multicolumn{3}{c}{Pubmed} \\
+\cmidrule(r){2-4} \cmidrule(r){5-7} \cmidrule(r){8-10}
+&  1     &  10  &   100
+&  1     &  10  &   100
+&  1     &  10  &   100 \\
+\midrule
+w/o RN   &68.3  &59.7  &56.1   &43.5  &40.4  &37.6  &43.1  &38.8  &37.4 \\
+w RN  &66.1  &65.5  &66.2  &45.3 &45.1  &44.8  &62.3  &62.7  &62.1 \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{table}
+
+In this section, we analyze the influence of row normalization on denoising performance. The noise level $\xi$ controls the magnitude of the Gaussian noise we add to the feature matrix: $\mathbf{X}+\xi\bm{\eta}$ where $\bm{\eta}$ is sampled from standard i.i.d., Gaussian distribution. For Cora, Citeseer, and Pubmed, we test $\xi \in \{1, 10, 100\}$. From Table~\ref{tab:row normalization}, we can observe that the denoising performance of w/ row normalization is better than w/o row normalization. Since row normalization can shrink the value of elements in $\bm{\eta}$, thus reducing the variance $\sigma$. In other words, row normalization make $\left\|\widetilde{\bm{\mathcal{A}}}_S\bm{\eta}\right\|_{F}^{2}$ converge to zero faster.
+
+
+
+\subsection{Analysis on the Depth of \name and R\name}
+\label{appendix:depth analysis}
+In this section, we analyze the influence of the depth of \name and R\name model on denoising performance by testing the classification accuracy on semi-supervised node classification tasks. We conduct two sets of experiments: with/without noise in feature matrix. For experiment with feature noise, we simple fix the noise level $\xi =1$. In each set of experiments, we evaluate the test accuracy with respect to \name and R\name model depth, which corresponding to the value of $S$ in $\widetilde{\mathcal{A}}_{S}$. From Figure~\ref{fig:depth_ngc} and \ref{fig:depth_rngc}, we can observe that the test accuracy barely changes with depth if the model is trained on the clean features on Cora and Pubmed but changes greatly if the model is trained on the clean feature on Citeseer. In this regard, the over-smoothing issue exists in R\name model on citeseer. However, the denoising performance of shallow R\name is not good as deeper R\name models, especially on the large graph like Pubmed. This suggests that we do need to increase the depth of GNN model to include more higher-order neighbors for better denoising performances. 
+
+ \begin{figure}[t]
+    \begin{center}
+        \includegraphics[width=0.325\textwidth]{images/cora_compar.pdf}
+        \includegraphics[width=0.325\textwidth]{images/citeseer_compar.pdf}
+        \includegraphics[width=0.325\textwidth]{images/pubmed_compar.pdf}
+        \end{center}
+        \caption{Comparison of classification accuracy v.s. \name model depth on semi-supervised node classification tasks. The experiments are conducted on clean and noisy features.} 
+        \label{fig:depth_ngc}
+ \end{figure}
+ 
+ \begin{figure}[t]
+    \begin{center}
+        \includegraphics[width=0.325\textwidth]{images/cora_compar_rngc.pdf}
+        \includegraphics[width=0.325\textwidth]{images/citeseer_compar_rngc.pdf}
+        \includegraphics[width=0.325\textwidth]{images/pubmed_compar_rngc.pdf}
+        \end{center}
+        \caption{Comparison of classification accuracy v.s. R\name model depth on semi-supervised node classification tasks. The experiments are conducted on clean and noisy features.} 
+        \label{fig:depth_rngc}
+ \end{figure}
+ 
+ 
+
+
+
+
+\section{Introduction}
+\input{01introduction}
+
+
+\section{A Simple Unifying Framework: Neumann Graph Convolution}
+\label{sec:NGC}
+\input{03NGC}
+
+\section{Main Theory}
+\label{sec:main theory}
+\input{04theory}
+
+\section{Robust Neumann Graph Convolution} 
+\label{sec:RNGC}
+\input{05adversarial}
+
+\section{Experiments}
+\label{sec:experiments}
+\input{06experiment}
+
+\section{Related Work}
+\input{07related}
+
+\section{Conclusion}
+\input{08conclusion}
+
+\newpage
+
+\normalem
+
+
+
+

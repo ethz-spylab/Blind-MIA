@@ -1,0 +1,436 @@
+\section{Introduction}
+	\label{sec:introduction}
+	
+
+
+	The primary objective of Inverse Reinforcement Learning (IRL) is to learn  a reward function from demonstrations \citep{arora2021survey,russell1998learning}. In general, conventional  IRL methods rely on extensive online trials and errors that can be costly or require a fully known transition model \citep{abbeel2004apprenticeship, ratliff2006maximum,ziebart2008maximum,syed2007game,boularias2011relative,osa2018algorithmic}, struggling to scale in many real-world applications. To tackle this problem, this paper studies \emph{offline IRL}, with focus on learning from a  previously collected dataset without online interaction with the environment. Offline IRL holds tremendous promise for  safety-sensitive applications where manually identifying an appropriate reward is difficult but historical datasets of human demonstrations are readily available (e.g., in healthcare, autonomous driving, robotics, etc.). In particular, since the learned reward function is a succinct representation of an expert’s intention, it is useful for policy learning (e.g., in offline Imitation Learning (IL) ~\citep{chan2021scalable}) as well as a number of broader applications (e.g., task description~\citep{ng2000algorithms} and transfer learning ~\citep{herman2016inverse}).
+
+
+	
+    This work aims to address a major challenge in offline IRL, namely the \emph{reward extrapolation error}, where the learned reward function may fail to correctly explain the task and misguide the agent in unseen environments. This issue results from the partial coverage of states in the restricted expert demonstrations (i.e., covariate shift) as well as the high-dimensional and expressive function approximation for the reward. It is further exacerbated due to no reinforcement signal for   supervision and the intrinsic \emph{reward ambiguity} therein.\footnote{The reward ambiguity refers to the fact that same behavior can be optimal for many reward functions.}
+   
+
+	In fact, similar challenges related to the extrapolation error \emph{in the value function} have been widely observed in offline (forward) RL, e.g., in \citet{kumar2020conservative,yu2020mopo,yu2021combo}. Unfortunately, to the best of our knowledge, this challenge remains not well understood in offline IRL, albeit there is some recent progress~\citep{zolna2020offline,garg2021iq,chan2021scalable}. Thus motivated, the key question this paper seeks to answer is: ``How to devise offline IRL algorithms  that can ameliorate the reward extrapolation error effectively?''
+	
+
+
+	
+
+	
+
+	
+
+	
+
+
+
+
+	
+
+	
+
+
+
+
+
+	
+
+	
+
+	
+	We answer this question by introducing a principled offline IRL algorithm, named \underline{c}onservative mode\underline{l}-b\underline{a}sed \underline{r}eward l\underline{e}arning (CLARE), leveraging not only (limited) higher-quality expert data but also (potentially abundant) lower-quality diverse data to enhance the coverage of the state-action space for combating covariate shift. {\color{black}CLARE addresses the above-mentioned challenge by appropriately \emph{integrating conservatism} into the learned reward to alleviate the possible misguidance in out-of-distribution states, and improves the reward generalization ability by utilizing a learned dynamics model.} More specifically, CLARE iterates between \emph{conservative reward updating} and \emph{safe policy improvement}, and the reward function is updated via improving its values on \emph{weighted} expert and diverse state-actions while in turn cautiously penalizing those generated from model rollouts. As a result, it can encapsulate the expert intention while conservatively evaluating out-of-distribution state-actions, which in turn encourages the policy to visit data-supported states and follow expert behaviors and hence achieves safe policy search. 
+	
+
+	
+
+	
+	\begin{figure}[ht]
+		\centering
+		\vspace{-.9em}
+		\includegraphics[width=0.8\columnwidth]{./figure/tradeoff.pdf}
+		\label{figure:tradeoff}
+		\vspace{-.9em}
+		\caption{An illustration of the two-tier tradeoffs in CLARE. }
+		\vspace{-.5em}
+	\end{figure}
+	
+	Technically, there are highly nontrivial two-tier tradeoffs that CLARE has to delicately calibrate: {\color{black}``balanced exploitation'' of the expert and diverse data, and ``exploration'' of the estimated model.}\footnote{\color{black}The exploration in the context of this manuscript refers to enhancing the generalization capability of the algorithm by escaping the offline data manifold via model rollout.} As illustrated in Fig. \ref{figure:tradeoff}, The first tradeoff arises because CLARE relies on both  exploiting expert demonstrations to infer the reward and exploiting  diverse data to handle the covariate shift caused by the insufficient state-action coverage of limited demonstration data.
+
+    At a higher level, CLARE needs to judiciously explore the estimated model to escape the offline data manifold for better generalization. To this end, we first introduce the  new \emph{pointwise weight parameters} for  offline data points (state-action pairs) to capture the subtle two-tier exploitation-exploration tradeoffs. Then, we rigorously quantify its impact on the performance by providing an upper bound on the return gap between the learned policy and   the expert policy. Based on the theoretical quantification, we derive the optimal weight parameters whereby CLARE can {\color{black}strike the balance appropriately} to minimize the return gap. Our findings reveal that the reward function obtained by CLARE can effectively capture the expert intention and provably ameliorate the extrapolation error in offline IRL. 
+
+	
+	Finally,  extensive experiments are carred out to compare  CLARE with state-of-the-art offline IRL and offline IL algorithms on MuJoCo continuous control tasks. Our results demonstrate that even using small offline datasets, CLARE obtains significant performance gains over existing algorithms in continuous, high-dimensional environments. We also show that the learned reward function can explain the expert behaviors well and is highly instructive for further  learning.
+	
+	
+	
+	
+	
+	
+
+	
+
+
+
+
+	
+
+	
+
+	
+	\section{Preliminaries}
+	\label{sec:preliminaries}
+	
+	\textbf{Markov decision process (MDP)} can be specified by tuple $M\doteq\langle\mathcal{S},\mathcal{A},T,R,\mu,\gamma\rangle$, consisting of state space $\mathcal{S}$, action space $\mathcal{A}$, transition function $T:\mathcal{S}\times\mathcal{A}\rightarrow\mathcal{P}(\mathcal{S})$, reward function ${R}:\mathcal{S}\times\mathcal{A}\rightarrow\mathbb{R}$, initial state distribution $\mu:\mathcal{S}\rightarrow[0,1]$, and discount factor $\gamma\in(0,1)$. A stationary stochastic policy maps states to distributions over actions as $\pi:\mathcal{S}\rightarrow\mathcal{P}(\mathcal{A})$. We define the normalized state-action occupancy measure (abbreviated as occupancy measure) of policy $\pi$ under transition dynamics $T$ as $\rho^{\pi}(s,a)\doteq(1-\gamma)\sum^{\infty}_{h=0}\gamma^h\Pr(s_h=s|T,\pi,\mu)\pi(a|s)$. The objective of reinforcement learning (RL) can be expressed as maximizing expected cumulative rewards: $\max_{\pi\in\Pi}J(\pi)\doteq\mathbb{E}_{s,a\sim\rho^{\pi}}[{R}(s,a)]$, where $\Pi$ is the set of all stationary stochastic policies that take actions in $\mathcal{A}$ given states in $\mathcal{S}$.\footnote{For convenience, we omit a constant multiplier, $1/(1-\gamma)$, in the objective for conciseness, i.e., the complete objective function is given by $\max_{\pi\in\Pi} \mathbb{E}_{s,a\sim\rho^{\pi}}[{R}(s,a)/(1-\gamma)]$.}
+	
+	\textbf{Maximum entropy IRL (MaxEnt IRL)} aims to learn the reward function from expert demonstrations and reason about the \emph{stochasticity} therein \citep{ziebart2008maximum,ho2016generative}. Based on demonstrations sampled from expert policy $\pi^E$, the MaxEnt IRL problem is given by
+	\begin{align}
+		\label{prob:minimax}
+		\min_{{r}\in\mathcal{R}}\left(\max_{\pi\in\Pi}\alpha{H}(\pi)+\mathbb{E}_{s,a\sim\rho^{\pi}}[{r}(s,a)]\right)-\mathbb{E}_{s,a\sim\rho^E}[{r}(s,a)] + \psi(r),
+	\end{align}
+	with ${H}(\pi)\doteq -\iint\rho^{\pi}(s,a)\log\pi(a|s)\dif s \dif a$ being the $\gamma$-discounted causal entropy, $\mathcal{R}$ a family of reward functions, $\alpha\ge0$ the weight parameter, and $\psi:\mathbb{R}^{\mathcal{S}\times\mathcal{A}}\rightarrow\mathbb{R}\cup\{\infty\}$ a convex reward regularizer \citet{fu2018learning,qureshi2018adversarial}.  
+
+	Problem (\ref{prob:minimax}) looks for a reward function assigning higher rewards to the expert policy and lower rewards to other policies, along with the best policy under the learned reward function. Although enjoying strong theoretical justification and achieving great performance in many applications, MaxEnt IRL has to solve a forward RL problem in the inner loop that involves extensive online interactions with the environment. 
+	
+	
+	\textbf{Offline IRL} is the setting where the algorithm is neither allowed to interact with the environment nor provided reinforcement signals. It only has access to static dataset $\mathcal{D}=\mathcal{D}_E\cup\mathcal{D}_B$ consisting of expert dataset $\mathcal{D}_E\doteq\{(s_i,a_i,s'_i)\}^{D_E}_{i=1}$ and diverse dataset $\mathcal{D}_B\doteq\{(s_i,a_i,s'_i)\}^{D_B}_{i=1}$ collected by expert policy $\pi^E$ and behavior policy $\pi^B$, respectively. The goal of offline IRL is to infer a reward function capable of explaining the expert's preferences from the given dataset.
+	
+	\section{CLARE: conservative model-based reward learning}
+	\label{sec:learning_conservative_reward}
+
+A naive solution for offline IRL is to retrofit MaxEnt IRL to the offline setting via estimating a dynamics model using offline data (e.g., in \citet{tanwani2013inverse,herman2016inverse}). Unfortunately, it has been reported that this naive paradigm often suffers from unsatisfactory performance in high-dimensional and continuous environments \cite{jarrett2020strictly}. The underlying reasons for this issue include: (1) the dependence on   full knowledge of the reward feature function, and (2) the lack of effective mechanisms to tackle the reward extrapolation error caused by covariate shift (as stated in \cref{sec:introduction}). 
+Nevertheless, we believe that utilizing a learned dynamics model is beneficial because it is expected to provide broader generalization by learning on additional model-generated synthetic data \citep{yu2020mopo,yu2021combo,lin2021model}.  With this insight, this work focuses on the model-based offline IRL method that is robust to covariate shift while enjoying the model's generalization ability.
+	
+As illustrated in Fig. \ref{figure:tradeoff}, there are two-tier subtle tradeoffs that need to be carefully balanced between  exploiting the offline data and exploring model-based synthetic data. On one hand,  the higher-quality expert demonstrations are exploited to infer the intention and abstract the reward function therein, while  the lower-quaity diverse data is exploited to enrich data support. On the other hand, it is essential to prudently explore the estimated dynamics model to improve the generalization capability while mitigating overfitting errors in inaccurate regions. To this end, we devise \underline{c}onservative mode\underline{l}-b\underline{a}sed \underline{r}eward l\underline{e}arning (CLARE) based on  MaxEnt IRL, where the new \emph{pointwise weight parameters} are introduced for each offline state-action pair to capture the tradeoffs subtly. We elaborate further in what follows.
+	
+
+
+	
+
+	
+	As outlined below, CLARE iterates between  \emph{(I) conservative reward updating} and  \emph{(II) safe policy improvement},  under a dynamics model (denoted by $\widehat{T}$) learned from offline dataset.
+	
+
+	
+	\textbf{\emph{(I) Conservative reward updating.}} Given current policy $\pi$, dynamics model $\widehat{T}$, and offline datasets $\mathcal{D}_E$ and $\mathcal{D}_B$, CLARE updates reward funtion ${r}$ based on the following loss:
+	\begin{align}
+		\label{eqn:reward_loss}
+		L({r}|\pi)\doteq \underbrace{\vphantom{\big(\big)}{\color{blue}Z_{\beta}} \mathbb{E}_{s,a\sim{\color{blue}\hat{\rho}^{\pi}}}[{r}(s,a)]}_\textrm{penalized on model rollouts} - \underbrace{\vphantom{\big(\big)}\mathbb{E}_{s,a\sim\tilde{\rho}^E}[{r}(s,a)]}_\textrm{increased on expert data} - \underbrace{\vphantom{\big(\big)}\mathbb{E}_{s,a\sim{\color{blue}\tilde{\rho}^D}}[{\color{blue}{\beta}(s,a)}{r}(s,a)]}_{\mathclap{\textrm{weighting expert and diverse data}}}+\underbrace{\vphantom{\big(\big)}{\color{blue}Z_\beta}\psi({r})}_{\mathclap{\textrm{regularizer}}}, 
+	\end{align}
+	where ${\tilde{\rho}^D(s,a)\doteq(|\mathcal{D}_E(s,a)| + |\mathcal{D}_B(s,a)|)/(D_E+D_B)}$ is the empirical distribution of $(s,a)$ in the union dataset $\mathcal{D}=\mathcal{D}_E\cup\mathcal{D}_B$ and $\tilde{\rho}^E\doteq |\mathcal{D}_E(s,a)|/D_E$ is that for expert dataset $\mathcal{D}_E$;  $\hat{\rho}^{\pi}$ is the occupancy measure when rolling out $\pi$ with dynamics model $\widehat{T}$; and $\psi$ denotes a convex regularizer mentioned above. One key step is to add an additional term weighting the reward of each offline state-action by $\beta(s,a)$, which is a ``fine-grained control'' for the exploitation of the offline data. For the data deserving more exploitation (e.g., expert behaviors with sufficient data support), we can set a relatively large $\beta(s,a)$; otherwise, we decrease its value.  Besides, it can also control the exploration of the model subtly  (consider that if we set all $\beta(s,a)=0$, \cref{eqn:reward_loss} reduces to MaxEnt IRL, enabling the agent to explore the model without restrictions). Here, $Z_{\beta}\doteq 1 +  \mathbb{E}_{s',a'\sim\tilde{\rho}^D}[{\beta}(s',a')]$ is a normalization term. The new ingredients beyond MaxEnt IRL are highlighted in blue.
+	
+  Observe that in \cref{eqn:reward_loss},  by decreasing the reward loss, CLARE pushes up the reward on good offline state-action that characterized by larger $\beta(s,a)$, while pushing down the reward on potentially out-of-distribution ones that generated from model rollouts. This is similar   to  COMBO \citep{yu2021combo}
+  in spirit,  a state-of-the-art offline forward RL algorithm,  and  results in a \emph{conservative reward function}. It can encourage the policy to cautiously exploring the state-actions beyond offline data manifold, thus capable of mitigating the misguidance issue and guiding safe policy search. In \cref{sec:theoretical_analysis}, we will derive a closed-form optimal $\beta(s,a)$ that enables CLARE to achieve {\color{black}a proper exploration-exploitation trade-off} by minimizing a return gap from the expert policy.
+	
+
+	
+
+	
+
+	
+	\textbf{\emph{(II) Safe policy improvement.}} Given updated reward function ${r}$,   the policy is improved by solving
+	\begin{align}
+		\label{eqn:policy_improvement}
+		\max_{\pi\in\Pi} L(\pi|{r})\doteq Z_{\beta} \mathbb{E}_{s,a\sim\hat{\rho}^{\pi}}[{r}(s,a)] + \alpha\widehat{{H}}(\pi),
+	\end{align}
+	where $\alpha \ge 0$ is a weight parameter, and  $\widehat{{H}}(\pi)\doteq-\iint\hat{\rho}^{\pi}(s,a)\log\pi(a|s)\dif s \dif a$ is the $\gamma$-discounted causal entropy induced by the policy and learned dynamics model. Due to the embedded expert intention and conservatism in the reward function, the policy is updated safely by carrying out conservative model-based exploration. One can use any well-established MaxEnt RL approach to solve this problem by simulating with model $\widehat{T}$ and reward function ${r}$. It is worth noting that  for Problem (\ref{eqn:policy_improvement}) in this step,  the practical implementation of CLARE works well with a small number of updates in each iteration (see Sections \ref{sec:practical_implementation} and \ref{sec:experiment}).
+	
+
+	
+
+	
+	\section{Theoretical analysis of CLARE}
+	\label{sec:theoretical_analysis}
+	
+	In this section, we focus on answering the following question: ``How to set $\beta(s,a)$ for each offline state-action pair to {\color{black}strike the two-tier exploitation-exploration balance appropriately}?'' To this end, we first quantify the impact of the tradeoffs via bounding the return gap between the learned policy and expert policy. Then, we derive the optimal weight parameters to minimize this gap. All the detailed proofs can be found in Appendix~\ref{sec:proof}. Notably, this section works with finite state and action spaces, but our algorithms and experiments run in high-dimensional and continuous environments.
+
+	
+	\subsection{Convergence analysis}
+	\label{sec:convergence_analysis}
+	
+	We first characterize the policy learned by CLARE, in terms of $\beta(s,a)$ and empirical distributions $\tilde{\rho}^E$ and $\tilde{\rho}^D$. Before proceeding, it is easy to see CLARE is iteratively solving the min-max problem:
+	\begin{align}
+		\label{prob:clare}
+		\min_{{r}\in\mathcal{R}}\max_{\pi\in\Pi}\underbrace{\alpha\widehat{{H}}(\pi) + Z_{\beta} \mathbb{E}_{\hat{\rho}^{\pi}}\big[{r}(s,a)\big] - \mathbb{E}_{\tilde{\rho}^D}\big[{\beta}(s,a){r}(s,a)\big]- \mathbb{E}_{\tilde{\rho}^E}\big[{r}(s,a)\big]+Z_\beta\psi({r})}_{\doteq L(\pi,{r})}.
+	\end{align}
+	For dynamics $T$, define the set of occupancy measures satisfying \emph{Bellman flow constraints} as 
+	\begin{align}
+		\mathcal{C}_T\doteq \bigg\{\rho\in\mathbb{R}^{|\mathcal{S}||\mathcal{A}|}:\rho\ge0~\text{and}~\sum_{a}\rho(s,a)=\mu(s)+\gamma\sum_{s',a}T(s|s',a)\rho(s',a)~\forall s\in\mathcal{S}\bigg\}.
+	\end{align}
+	We first provide the following results for  switching between policies and occupancy measures, which allow us to use $\pi_\rho$ to denote the unique policy for occupancy measure $\rho$.
+	\begin{lemma}[Theorem 2 in \citet{syed2008apprenticeship}]
+		\label{lem:equivalence}
+	
+		If $\rho\in\mathcal{C}_T$, then $\rho$ is the occupancy measure for stationary policy $\pi_\rho(a|s)\doteq \rho(s,a)/\sum_{a'}\rho(s,a')$, and $\pi_\rho$ is the only stationary policy with occupancy measure $\rho$.
+	\end{lemma}
+
+	\begin{lemma}[Lemma 3.2 in \citet{ho2016generative}]
+		\label{lem:entropy_equivalence}
+	
+		Denote $\bar{{H}}(\rho)\doteq-\sum_{s,a}\rho(s,a)\log\frac{\rho(s,a)}{\sum_{a'}\rho(s,a')}$. Then, $\bar{{H}}$ is strictly concave, and for all $\pi\in\Pi$ and $\rho\in\mathcal{C}_T$, ${H}(\pi)=\bar{{H}}(\rho^{\pi})$ and $\bar{{H}}(\rho) = {H}(\mathcal{\pi_\rho})$ hold true, where $\pi_\rho(a|s)\doteq \rho(s,a)/\sum_{a'}\rho(s,a')$.
+	\end{lemma}
+	Based on \cref{lem:equivalence} and \cref{lem:entropy_equivalence}, we have the follow results on the learned policy.
+	\begin{theorem}
+		\label{thm:true_problem_general}
+		Assume that ${\beta}(s,a)\ge-\tilde{\rho}^E(s,a)/\tilde{\rho}^D(s,a)$ holds for $(s,a)\in\mathcal{D}$. For Problem (\ref{prob:clare}), the following relationship holds:
+		\begin{align}
+			\label{eqn:true_problem_general}
+			\min_{{r}\in\mathcal{R}}\max_{\pi\in\Pi}L(\pi,{r}) = \max_{\hat{\rho}\in\mathcal{C}_{\widehat{T}}}\alpha\bar{{H}}(\hat{\rho}) - Z_\beta D_\psi\bigg(\hat{\rho},\frac{\tilde{\rho}^E + {\beta} \tilde{\rho}^D}{Z_\beta}\bigg),
+    		\end{align}
+		with $D_\psi(\rho_1,\rho_2)\doteq\psi^*(\rho_2-\rho_1)$, where $\psi^*$ is the convex conjugate of $\psi$.
+	\end{theorem}
+	Notably, by selecting appropriate forms of reward regularizers $\psi$, $D_\psi$ can belong to a wide-range of statistical distances. For example, if $\psi(r)=\alpha r^2$, then $D_\psi (\rho_1,\rho_2)=\frac{1}{4\alpha}\chi^2(\rho_1,\rho_2)$; if $\psi$ restricts $r\in [-R^{\max},R^\mathrm{max}]$, then $D_\psi (\rho_1,\rho_2)=2R^\mathrm{max} D_\mathrm{TV}(\rho_1,\rho_2)$ \citep{garg2021iq}. \cref{thm:true_problem_general} implies that CLARE implicitly  seeks a policy \emph{under $\widehat{T}$} whose occupancy measure stays close to an interpolation of the empirical distributions of expert dataset $\mathcal{D}_E$ and union offline dataset $\mathcal{D}$. The interpolation reveals that CLARE is trying to trade off the exploration of the model and exploitation of offline data by selecting proper weight parameters $\beta(s,a)$. For example, if $\beta(s,a)=0$ for all $(s,a)\in\mathcal{D}$, CLARE will completely follow the occupancy measure of the (empirical) expert policy by explore the model freely. 
+
+	In contrast, if $\beta(s,a)$ increases with $\tilde{\rho}^D(s,a)$, the learned policy will look for richer data support. 
+	
+	\textbf{\emph{Remarks.}} Looking deeper into \cref{eqn:true_problem_general},  the target occupancy measure can be  expressed equivalently as $\frac{(1+\beta D_E/D)\tilde{\rho}^E+(\beta D_S/D)\tilde{\rho}^B}{Z_\beta}$, after rearranging terms in the above interpolation. As a result, CLARE also subtly balances the exploitation between the expert and diverse datasets to extract potentially valuable information in the sub-optimal data. 
+	
+	\subsection{Striking the right exploration-exploitation balance}
+	\label{sec:max_lower_bound}
+	
+	Next, we show how to set $\beta(s,a)$ properly to achieve the right two-tier balance. 
+	
+	Recall that  $J(\pi) \doteq \mathbb{E}_{s,a\sim\rho^{\pi}}[R(s,a)]$ is the return achieved by policy $\pi$. The next result provides a upper bound on the return gap between $J(\pi)$ and $J(\pi^E)$, which hinges on the intrinsic trade-offs.
+	\begin{theorem}
+		\label{thm:true_problem_lb}
+		Suppose $|R(s,a)|\le1$ for any $s\in\mathcal{S},a\in\mathcal{A}$. For any stationary policy $\pi$, let $\hat{\rho}^\pi$ denote the occupancy measure of $\pi$ under estimated model $\widehat{T}$. We have that
+	
+		\begin{align}
+			\label{eqn:true_problem_lb}
+			J(\pi^E)-J(\pi) \le C\cdot \mathbb{E}_{s,a\sim\hat{\rho}^\pi}\left[D_\mathrm{TV}\big(T(\cdot|s,a),\widehat{T}(\cdot|s,a)\big)\right]+ 2\left(D_\mathrm{TV}(\hat{\rho}^\pi,\tilde{\rho}^E) + D_\mathrm{TV}(\tilde{\rho}^E,\rho^E)\right),
+		\end{align}
+		where $C\doteq \frac{2\gamma}{1-\gamma}$, and $\rho^E$ is the occupancy measure of expert policy $\pi^E$ under true dynamics $T$.
+	\end{theorem}
+	\textbf{\emph{Remarks.}} \cref{thm:true_problem_lb} indicates that a good policy learned from the estimated model not only follows the expert behaviors but also keeps in the ``safe region'' of the learned model, i.e., visiting the state-actions with less model estimation inaccuracy. {\color{black}Under the \emph{concentration} assumption, the following holds with probability greater than $1-\delta$:}
+	\begin{align*}
+		J(\pi^E)-J(\pi) \le  \underbrace{\mathbb{E}_{s,a\sim\hat{\rho}^\pi}\Bigg[\frac{CC_\delta}{\sqrt{|\mathcal{D}_E(s,a)|+|\mathcal{D}_B(s,a)|}}\Bigg]}_{\textrm{(a)}}+ 2\underbrace{D_\mathrm{TV}(\hat{\rho}^\pi,\tilde{\rho}^E)}_{\textrm{(b)}} + 2\underbrace{D_\mathrm{TV}(\tilde{\rho}^E,\rho^E)}_{\textrm{(c)}},
+	\end{align*}
+	where $\mathcal{D}(s,a)\doteq\{(s',a')\in\mathcal{D}:s'=s,a'=a\}$. It aligns well with the aforementioned exploration-exploitation balance: 1) Term (a) captures the exploitation of offline data support; 2) Term (b) captures the exploitation of expert data and the exploration of the model (recall that $\hat{\rho}^\pi$ is the occupancy measure of rolling out $\pi$ with $\widehat{T}$); and 3) Term (c) captures the distributional shift in offline learning.  Importantly, the result in \cref{thm:true_problem_lb} connects the true return of a policy with its occupancy measure on the learned model. This gives us a criteria to evaluate the performance of a policy from offline. Define $c(s,a)\doteq C \cdot D_\mathrm{TV}(T(\cdot|s,a),$ $\widehat{T}(\cdot|s,a))$ and $c^\mathrm{min}\doteq\min_{s,a}c(s,a)$. Subsequently, we derive the policy that minimizes the RHS of \cref{eqn:true_problem_lb}.
+	
+	\begin{theorem}
+		\label{thm:optimal_rho}
+		Under the same conditions as in \cref{thm:true_problem_lb},   the optimal occupancy measure  minimizing the upper bound of \cref{eqn:true_problem_lb} is given  as follows:
+		\begin{align}
+			\label{eqn:optimal_occupancy}
+			\hat{\rho}^*(s,a)=
+			\begin{cases}
+			    \tilde{\rho}^E(s,a)+\Delta_\rho,&\textit{if}~c(s,a) \le c^\mathrm{min},\\
+				0,&\textit{if}~c(s,a)> c^\mathrm{min}+2,\\
+				\tilde{\rho}^E(s,a),&\textit{otherwise}.
+			\end{cases}
+		\end{align}
+		where $\Delta_\rho\doteq\frac{ \sum_{s',a'}{\bm{1}}[c(s',a')-c^\mathrm{min}>2]\cdot\tilde{\rho}^E(s',a')}{|\mathcal{N}_\mathrm{min}|}$ and $\mathcal{N}_\mathrm{min}\doteq\{(s,a)\in\mathcal{D}:c(s,a)\le c^\mathrm{min}\}$.
+	\end{theorem}
+	As shown in \cref{thm:optimal_rho}, the ``optimal'' policy leaned on model $\widehat{T}$ conservatively explores the model by avoiding the visit of risky state-actions. Meantime, it cleverly exploits the accurate region, such that it does not deviate large from the expert. Now, we are ready to derive the optimal values of the weight parameters.
+	\begin{corollary}
+		\label{coro:opt_beta}
+		{\color{black}Suppose that when $\tilde{\rho}^D(s,a)=0$, $c(s,a)>c^{\min}$ holds for each $(s,a)\in\mathcal{S}\times\mathcal{A}$.} Under the same condition as in \cref{thm:optimal_rho}, if $\beta(s,a)$ are set as
+		\begin{align}
+			\label{eqn:weight_comp_theory}
+			\beta^*(s,a)=
+			\begin{cases}
+				\frac{\Delta_\rho}{\tilde{\rho}^D(s,a)},~&\textit{if}~c(s,a) \le  c^\mathrm{min}~\textrm{and}~\tilde{\rho}^D(s,a)>0,\\
+				-\frac{\tilde{\rho}^E(s,a)}{\tilde{\rho}^D(s,a)},~&\textit{if}~c(s,a)> c^\mathrm{min}+2~\textit{and}~\tilde{\rho}^D(s,a)>0,\\
+				0,~&\textit{otherwise},
+			\end{cases}
+		\end{align}
+		then 
+	it follows that
+		\begin{align}
+			\min_{r\in\mathcal{R}}\max_{\pi\in\Pi}L(\pi,r) = \max_{\pi}\alpha\bar{{H}}(\hat{\rho}^\pi) - Z_\beta D_\psi(\hat{\rho}^\pi,\hat{\rho}^*).
+		\end{align}
+	\end{corollary}
+	\cref{coro:opt_beta} provides the value of $\beta(s,a)$ for each $(s,a)\in\mathcal{D}$ such that the learned reward function can guide the policy to minimize the return gap in \cref{eqn:true_problem_lb}. It indicates that the right exploitation-exploration trade-off can be provably balanced via setting the weight parameters properly. In particular, $\beta^*$ assigns positive weight to the offline state-action with accurate model estimation and negative weight to that with large model error. It enables CLARE to learn a conservative reward function that pessimistically evaluates the our-of-distribution states and actions, capable of ameliorating the extrapolation error in unseen environments. However, the optimal weights require the model error, $c(s,a)$, which is typically hard to obtain (especially in high-dimensional and continuous spaces). \cref{sec:practical_implementation} will solve this problem by extending this result with the aid of the model ensembles and uncertainty quantification techniques.
+	
+
+	
+
+	
+
+	
+	
+	
+		
+		
+		
+		
+		
+	
+	
+	
+
+	
+	
+	
+		
+		
+			
+			
+			
+			
+		
+	
+	
+	
+	\section{Practical implementation}
+	\label{sec:practical_implementation}
+	
+	\begin{algorithm}[t]
+		\caption{Conservative model-based reward learning (CLARE)}
+		\label{alg:clare}
+		\KwIn{expert data $\mathcal{D}_E$, diverse data $\mathcal{D}_B$, bar $u$, learning rate $\eta$, policy regularizer weight $\lambda$}
+		Learn dynamics model $\widehat{T}$ represented by an ensemble of neural networks using all offline data\;
+		Set weight $\beta(s,a)$ for each offline state-action tuple $(s,a)\in\mathcal{D}_E\cup\mathcal{D}_B$ by \cref{eqn:weight_comp_prac}\;
+		Initialize the policy $\pi_\theta$ and reward function $r_\phi$ parameterized by $\theta$ and $\phi$ respectively\;
+		\While{not done}{
+			(Safe policy improvement) Run a MaxEnt RL algorithm for some steps with model $\widehat{T}$ and current reward function $r_\phi$ to update policy $\pi_\theta$, based on $L(\pi_\theta|r_\phi) - \lambda {D_{\mathrm{KL}}}(\pi^b\|\pi_\theta)$\;
+			(Conservative reward updating) Update $r_\phi$ by $\phi\leftarrow\phi-\eta\nabla_\phi L(r_\phi|\pi_\theta)$ for a few steps\;
+		}
+	\end{algorithm}
+
+	\textbf{Learning dynamics models.} Following the state-of-the-art model-based methods \citep{yu2020mopo,yu2021combo}, we model the transition dynamics by an ensemble of neural networks, each of which outputs a Gaussian distribution over next states, i.e., $\{\widehat{T}_i(s'|s,a)=\mathcal{N}(\mu_i(s,a),\Sigma_i(s,a))\}^N_{i=1}$. 
+
+	
+	
+	\textbf{Weights in continuous environments.} The ideas of achieving CLARE in continuous environments are 1) to approximately see the offline data as sampled from a large discrete space, and 2) to use an uncertainty quantification technique for quantifying the model error. Specifically, because state-action pairs are basically different from each other in this setting, we let $\tilde{\rho}^D(s,a)=1/D$ and $\tilde{\rho}^E(s,a)=1/D_E$, and employ the uncertainty estimator, $c(s,a)=\max_{i\in[N]}\|\Sigma_i(s,a)\|_F$, proposed in \citet{yu2020mopo} for model error evaluation. Guided by the analytical results in \cref{coro:opt_beta}, we compute the weights for each $(s,a)\in\mathcal{D}$ via slight relaxation as follows:
+	\begin{align}
+		\label{eqn:weight_comp_prac}
+		\beta(s,a)=
+		\begin{cases}
+			\frac{N'' D}{N' D_E},&~\textit{if}~c(s,a)\le u, \\
+			-\frac{D}{D_E}\cdot{\bm{1}}[(s,a)\in\mathcal{D}_E],&~\textit{if}~c(s,a)>u,\\
+			0,&~\textit{otherwise},
+		\end{cases}
+	\end{align}
+	where $N'\doteq\sum_{(s,a)\in\mathcal{D}}{\bm{1}}[c(s,a)\le u]$ and $N''\doteq\sum_{(s,a)\in\mathcal{D}_E}{\bm{1}}[c(s,a)>u]$. Here, coefficient $u$ is a user-chosen hyper-parameter for controlling the conservatism level of CLARE. If one wants the learned policy to be trained more conservatively on offline data support, $u$ should be small; otherwise, $u$ can be chose to be large for better exploration. 
+	
+	\textbf{Reward and policy regularizers.} In the experiments, we use $\psi(r)=r^2$ as the reward regularizer. Additionally, when updating the policy, we use a KL divergence as a regularizer with empirical behavior policy $\pi^b$ induced by a subset of the offline dataset, $\mathcal{D}'\subset \mathcal{D}$, as follows:
+	\begin{align*}
+		{D_{\mathrm{KL}}}(\pi^b\|\pi) \doteq \mathbb{E}_{s\in\mathcal{D}'}\Big[\mathbb{E}_{a\sim\pi^b(\cdot|s)}\big[\log\pi^b(a|s) \big] - \mathbb{E}_{a\sim\pi^b(\cdot|s)}\left[\log\pi(a|s) \right] \Big], 
+	\end{align*}
+	where $\pi^b(a|s)=\frac{\sum_{(s',a')\in\mathcal{D}'}{\bm{1}}[s'=s,a'=a]}{\sum_{(s',a')\in\mathcal{D}'}{\bm{1}}[s'=s]}$ if $(s,a)\in\mathcal{D}'$, and $\pi^b(a|s)=0$ otherwise. It can be implemented by adding $-\mathbb{E}_{s,a\sim\mathcal{D}'}[\log\pi(a|s)]$ to the actor loss. The intuition is to encourage the actor to perform in support of the real data for accelerating safe policy improvement. While this regularization lacks theoretical guarantees, we empirically find that it can indeed speed up the training.
+	
+	\textbf{Practical algorithm design.} The pseudocode of CLARE is depicted in Algorithm \ref{alg:clare}. The policy improvement phase can be implemented by the standard implementation of SAC \citep{haarnoja18soft} with a change of the additional policy regularizer. We elaborate more details in the Appendix~\ref{sec:experimental_details}. 
+	
+	\section{Experiments}
+	\label{sec:experiment}
+	
+	Next, we use experimental studies to evaluate CLARE and answer the following key questions: 
+	(1) How does CLARE perform on the standard offline RL benchmarks in comparison to  existing state-of-the-art algorithms?
+	(2) How does CLARE perform given different dataset sizes?
+	(3) How does the ``conservatism level'', $u$, affect the performance?
+	(4) How fast does CLARE converge?
+	(5) Can the learned reward function effectively explain the expert intention?
+	
+	\begin{figure}[b]
+		\centering
+		\vspace{-1.5em}
+		\subfigure{\label{subfig:walker}\includegraphics[width=0.245\columnwidth]{./figure/walker.pdf}}
+		\subfigure{\label{subfig:hopper}\includegraphics[width=0.245\columnwidth]{./figure/hopper.pdf}}
+		\subfigure{\label{subfig:ant}\includegraphics[width=0.245\columnwidth]{./figure/ant.pdf}}
+		\subfigure{\label{subfig:halfcheetah}\includegraphics[width=0.245\columnwidth]{./figure/halfcheetah.pdf}}
+		\vspace{-1.75em}
+		\caption{CLARE against other algorithms on all tasks over different dataset sizes consisting of expert and medium data equally.}
+		\label{fig:impact_datasize}
+	\end{figure}
+	
+	To answer these questions, we compare CLARE with  the following  existing offline IRL methods on the D4RL benchmark \citep{fu2020d4rl}: 1) IQ-LEARN \citep{garg2021iq}, a state-of-the-art model-free offline IRL algorithm; 2) AVRIL \citep{chan2021scalable}, another recent model-free offline IRL method; 3) EDM \citep{jarrett2020strictly}, a state-of-the-art offline IL approach; and 4) Behavior Cloning (BC). To demonstrate the poor performance of the naive approach using a simple combination of IRL with model-based offline forward RL (MORL) method, we also consider a baseline algorithm, namely MOMAX, by directly using COMBO \citep{yu2021combo} in the inner loop of MaxEnt IRL. We present the results on continuous control tasks (including Half-Cheetah, Walker2d, Hopper, and Ant) consisting of three data qualities (random, medium, and expert). Experimental set-up and hyperparameters are  described in detailed in Appendix~\ref{sec:experimental_details}.
+	
+
+	
+
+	\begin{table}[t]
+		\centering
+		\label{table:performance}
+		\caption{\emph{Results on D4RL datasets.} For each task, the experiments are carried out with three different data combinations: 1) 10k expert tuples, 2) 5k expert and 5k medium tuples, and 3) 5k expert and 5k random tuples. The data scores below for 1), 2), and 3) correspond to expert, medium, and random data, respectively. We tune IQ-LEARN, EDM, and AVRIL based on their publicly available source code. Results are averaged  over 7 random seeds. The highest score across all algorithms is bold.}
+		\resizebox{\textwidth}{!}{
+			\begin{tabular}{crrrrrrrr} 
+				\toprule
+				Dataset type                                                    & Environment & Data score & CLARE & BC & IQ-LEARN & EDM & AVRIL & MOMAX  \\ 
+				\midrule
+				\multirow{4}{*}{\emph{Exp. \& Rand.}} & Walker2d                        & 1.9                & \textbf{2873.8}                                                         & 17.8        & 256.9             & 165.5        & 100.9          & -525.4                                  \\
+				& Hopper                        & 18.4               & \textbf{1891.5}                                                         & 110.2       & 523.6             & 178.8        & 178.3          & 0.7                                     \\
+				& Ant                           & -64.4              & \textbf{1960.0}                                                         & -427.6      & -247.2            & -3000.9      & 1000.1         & 113.8                                   \\
+				& Half-Cheetah                   & -505.1             & \textbf{1113.7}                                                         & -86.7       & 123.9             & -346.7       & -1093.5        & -11.0                                   \\ 
+				\midrule
+				\multirow{4}{*}{\emph{Exp. \& Med.}} & Walker2d                        & 3496.3              & \textbf{3613.4}                                                         & 1674.2      & 1676.8            & 175.7        & 184.0          & 19.6                                    \\
+				& Hopper                        & 1422.7              & \textbf{2135.0}                                                         & 947.0       & 2049.8            & 194.4        & 183.7          & 27.6                                    \\
+				& Ant                           & 3969.0              & \textbf{3879.4}                                                         & 2146.0      & 222.2             & -3001.5      & 1001.0         & -33.2                                   \\
+				& Half-Cheetah                   & 4667.8              & \textbf{4888.6}                                                         & 2375.0      & 2957.7            & -298.3       & -1195.6        & -0.2                                    \\ 
+				\midrule
+				\multirow{4}{*}{\emph{Exp.}}                                                        & Walker2d                        & 5010.4              & \textbf{4990.5}                                                         & 1665.7      & 2445.4            & 189.7        & 194.1          & 23.2                                    \\
+				& Hopper                        & 3603.2              & 2604.5                                                                  & 1436.1      & \textbf{2854.4}   & 192.5        & 183.9          & 34.5                                    \\
+				& Ant                           & 5172.8              & \textbf{3940.3}                                                         & 1797.9      & 375.4             & -3000.6      & 1000.2         & 48.1                                    \\
+				& Half-Cheetah                   & 10748.7             & \textbf{4975.1}                                                         & 242.4       & 3750.5            & -299.5       & -619.0         & -0.4                                    \\
+				\bottomrule
+		\end{tabular}}
+		\vspace{-1.0em}
+	\end{table}
+	
+	
+	\textbf{Results on MuJoCo control.} 
+	To answer the first question and validate the effectiveness of the learned reward, we evaluate CLARE on different tasks using limited state-action tuples sampled from D4RL datasets. {\color{black}The ranges of standard deviations of the results in \emph{Exp.~\&~Rand.}, \emph{Exp.~\&~Med.} and \emph{Exp.} are 156.4-280.5, 15.7-127.8 and 42.4-89.5, respectively.}  As shown in Table~\ref{table:performance}, CLARE yields the best performance by a significant margin on almost all datasets, especially with low-quality data thereof. It demonstrates that the reward function learned by CLARE can effectively guide offline policy search while exploiting the useful knowledge in the diverse data.
+	
+	
+
+	
+
+	
+	\textbf{Results under different dataset sizes.} 
+	To answer the second question, we vary the total numbers of state-action tuples from 2k to 100k and present the results on different tasks in Figure~\ref{fig:impact_datasize}. CLARE reaches expert performance on each task with sufficient data. Albeit with very limited data, CLARE also achieves strong performance over existing algorithms, revealing its great sample efficiency.
+	
+	\begin{figure}[t]
+		\centering
+		\subfigure[Impact of $u$.]{\label{subfig:bar}\includegraphics[width=0.245\columnwidth]{./figure/bar.pdf}}
+		\subfigure[Convergence speed.]{\label{subfig:convergence_walker}\includegraphics[width=0.245\columnwidth]{./figure/convergence-walker.pdf}}
+		\subfigure[Convergence speed.]{\label{subfig:convergence_ant}\includegraphics[width=0.245\columnwidth]{./figure/convergence-ant.pdf}}
+		\subfigure[Recovered reward.]{\label{subfig:online}\includegraphics[width=0.245\columnwidth]{./figure/online.pdf}}
+	
+		\vspace{-1.0em}
+		\caption{\emph{Performance of CLARE.} 1) \emph{Impact of $u$:} Figure~\ref{subfig:bar} shows the impact of user-chosen parameter $u$ on the performance using 10k expert tuples. 2) \emph{Convergence speed:} Figures \ref{subfig:convergence_ant} and \ref{subfig:convergence_walker} show the convergence of CLARE using 10k expert and 10k medium tuples. In each iteration, CLARE carries out policy improvement by total 10k gradient updates (total 500 epochs with 20 gradient steps per epoch) for the actor and critic networks using SAC. 3) \emph{Recovered reward:} Figure~\ref{subfig:online} shows the result of training SAC via replacing the underlying reward by the one learned from CLARE. }
+		\vspace{-1.7em}
+	
+	\end{figure} 
+	
+	\textbf{Results under different $\bm{u}$.} 
+	To answer the third question, we normalize the uncertainty measure to $[0,1]$ and vary $u$ from 0.1 to 1.0. Due to \cref{eqn:weight_comp_prac}, a smaller $u$ corresponds to a more conservative CLARE. As illustrated in Figure~\ref{subfig:bar}, the performance becomes better with the decrease of $u$ value. It validates the importance of the embedded conservatism in alleviating the extrapolation error. We empirically find that the performance with respect to $u$ varies in different tasks. Thus, we treat it as a hyper-parameter to tune In practice.
+	
+	\textbf{Convergence speed.} 
+	To answer the fourth question, we present the results on the convergence speed of CLARE in Figure~\ref{subfig:convergence_walker}, revealing its great learning efficiency. It showcases that CLARE converges in 5 iterations with totally less than 50k gradient steps. 
+	
+	\textbf{Recovered reward function.} To answer the last question, we evaluate the learned reward function by transferring it to the real environment. As demonstrated in Figure~\ref{subfig:convergence_ant}, 
+	the reward function is highly instructive for online learning. It implies that it can effectively reduce the reward extrapolation error and represent the task preferences well. Surprisingly, compared to the true reward function, the policy trained via the learned one performs more stably. The reason is that the learned one incorporates conservatism and thus is capable of penalizing risks and guide safe  policy search.
+	
+
+	
+	
+	
+	
+	
+	
+	
+	\section{Related work}
+	\label{sec:related_work}
+	
+
+	
+	\textbf{Offline IRL.} To side-step the expensive online environmental interactions in classic IRL, offline IRL aims to infer a reward function and recover the expert policy only from a static dataset with no access to the environment. \citet{klein2011batch} extend the classic apprenticeship learning (i.e., \citet{abbeel2004apprenticeship}) to batch and off-policy cases by introducing a temporal difference method, namely LSTD-$\mu$, to compute the feature expectations therein. {\color{black}\citet{klein2012inverse} further introduce a linearly parameterized score function-based multi-class classification algorithm to output reward function based on an estimate of expert feature expectation.} \citet{herman2016inverse} present a gradient-based solution that simultaneously estimates the feature weights and parameters of the transition model by taking into account the bias of the demonstrations. \citet{lee2019truly} propose Deep Successor Feature Networks (DSFN) that estimates feature expectations in an off-policy setting.
+
+	{\color{black}However, the assumption of full knowledge of the reward feature functions in \citet{klein2011batch,herman2016inverse,lee2019truly,jain2019model,pirotta2016inverse,ramponi2020truly} is often unrealistic}, because the choice of features is problem-dependent and can become a very hard task for complex problems \citep{arora2021survey,piot2014boosted}. To address this problem, \citet{piot2014boosted} propose a non-parametric algorithm, called RCAL, using boosting method to minimize directly the criterion without the step of choosing features. \citet{konyushkova2020semi} propose two semi-supervised learning algorithms that learn a reward function from limited human reward annotations. \citet{zolna2020offline} further propose ORIL that can learn from both expert demonstrations and a large unlabeled set of experiences without human annotations. \citet{chan2021scalable} use a variational method to jointly learn an approximate posterior distribution over the reward and policy. \citet{garg2021iq} propose an off-policy IRL approach, namely IQ-Learn, implicitly representing both reward and policy via a learned soft Q-function. Nevertheless, these methods primarily concentrate on offline policy learning with learning reward function being an intermediate step. Due to the intrinsic covariate shift, these methods may suffer from severe reward extrapolation error, leading to misguidance in unseen environments and low learning efficiency. 
+	
+
+	
+	\textbf{Offline IL.} Akin to offline IRL, offline imitation learning (offline IL) deals with training an agent to directly mimic the actions of a demonstrator in an entirely offline fashion. Behavioral cloning (BC \citep{ross2010efficient}) is indeed an intrinsically offline solution, but it fails to exploit precious dynamics information. To tackle this issue, several recent works propose dynamics-aware offline IL approaches, e.g., \citet{kostrikov2019imitation,jarrett2020strictly,chang2021mitigating,swamy2021moments}. In contrast to directly mimicking the expert as done in offline IL,  offline IRL explicitly learns the expert’s reward function from offline datasets, which can take into account the temporal structure and inform what the expert wishes to achieve, rather than simply what they are reacting to. It enables agents to understand and generalize these ``intentions'' when encountering similar environments and therefore makes offline IRL more robust \citep{lee2019truly}. In addition, the learned reward function can succinctly explain the expert's objective, which is also useful in a number of broader applications (e.g., task description \citet{ng2000algorithms} and transfer learning \citet{herman2016inverse}).
+	
+	\section{Conclusion}
+	\label{sec:conclusion}
+	
+
+	This paper introduces a new offline IRL algorithm (namely CLARE) to approaching the reward extrapolation error (caused by covariate shift) via incorporating conservatism into a learned reward function and utilizing an estimated dynamics model. Our theoretical analysis characterizes the impact of covariate shift by quantifying a subtle two-tier exploitation-exploration tradeoffs, and we show that CLARE can provably alleviate the reward extrapolation error by striking the right tradeoffs therein. Extensive experiments corroborate that CLARE outperforms existing methods in continuous, high-dimensional environments by a significant margin, and the learned reward function represents the task preferences well.
+	
+	
+
+\subsubsection*{Acknowledgments}
+This research was supported in part by the National Natural Science Foundation of China under Grant No. 62122095, 62072472, and U19A2067, by NSF Grants CNS-2203239, CNS-2203412, and RINGS-2148253, and by a grant from the Guoqiang Institute, Tsinghua University.
+
+	
+	

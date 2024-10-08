@@ -1,0 +1,798 @@
+\section{Introduction}
+Machine learning (ML) systems deployed in the real world can encode problems such as societal biases \cite{Barocas2016} and safety concerns \cite{NTSB2018}.
+Practitioners and researchers continue to discover significant limitations and failures in state-of-the-art models, from systematic misclassification of certain medical images \cite{Oakden-Rayner2020} to racial biases in pedestrian detection models \cite{wilson_predictive_2019}.
+In one classic example, \citet{buolamwini_gender_2018} compared the performance of facial classification models across different demographic groups and found that the models performed significantly worse for darker-skinned women compared to lighter-skinned men.
+
+Discovering and validating model limitations is often termed \textit{behavioral evaluation} or testing \cite{Rahwan2019}.
+It requires going beyond measuring aggregate metrics, such as accuracy or F1 score, and understanding patterns of model output for subgroups, or slices, of input data.
+Enumerating what behaviors a model should have or what types of errors it could produce requires collaboration between stakeholders such as ML engineers, designers, and domain experts \cite{nahar_collaboration_2021, Subramonyam2021Process}.
+Behavioral evaluation is also a continuous, iterative process, as practitioners update their models to fix limitations or add features while ensuring that new failures are not introduced \cite{cabrera_what_2022}.
+
+Despite a growing focus on the importance of behavioral evaluation, it remains a challenging task in practice.
+Models are often developed without practitioners having clear model requirements or a deep understanding of the products or services in which the model will be deployed \cite{nahar_collaboration_2021}.
+Furthermore, many behavioral evaluation tools, such as fairness toolkits, often do not support the types of models, data, and behaviors that practitioners work with in the real world \cite{deng_exploring_2022}.
+Practitioners end up manually testing hand-picked examples from users and stakeholders, making it challenging to effectively compare models and pick the best version to deploy \cite{Hopkins2021}.
+
+Given the current state of behavioral evaluation for machine learning, this paper asks two guiding research questions: (1) What are the specific real-world challenges for ML evaluation which are shared across different models, data types, and organizations, and (2) Can an evaluation system addressing these challenges help practitioners discover, evaluate, and track behaviors across diverse ML systems.
+To this end, we make the following contributions:
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Formative study on ML evaluation practices}. 
+    Through semi-structured interviews with 18 practitioners, we identify common challenges for behavioral evaluation of ML systems and opportunities for future tools.
+
+    \item  \textbf{\textsc{zeno}{}, a general-purpose framework for behavioral evaluation of ML systems}.
+    We design and implement a framework for evaluating machine learning models across data types, tasks, and behaviors.
+    \textsc{zeno}{} (\Cref{fig:teaser}) combines a Python API and interactive UI for creating data slices, exportable reports, and test suites.
+    
+    \item \textbf{Case studies applying \textsc{zeno}{} on diverse models}. 
+    We present four case studies of practitioners using \textsc{zeno}{} to evaluate their ML systems.
+    Using \textsc{zeno}{}, practitioners were able to reproduce existing analyses without code, generate hypotheses of model failures, discover and validate new model behaviors, and come up with actionable next steps for fixing model issues.
+\end{itemize}
+
+
+\section{Background and Related Work}
+
+\textsc{zeno}{} expands upon work on machine learning evaluation from the fields of human-computer interaction and ML.
+We first explore the current state of machine learning evaluation, including common techniques and approaches.
+We then describe existing tools for evaluation, and conclude with methods for improving collaboration and shared model understanding in data science and ML.
+
+\subsection{Behavioral Evaluation of Machine Learning}
+Evaluating a machine learning model is the challenge of understanding how well a model can accomplish a given task. 
+The canonical approach to evaluation is to calculate an aggregate performance metric on a held-out sample of data or test set. 
+But just as an IQ test is a rough and imperfect measure of human intellect, aggregate metrics are a rough approximation of model performance. 
+They can, for example, hide systematic failures like societal biases, or fail to encode basic capabilities like correct grammar in NLP systems.
+
+To detect and mitigate these important issues, the ML community uses more fine-grained evaluation approaches, often termed \textit{behavioral evaluation} \cite{Rahwan2019, cabrera_what_2022}. 
+Inspired by requirements engineering in software engineering, behavioral evaluation focuses on defining and testing the capabilities of an ML system, its expected behavior on a specification of requirements \cite{yang_capabilities_2022, pei_requirements_2022}. 
+For example, a practitioner creating a sentiment classification model might check that the model works for double negatives, is invariant to gender, and is accurate for short text. 
+In addition to aggregate metrics, they would check how their model performs in these specific scenarios.
+
+A central challenge in behavioral evaluation is deciding \textit{which} capabilities a model should have. 
+There can be a practically infinite number of requirements in complex domains, which would be impossible to list and test.
+Instead, ML engineers work with domain experts and designers to define the capabilities that a model should have as they iterate on and deploy their ML systems \cite{Subramonyam2021Process}.
+As end-users interact with the model in products and services, they also provide feedback on the limitations or expected behaviors that are then used to update the model \cite{Cabrera2021Deblinder}. 
+
+In this work we further explore evaluation in practice through our formative study.
+We identify common challenges across domains and opportunities for future tools which we apply when designing and building the \textsc{zeno}{} system.
+
+
+\subsection{Model Evaluation Approaches}
+
+There are numerous ML evaluation systems for discovering, validating, and tracking model behaviors \cite{cabrera_what_2022, Rahwan2019}.
+The tools use techniques such as visualizations and data transformations to discover behaviors like fairness concerns and edge cases.
+\textsc{zeno}{} complements some of these systems and integrates the approaches of others.
+
+The behavioral evaluation method most related to \textsc{zeno}{} is subgroup, or slice-based, analysis, calculating metrics on subsets of a dataset.
+An example tool for slice-based analysis is FairVis \cite{Cabrera2019}, a visual analytics system that allows users to compare subsets of data across metrics to discover intersectional biases.
+Errudite \cite{Wu2019} is a similar system for NLP models with which users can create and test subgroups using structured queries.
+Another common method for behavioral evaluation is metamorphic testing \cite{chen_metamorphic_2019}, a concept from software engineering that involves checking the outputs of a black-box system for inputs that are perturbed in a specific way.
+Checklist \cite{Ribeiro2020} is a metamorphic testing tool for NLP models that perturbs text inputs, for example, switching proper nouns and testing if a model's output switches.
+\textsc{zeno}{} enables users to do slice-based and metamorphic testing for any domain and task.
+
+A central challenge for behavioral evaluation is \textit{discovering} which behaviors a model has and are important for real-world performance.
+Various methods using algorithmic or crowdsourced techniques have shown promise in surfacing such behaviors.
+Algorithmic methods are a common approach for detecting groups of instances with high error, often termed ``blindspots''.
+SliceFinder is one method that uses metadata to find slices with significantly high loss \cite{chung_slice_2019}.
+Often, there is not enough metadata to define slices with high error, so another family of methods uses model embeddings and clustering to find groups with high error \cite{eyuboglu_domino_2022, deon_spotlight_2021}.
+Lastly, there are approaches that use end-user reports or crowd feedback to discover model failures or interesting behaviors \cite{Attenberg2011, Cabrera2021Deblinder, Nushi2018}.
+\textsc{zeno}{} complements discovery methods by allowing users to formalize, validate, and track hypotheses of systemic errors over time.
+
+Lastly, there are integrated platforms for model evaluation that combine multiple types of analyses.
+For instance, Robustness Gym \cite{Goel2021} is a framework for NLP models that supports multiple types of evaluation, including adversarial attacks and robustness checks.
+The What-If tool \cite{Wexler2019} is another interactive framework that focuses on using counterfactuals to understand model behavior and fix fairness concerns.
+We took a similar approach to these frameworks when designing \textsc{zeno}{}, but focused on the more general task of behavioral evaluation for any model or data type.
+
+
+
+
+\subsection{Collaboration and Reporting}
+
+Most ML models are developed by cross-functional teams with stakeholders in technical and non-technical roles. 
+While collaboration is essential for deciding how a model should behave and identifying potential failures, there is often limited communication between stakeholders \cite{nahar_collaboration_2021}.
+This can lead to unrealistic expectations of model performance or results that do not match designers' expectations.
+Multiple methods have been proposed to improve organizations' shared understanding of model behavior.
+
+Interactive systems have shown promise for bridging model knowledge between engineering and other roles.
+One example framework, Symphony \cite{bauerle_symphony_2022}, introduces modular data and model analysis components that can be used in both computational notebooks and standalone dashboards to enable more stakeholders to explore model behavior.
+Marcelle \cite{francoise_marcelle_2021} similarly uses modular components that allow users to modify an ML pipeline without writing code.
+
+Complex models also require robust reporting methods to ensure that information about data and models is recorded and preserved.
+Datasheets for Datasets \cite{gebru_datasheets_2021}, FactSheets \cite{arnold_factsheets_2019}, Nutritional Labels \cite{stoyanovich_nutritional_2019}, and Model Cards \cite{Mitchell2019} codified the first principles for documenting ML details for future use and reproducibility.
+Extensions to these reporting methods, namely Interactive Model Cards \cite{crisan_interactive_2022}, have aimed to improve their usability by making them more expressive and interactive.
+\textsc{zeno}{} is primarily an interactive UI to enable diverse stakeholders to perform model analysis and export results that can be included in reporting methods like model cards.
+
+
+\section{Formative Interviews with machine learning practitioners}
+
+\begin{table}[b]
+    \centering
+    \caption{The practitioners in the semi-structured interviews. }
+    \begin{tabular}{lll}
+        ID & Role & Area \\
+        \midrule
+        P1 & AI Software Engineer & AI Consulting \\
+        P2 & Data Scientist & Clothing Retail \\
+        P3 & CTO & Speech Training \\
+        P4 & CTO & Voice Assistant \\
+        P5 & Senior ML Engineer & Chatbot \\
+        P6 & Data Scientist & AI Non-profit \\
+        P7 & Data Scientist & Finance \\
+        P8 & MS Student & Educational Technology \\
+        P9 & ML Engineer & Chatbot \\
+        P10 & VP of Data Science & Business Intelligence \\
+        P11 & ML Engineer & AI Explainability \\
+        P12 & Data Scientist, ML & Ridesharing \\
+        P13 & Data Engineer & Educational Technology \\
+        P14 & CTO & Health Technology \\
+        P15 & CEO & Sensing \\
+        P16 & Data Scientist & Search and Recommendation \\
+        P17 & ML Research Scientist &  Epidemiology \\
+        P18 & Data Scientist & Video Streaming
+    \end{tabular}
+    \label{tab:studies}
+\end{table}
+
+We conducted semi-structured interviews with machine learning practitioners to explore our first research question: What are the common challenges for ML evaluation in practice?
+In particular, we aimed to understand the specific challenges practitioners face and the tools they use when evaluating ML models.
+The 18 participants, listed in \Cref{tab:studies}, hold various roles related to machine learning development and deployment, from data scientists to CTOs and CEOs of small companies.
+The initial participants were recruited through posts on social media networks, e.g., Reddit, LinkedIn, and Discord, and through direct contacts at technology companies. 
+Additional participants were then recruited through snowball sampling.
+Each interview lasted an hour via video call and participants were compensated with \$20.
+The study was approved by our Institutional Review Board (IRB).
+
+Two researchers analyzed the interviews using inductive iterative thematic analysis and affinity diagramming.
+From the first few interviews, the researchers extracted common themes around model evaluation, debugging, and iteration, grouping similar findings in an affinity diagram.
+After each subsequent interview, the researchers iterated on and refined the themes as needed.
+Recruiting for new participants was stopped when no new themes were produced from the last few interviews. 
+
+
+\subsection{Aggregate Metrics Do Not Reflect Model Performance in Deployment} 
+   
+   
+   
+   
+   
+   
+   
+   
+   
+
+All practitioners (18/18) focus on improving aggregate metrics when developing new ML models, but, as P9 admitted, you \feedback[P9]{can perform very well on a training dataset, but when you go to ship the product, it doesn't work nearly as well.}
+To ensure that models perform as expected when they are deployed, all practitioners also evaluate their models on real-world use cases.
+For example, P16 evaluates their text analysis model on a per-client basis since they had found that their model underperformed for certain types of data, e.g. healthcare notes, that it was not trained on.
+This type of behavioral analysis is often also called \textit{qualitative} analysis, looking at specific instances and model outputs to confirm hypotheses of model behavior.
+
+There are various methods practitioners described for discovering model limitations and failures, from end-user reports (see \Cref{sec:collab}) to automated clustering algorithms.
+A common technique 11 of the 18 participants mentioned was creating their own data inputs to probe a model and find potential failures, often called ``dogfooding'' in software development.
+For example, when selecting an audio transcription service P3 \feedback[P3]{has some data collected we recorded ourselves, and then we pass it to different services and explore the structure of the output} to decide which service provides the qualitatively ``best'' output for their task.
+Two participants are exploring automated error discovery methods such as finding clusters with high error or using foundational models \cite{bommasani_opportunities_2022, ribeiro_adaptive_2022} to generate new instances, but still primarily rely on human-generated feedback.
+
+After generating hypotheses of systemic failures, many practitioners craft test sets to validate how prevalent behaviors are (10/18).
+The participants had different terms for these sets of instances, including ``golden test sets'', ``dynamic benchmarks'', ``regression tests'', and ``benchmark integration tests''.
+Despite the varied terminology, these tests have the same structure: Expectations for model outputs on different subgroups of instances.
+For example, P4 has multiple sets of text inputs with common human typos paired with valid outputs that they check before model releases.
+
+None of the participants who conduct this type of behavioral evaluation use standardized frameworks.
+This is primarily because existing behavioral evaluation tools do not work for their data or model types, so they develop their own tools, such as scripts or web interfaces, to monitor model performance.
+All the participants who do not perform behavioral analyses (8/18) wish to conduct more detailed testing, for example, P1 wants \feedback[P1]{to do some other testing, but we don't do anything because there's not a really easy to set up system to do that}.
+Overall, bigger companies are able to dedicate more time to detailed evaluation and building customized tools that smaller companies cannot afford despite their need for more comprehensive evaluation \cite{Hopkins2021}.
+
+\subsection{Challenges in Tracking Continuous Model and Data Updates} 
+
+   
+   
+   
+   
+   
+   
+
+All practitioners (18/18) we interviewed update their models as they design better architectures, gather more data, and discover real-world use cases and failures.
+Participants described this process with different terms, such as ``rapid prototyping'' or ``agile'' methods in which they quickly act on user feedback and deploy updated models.  
+P4 and P13 even started with ``wizard-of-oz'' models with a human emulating an AI or non-ML models to gather data and model requirements before developing more complex models.
+
+Although updating a model can improve the overall performance of an ML system, it can also lead to new failures.
+This is especially true for stochastic models, such as deep learning, which cannot be deterministically updated.
+As P5 lamented, \feedback[P5]{our test set would become so large that if we had to fail for less than 5 [tests] it became super hard to make progress}.
+Model updates are even more complicated for teams that rely on external AI services, as practitioners do not control when or how services are updated \cite{chen_did_2021}.
+For example, P3's team had to switch their voice-to-text service from Google to Amazon because Google stopped detecting filler words such as `um' after a model update, which was necessary for their product. 
+
+Due to these frequent updates, it becomes important to compare models across important behaviors.
+However, since many model evaluations are run inconsistently and across different tools, the history of past performance is often fragmented or lost, making it difficult to find regressions or new failures.
+
+\subsection{Limited Collaboration in Cross-Functional Teams}\label{sec:collab}
+
+   
+   
+   
+   
+   
+   
+
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=\linewidth]{figures/api_flow.png}
+  \caption{
+    \textsc{zeno}{}'s architecture overview. 
+    The \textsc{zeno}{} program and inputs (outlined in {\color{code} purple} boxes) can either be hosted locally or run on a remote machine. 
+    \textsc{zeno}{} takes a configuration file with information such as paths to data folders, test files, and metadata and creates a parallelized data processing pipeline to run the decorated Python functions.
+    The resulting UI is available through an endpoint that can be accessed locally or hosted on a server.
+}
+  \Description{Diagram of the Zeno Backend and the Zeno Frontend. The diagram shows the Zeno Backend taking input data and the API from the user and generating the Zeno Frontend.}
+  \label{fig:api}
+\end{figure*}
+
+Modern machine learning development in practice is a collaborative effort that spans different teams and roles.
+Each member of a team needs a robust mental model of how an ML system behaves to resolve customer complaints, make management decisions, validate failures, and more.
+
+A common collaboration challenge is making sense of failure reports \cite{Cabrera2021Deblinder} from end-users.
+12 of the 18 participants' teams have customer service representatives who parse tickets or complaints from end users and pass them to the engineering teams.
+These participants found it challenging to reproduce the reports from end users, which were primarily made up of one-off instances and broad descriptions.
+P4's team tackles this challenge with an
+\feedback[P4]{internal website where anybody can put potential inputs and expected model outputs} which new models are tested on.
+
+Another collaboration challenge described by 14 participants is communicating model performance with managers and other stakeholders.
+For example, P16's management team often makes decisions based solely on a high F1 score, while it is often the case that different clients require different trade-offs between precision and recall.
+Many decisions on whether or not to deploy an updated model requires shared knowledge and conversations between engineers, managers, and customers on whether a new model is holistically better than the existing model.
+
+Since engineers often run analyses in ad-hoc scripts or notebooks, knowledge of model behavior can be isolated.
+Other stakeholders do not know how a model tends to behave, and can neither make informed decisions on model usage nor provide  information about model errors to engineers for debugging.
+
+\section{Design Goals}
+
+From these interviews and the reviewed studies on ML evaluation, we distilled a set of design goals that a behavioral evaluation system should have. 
+The goals focus on general evaluation challenges identified in the formative study, such as defining behaviors and comparing models.
+With a system for behavioral evaluation, a user should be able to:
+
+
+\begin{enumerate}[leftmargin=*]
+    \setlength\itemsep{0.5em}
+    \item[D1.] \noindent\textbf{Evaluate models with different architectures, tasks, and data types.}
+    Machine learning is a broad field with diverse models and tasks ranging from audio transcription to human pose estimation.
+    To reduce the learning curve and encourage the reuse of analyses, users should be able to use one framework to perform behavioral evaluations on most ML tasks. 
+    
+    \item[D2.] \noindent\textbf{Define and measure diverse model behaviors.}
+    Model behaviors are varied and complex, from demographic biases to grammatical failures.
+    Users should be able to encode most of the behaviors across which they wish to evaluate their models.
+   
+    
+    \item[D3.] \noindent\textbf{Track model performance over time.}
+    Practitioners are continually deploying updated models with new architectures trained on improved data.
+    Users should be able to track performance across models and find potential regressions.
+    
+    \item[D4.] \noindent\textbf{Evaluate model performance without programming.}
+    Modern machine learning systems are built by large cross-functional teams with nontechnical users.
+    Users should be able to perform behavioral analyses of models without having to write code.
+
+\end{enumerate}
+
+\section{Zeno: An Interactive Evaluation Framework}\label{sec:zeno}
+
+
+We used these goals to design and implement \textsc{zeno}{}, a general-purpose framework for evaluating ML systems across diverse behaviors.
+\textsc{zeno}{} is made up of two linked components, a Python API and an interactive user interface (UI).
+The Python API is used to write functions providing the core building blocks of behavioral evaluation such as model outputs, metrics, metadata, and transformed instances.
+Outputs from the API are used to scaffold the interactive UI, which is the primary interface for doing behavioral evaluation and testing.
+The \textsc{zeno}{} frontend has two primary views: an \textit{Exploration UI} for discovering and creating slices of data and an \textit{Analysis UI} for writing tests, authoring reports, and tracking performance over time \textbf{(D3)}.
+
+Originally, we explored implementing \textsc{zeno}{} as either a plugin for computational notebooks or a standalone user interface. 
+We decided on a combined programmatic API and interactive UI as we found it could make \textsc{zeno}{} both extensible and accessible.
+The general Python API allows \textsc{zeno}{} to be applied to diverse models, data types, and behaviors \textbf{(D1, D2)}, while the interactive UI allows nontechnical users to run evaluation \textbf{(D4)}.
+
+\textsc{zeno}{} is distributed as a Python program.
+The Python package includes the compiled frontend which is written in Svelte and uses Vega-Lite \cite{Satyanarayan2017} for visualizations and Arquero~\cite{heer_arquero_2020} for data manipulation.
+To run \textsc{zeno}{}, users specify settings such as test files, data paths, and column names in a TOML configuration file and launch the processing and UI from the command line (\Cref{fig:api}).
+Since \textsc{zeno}{} hosts the UI as a URL endpoint, it can either be run locally or run remotely on a server with more compute and still be accessed by users on local machines.
+This architecture can scale to large deployed settings and was tested with datasets with millions of instances (e.g. DiffusionDB \cite{wang_diffusiondb_2022}, 2 million images (\Cref{sec:diffusion})).
+
+
+
+
+
+\subsubsection{Running example} To explain \textsc{zeno}'s concepts, we walk through an example use case of a data scientist working at a company deploying a new model.
+In the following sections, we use block quotes to show how \textsc{zeno}{}'s features would be used in the example.
+
+\begin{myquote}
+Emma is a data scientist at a startup developing a voice assistant. 
+Her company is using a simple audio transcription model and she has been tasked with understanding how well the model works for their data and what updates they need to make.
+\end{myquote}
+
+
+\subsection{Python API: Extensible Model Analysis}
+
+
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+
+
+A core component of \textsc{zeno}{} is an extensible Python API for running model inference and data processing.
+The ML landscape is fragmented across many frameworks and libraries, especially for different data and model types.
+Despite this fragmentation, most ML libraries are based on Python, so we designed the backend API for \textsc{zeno}{} as a set of Python decorator functions that can support most current ML models \textbf{(D1)}.
+
+
+The \textsc{zeno}{} Python API (\Cref{fig:api_example}) consists of four decorator functions: \python{@model}, \python{@metric}, \python{@distill}, and \python{@transform}.
+We found that these four functions support the building blocks of behavioral evaluation.
+All four functions take the same input, a Pandas DataFrame \cite{mckinney_data_2010} with metadata and a \python{ZenoOptions} object.
+We chose Pandas as the API for the metadata table due to its popularity, which lowers the learning curve for writing \textsc{zeno}{} functions for many data scientists. 
+The \python{ZenoOptions} object passes relevant information such as column names and static file paths to the decorated API functions. 
+Since \textsc{zeno}{} calls API functions dynamically for different models and transformed inputs, \python{ZenoOptions} is necessary for a function to access the correct columns of the DataFrame.
+
+\begin{figure}
+  \centering
+  \includegraphics[width=\linewidth]{figures/api_example.png}
+  \caption{
+    The \textsc{zeno}{} Python API has four decorator functions: \decorator{model}{}, \decorator{metric}{}, \decorator{distill}{}, and \decorator{transform}{}. 
+    The functions all take the same inputs, a DataFrame and a ZenoOptions object with information such as data paths and column names. 
+    \decorator{model}{} functions return a function for getting running model inference. 
+    In the example above, the \decorator{model}{} function loads a speech-to-text model and returns a function that transcribes audio data.
+    \decorator{metric}{} functions calculate aggregate metrics on subsets of data. 
+    Above, the \decorator{metric}{} function computes the average word error rate (avg\_wer) for transcribed audio. 
+    \decorator{distill}{} functions derive new metadata columns. 
+    Above, the \decorator{distill}{} function calculates the amplitude value from audio. 
+    \decorator{transform}{} functions produce new data inputs. 
+    Above, the \decorator{transform}{} function lowers the amplitude of audio samples. 
+   
+   
+   
+}
+  \Description{Four images showing the @model, @metric, @distill, and @transform API with code examples for each. Each image example also includes a real application with speech data for a speech-to-text model.}
+  \label{fig:api_example}
+\end{figure}
+
+The two core functions that a user must implement to use \textsc{zeno}{} are the \python{@model} and \python{@metric} functions.
+Functions decorated with \python{@model} return a new function that returns the outputs for a given model.
+Since this function is model-agnostic, any ML framework or AI service can be evaluated using \textsc{zeno}{} \textbf{(D1)}.
+The \python{@metric} decorated functions return a summary number given a subset of data.
+\python{@metric} functions can return classic metrics such as accuracy or F1 score, but can also be used for specific tests such as calculating the percentage of changed outputs after data transformations \textbf{(D2)}.
+
+\begin{myquote}
+    Emma writes a \python{@model} function which calls her transcription model and returns the transcribed text.
+    She then uses a Python library to implement various \python{@metric} functions for common transcription metrics such as word error rate (WER). 
+\end{myquote}
+
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=\linewidth]{figures/explore.png}
+  \caption{
+    The Exploration UI allows users to see data instances and model outputs and investigate model performance.
+    In the figure, \textsc{zeno}{} is shown for the audio transcription example described in \Cref{sec:zeno}.
+    The interface has two components, the Metadata Panel (A \& B) and the Samples View (C).
+    The Metadata Panel shows the metadata distributions of the dataset (B) and the slices and folders a user has created (A).
+    The metadata widgets are cross-filtered, with the purple bars showing the filtered table distribution.
+    The Samples View (C) shows the filtered data instances and outputs, currently those with \textit{0.04 < amplitude < 0.12}, along with the selected metric, in this case, accuracy.
+}
+  \Description{Image of the Zeno Exploration tab in the UI. This image shows a main data instance view that shows the data itself with its label and prediction. Next to it is a sidebar with histograms for each metadata and created data slices.}
+  \label{fig:exploration}
+\end{figure*}
+
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=\linewidth]{figures/views.png}
+  \caption{
+    The instance view of the Exploration UI (\Cref{fig:exploration}, C) is a modular Python package that can be swapped out for different models and data types.
+    New views can be implemented with a single JavaScript file.
+    \textsc{zeno}{} currently has six implemented views, shown here with the following datasets: image classification (CIFAR-10 \cite{krizhevsky_learning_2009}), audio transcription (Free Spoken Digit Dataset \cite{jackson_jakobovskifree-spoken-digit-dataset_2018}), image segmentation (Kvasir-SEG \cite{ro_kvasir-seg_2020}), text classification (Amazon reviews \cite{ni_justifying_2019}), timeseries classification (MotionSense \cite{malekzadeh_mobile_2019}), and object detection (MS-COCO \cite{fleet_microsoft_2014})
+  }
+  \Description{Six examples of data views that visualize a specific data instance to be used in Zeno. One for each different type of application: Image Classification, Audio Transcription, Image Segmentation, Text Classification, and Object Detection.}
+  \label{fig:views}
+\end{figure*}
+
+The two other \textsc{zeno}{} decorator functions provide additional functionalities that support behavioral evaluation.
+Datasets often do not have sufficient metadata for users to create the specific slices across which they wish to evaluate their models.
+For example, a user may want to create a slice for images with low exposure, but most image datasets do not have the exposure level of an image in the metadata.
+\python{@distill} decorated functions return a new DataFrame column for a dataset, extracting additional metadata from instances, and allowing users to define more specific slices \textbf{(D2)}.
+Users may also want to check the output of their model on modified instances, especially for robustness analyses or metamorphic tests. 
+The \python{@transform} function returns a new set of modified instances from a subset of instances. 
+For the image exposure example above, a user could write a transformation function that darkens images to check how a model performs for different exposures.
+
+\begin{myquote}
+    Emma knows her users have a range of microphones across which she wants her audio transcription model to work well.
+    To test these types of scenarios, she writes a \python{@distill} function that calculates the amplitude of the sound inputs and a \python{@transform} function that adds different types of noise.
+\end{myquote}
+
+The \textsc{zeno}{} backend builds a data processing pipeline to run the decorated functions and calculate the outputs for the frontend.
+For example, \textsc{zeno}{} parses the code of each \python{@distill} function to decide whether it depends on model outputs and must be run for each model.
+Additionally, \textsc{zeno}{} runs the processing and inference functions in parallel, which is especially helpful for transform functions, since each \python{@distill} and \python{@model} function needs to be run on each transformed instance.
+Lastly, all \textsc{zeno}{} function outputs are cached so any runs after the initial processing are instant.
+
+\subsection{Exploration UI: Create and Track Slices}
+
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+
+To empower nontechnical stakeholders to perform behavioral analyses, the main interface of \textsc{zeno}{} is an interactive UI  \textbf{(D4)}.
+Although the initial \decorator{model}{} and \decorator{metric}{} functions are required to initially set up \textsc{zeno}{}, the core behavioral evaluation steps can all be done in the frontend UI by nontechnical users.
+
+The primary tasks in behavioral evaluation are creating subsets of data and calculating relevant metrics.
+The Exploration page is the initial interface for \textsc{zeno}{} and allows users to explore, filter, and create slices of data.
+It is divided into two sections, the instance view and the metadata panel. 
+
+The instance view (\Cref{fig:exploration}, C) is a grid display of data instances, ground truth labels, and model outputs.
+Users can select which model output they wish to see, which metric is calculated, and which transformation is applied to the data using the drop-down menus at the top of the UI.
+A key feature of the instance view is that it is a modular Python package that supports any model and data type \textbf{(D1)}.
+Each view is a separate Python package that implements a JavaScript function to render a subset of data.
+While views are JavaScript functions, they are packaged as Python libraries so users can install the views they need the same way they install the \textsc{zeno}{} package.
+There are currently 6 views implemented (\Cref{fig:views}), and additional views can be created using a cookiecutter template.
+
+
+
+The metadata panel (\Cref{fig:exploration}, A \& B) provides summary visualizations of the metadata columns and previews of user-generated data slices.
+Each metadata column is shown as a row in the metadata panel, displayed with a different widget depending on what type of metadata it is.
+\textsc{zeno}{} supports 5 main metadata types: continuous, nominal, boolean, datetime, and string.
+Each metadata widget is interactive and can be filtered to reactively update the instance view and other metadata widgets.
+When a metadata column is filtered, the filter is shown above the instance view and the selected metric is calculated for the current subset.
+
+When a user finds an interesting or significant subset of data, they can save the current filters as a formal slice. 
+Slices can also be created in the slicing panel, which allows users to visually define and join filter predicates on metadata columns.
+These slices are displayed at the top of the metadata panel with their size and the selected metric, providing a quick look at the performance for each slice.
+Users can also create folders to organize their slices.
+
+\begin{myquote}
+    Emma runs \textsc{zeno}{} to analyze her transcription model in the Exploration UI. 
+    First, she filters the amplitude metadata widget and finds that the model is significantly worse at transcribing quiet audio. 
+    To track this subset, she creates a slice and puts it in the \textit{audio properties} folder (\Cref{fig:exploration}, A).
+    She then selects the white noise transformation and sees that the error rate increases significantly.
+    She notes that they may want to augment their training data with noisy instances.
+\end{myquote}
+
+
+
+
+
+
+
+
+
+
+
+\subsection{Analysis UI: Track and Test Slices Across Models}
+
+   
+   
+   
+   
+   
+   
+   
+    
+
+Once users have created the slices they wish to track using the Exploration UI, they are faced with the challenge of comparing models and slices.
+The Analysis UI (\Cref{fig:analysis}) provides visualizations, reporting tools, and testing features to help users better understand and compare the performance of multiple models \textbf{(D3)}.
+
+At the bottom of the Analysis page (\Cref{fig:analysis}, F) is a table showing the slices created in the Exploration page. 
+To help users navigate the slices, folders are shown as tabs above the table and can be used to filter which slices are shown.
+Users can also select which metric and transform is applied to each slice, and the resulting metric is shown as a column for each model.
+To make it easier to detect trends in slice performance over time, \textsc{zeno}{} shows a sparkline of the selected metric across models for each slice \textbf{(D3)}.
+
+A common phenomenon for models deployed in the real world is domain shift, where the real-world data distribution changes over time and model performance degrades \cite{Moreno-Torres2012}.
+To alert users of potential regressions in model performance, \textsc{zeno}{} detects slices with performance that decreases between models.
+For each slice, \textsc{zeno}{} fits a simple linear regression of the selected metric across models, and users are alerted of slices with significant negative slope by a downward arrow next to the sparkline \textbf{(D3)}.
+\textsc{zeno}{} also highlights slices with high variance, indicating potential unexpected behavior, with a red up-and-down arrow next to the sparkline. 
+
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=\linewidth]{figures/analyze.png}
+  \caption{
+    The Analysis UI helps users visualize trends of model performance across slices, and allows them to create \textit{behavioral unit tests} of expected slice metrics.
+    In the figure, \textsc{zeno}{} is shown for the CIFAR-10 image classification task comparing models trained for different epochs.
+    The Slice Drawer (F) shows the performance of slices across models, including a sparkline with the metric trend over time.
+    Users can create new reports in the Report Panel (D) and add slices from the Slice Drawer.
+    Lastly, in the Report View (E), users can create \textit{behavioral unit tests} of expected model performance.
+  }
+  \Description{Image of the Zeno Analysis tab in the UI. The image shows performance on created subsets of data. It visually shows in red where the model is failing a behavioral test specified by the user.}
+  \label{fig:analysis}
+\end{figure*}
+
+Since domain shift and model updates can lead to unexpected changes in model performance, users may want to set tests for expected slice metrics.
+We term these \textit{behavioral unit tests}, functions that determine whether a metric for a slice is in an expected range, such as $accuracy > 70\%$.
+To create tests, users first create a new report (\Cref{fig:analysis}, D), a collection of slices, and add to it the slices they wish to test.
+They can then set an expectation for a certain metric on each slice using boolean predicates on the metric value.
+Models for which the test fails are highlighted in red in the report table, with the overall number of tests that failed for the most recent model shown next to each report in the report panel.
+Reports can be exported as PDFs to be shared externally from Zeno \textbf{(D4)}.
+
+\begin{myquote}
+    Emma uses the insights from the Exploration UI to train a few new models with new and augmented data.
+    In the Analysis UI she sees that her new models are performing better for noisy input audio, but there is a decreasing trend for instances with lower amplitude.
+    To ensure that this trend does not continue, she creates a new report and adds slices for different levels of amplitude.
+    She then creates behavioral unit tests expecting each slice to have an accuracy of over 65\%.
+\end{myquote}
+
+
+
+
+
+
+
+
+
+
+
+\section{Case Studies}
+
+We collaborated with four ML practitioners to set up \textsc{zeno}{} on models they developed or audited in their work.
+The goal of these case studies was to answer our second research question, whether \textsc{zeno}{} can help practitioners working on diverse ML tasks effectively evaluate their models and discover important behaviors.
+We chose these case studies as they represented a wide range of tasks (binary classification, multi-class classification, image generation) and data types (text, images, audio), testing how well \textsc{zeno}{} generalizes.
+
+
+Before each study, we met with the case study participant to understand the types of ML systems they use and decide which model(s) they wished to evaluate using \textsc{zeno}{}.
+We then worked with them asynchronously to set up an instance of \textsc{zeno}{}, with their model, which they could access on their computer.
+Finally, we conducted a one-hour study with an interview and think-aloud session (two in-person, two virtual).
+During the study's first 15-30 minutes, we asked participants about their existing approaches to model evaluation and the challenges they face.
+For the remainder of the study, participants shared their screen and used \textsc{zeno}{} to evaluate the ML model, describing their thought process and findings while mentioning limitations and desired features.
+Our Institutional Review Board (IRB) approved this as a separate study from the formative interviews.
+In each of the following sections, we introduce the problem, describe the participant's existing evaluation approach, and detail their findings from using \textsc{zeno}{}.
+
+
+
+
+
+\subsection{Case 1: UI Classification}\label{sec:ui}
+
+For the first case study, we worked with a researcher developing a model to classify smartphone screenshots using a CNN-based deep learning model, which they were evaluating on 10,000 images.
+The model aims to make UIs more accessible to people with visual impairments by informing them of the type of interface they are looking at.
+The participant was looking to expand their system to screenshots from other devices, e.g., tablets, and wanted to understand their model's current performance and generalizability.
+Uniquely for this case study, the participant ran \textsc{zeno}{} on a cloud server that hosted their data and models and they accessed the \textsc{zeno}{} UI remotely on their laptop.
+
+\subsubsection{Existing evaluation approach.}
+The first participant primarily uses computational notebooks for both \textit{qualitative} and \textit{quantitative} evaluation of their models.
+For \textit{qualitative} analyses, they select \feedback{some test cases that I hypothesized are hard and easy for the model}, instances for which they check the model's output to understand how it is behaving.
+For example, for this model they check a specific screenshot of a login screen with a list structure that they expect the model to misclassify as a list view. 
+For every new domain in which they train a model, the participant spends significant time creating dedicated Python notebooks to display data instances and model outputs for this type of qualitative analysis.
+
+The participant also uses \textit{quantitative} metrics for evaluation, especially for more complex domains such as object detection where they use a combination of metrics such as mean Average Precision (mAP) at different scales.
+As with the qualitative analyses, the participant authors specific Python notebooks to calculate these metrics.
+They also make an effort to write evaluation code that is distinct from the training code to ensure that they avoid any bugs such as data leakage in the training process.
+
+
+\subsubsection{Findings with \textsc{zeno}{}.}
+The participant found \textsc{zeno}{}'s interactive instance view and metadata distributions extremely useful for discovering new failures, systematically validating qualitative analyses, and sharing results with others.
+Just from the initial Exploration UI, the participant found the ability to quickly browse dozens of instances much more valuable than the static notebooks they used previously.
+Within a few seconds, they found new model failures they noted to validate later and add as new qualitative test examples. 
+The participant wished to filter the instance view to only see failures or have the system suggest slices to make it easier to quickly find model errors.
+
+With the metadata distributions in the Exploration UI the participant was also able to validate some of their existing qualitative hypotheses more systematically.
+For example, they confirmed their hypothesis that the model would perform worse for underrepresented classes in the dataset by filtering for the most underrepresented classes using the class histogram (see \Cref{fig:case}). 
+They found the ability to save such slices of data to share with others to be a powerful feature and wished to
+\feedback[]{take a very well known dataset such as ImageNet, find slices that are questionable and share them} to help others test their own model for such issues.
+
+Lastly, the participant found that the code for the \textsc{zeno}{} API was similar to what they used in notebooks and that they \feedback[]{could totally get used to the \textsc{zeno}{} API}.
+While they were able to copy and paste their existing code into \textsc{zeno}{}, they wished for a more streamlined setup process, for example, with automatically generated \textsc{zeno}{} configuration files for common data types and ML libraries.
+
+
+
+
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=\linewidth]{figures/case.png}
+  \caption{
+    A screenshot of the Exploration UI from the UI classification case study (\Cref{sec:ui}).
+    The participant selected underrepresented ground-truth classes and confirmed that the model performance is significantly worse for them.
+  }
+  \Description{An image of the Zeno Exploration UI showing the case study for UI classification. The image shows metadata on the sidebar and data consisting of UI screenshots in the main view.}
+  \label{fig:case}
+\end{figure*}
+
+
+
+\subsection{Case 2: Breast Cancer Detection}\label{sec:cancer}
+
+In the second case study, we worked with a researcher who was auditing a breast cancer classification model on a dataset of 6,635 images.
+The model, also a CNN-based deep learning model, divides mammogram images into small patches and detects whether there is a lesion present in each patch.
+The model was trained on a dataset provided by a collaboration with clinical researchers at an academic hospital system in the United States.
+Although the model had a reasonably high accuracy of 80\%, the developers had difficulty understanding the failure modes of the model, especially since the dataset was de-identified and had minimal metadata.
+The participant in our case study wanted to discover meaningful dimensions across which the model failed in order to guide model updates.
+
+\subsubsection{Existing evaluation approach} 
+Unlike the first case study participant, the participant in the second study had only used quantitative aggregate metrics when evaluating models.
+They \feedback{had not used any platform or framework to understand how a model performed on specific features of the metadata}, and fully relied on aggregate metrics as a measure for model quality.
+This involved creating Python scripts to load a model and data and calculate metrics such as AUC and F1 score.
+Attempting to improve the breast cancer classification model led to their first foray into behavioral evaluation.
+
+\subsubsection{Findings with \textsc{zeno}{}}
+The participant found that the combination of the extensible \python{@distill} functions and metadata distributions was essential for finding slices with significant areas of error. 
+Since the participant was not a domain expert, they consulted with medical imaging researchers that recommended a Python library, pyradiomics \cite{van_griethuysen_computational_2017}, to extract physiologically relevant characteristics from medical images.
+The participant implemented dozens of \python{@distill} functions using pyradiomics functions that encoded important regional information, such as grey-level values, that was not captured by their original features.
+They also wrote a couple more \python{@distill} functions to encode the position of each image patch, a hypothesis they had from looking at model failures in the instance view.
+The participant only had to add a couple of lines of Python to use all of these functions in \textsc{zeno}{}.
+
+Since the dataset had minimal existing metadata, interactively filtering the \python{@distill}ed distributions was the primary way the participant found patterns of failure.
+By interactively cross-filtering the \python{@distill}ed metadata histograms, they found that the model performed significantly worse for images with higher tissue density, a phenomenon that also occurs with human radiologists \cite{kolb_comparison_2002}.
+They also found that the model was trained on many background patches of image that did not include part of the breast, which also impacted the aggregate metrics.
+The participant noted that they may want to clean the data and upsample instances relevant to the classification task.
+Due to the quantity and complexity of these analyses, the participant wished for more expressive slice comparisons, such as comparing multiple slices at a time in the Exploration UI.
+Otherwise, using \textsc{zeno}{} the participant found significant failures which they had not been able to find using Python scripts.
+
+
+
+
+\subsection{Case 3: Voice Commands}\label{sec:dov}
+The third case study was with a participant who was developing a decision-tree model to detect the direction in which a person is speaking using an array of microphones, which they were evaluating on 11,520 recordings.
+The goal of the model is to predict to which microphone, often a smart speaker, a person is talking in order to respond from the right speaker.
+The participant had collected data from diverse setups to understand the performance of their model in the different scenarios.
+
+\subsubsection{Existing evaluation approach}
+Most of the models the participant works on are sensor-based systems highly impacted by the physical nature of the data signals, for example, echoes and noise in sound data.
+Thus, in addition to calculating classic aggregate metrics, the participant generates and tests inputs with diverse physical properties.
+For example, in the model described above, the participant collected audio from speakers next to a wall and in the middle of the room to since they thought the rebounding sound from the wall might confuse the model.
+
+To evaluate such scenarios, the participant collects data in dozens of configurations, and so often has extensive metadata for behavioral analysis.
+Like the other participants, they use computational notebooks to manually split the data across different metadata features and print out multiple metrics.
+Due to their high quantity of metadata, the participant only looks at simple slices of data, and does not often explore intersectional slices of multiple features.
+
+
+
+\subsubsection{Findings with \textsc{zeno}{}}
+Using \textsc{zeno}{}, the participant was both able to validate all of their hypotheses significantly faster and discovered potential causes for systematic model failures.
+For example, they confirmed a finding from previous analyses where a \feedback[]{model worked very well at 1, 2, and 3 meters, but there was a sharp dropoff at 5 meters} by simply looking at the metadata distributions. 
+They also used the spectrogram visualization of instances in each slice to look for potential reasons for the steep dropoff in performance, for example, signals with lower amplitude. 
+Additionally, they found the cross-filtering between metadata histograms to be useful to find potential interactions between physical features, such as audio both at a distance and a speaker against a wall.
+Cross-filtering combined with expressive instance visualizations of the audio data was essential for both confirming their hypothesis and ideating potential causes for model failures.
+
+Much of the participant's work is focused on collecting new data, so they suggested data-related improvements for \textsc{zeno}{}.
+Since the participant often tests their model with their own inputs, they wished for a direct way to add new instances to \textsc{zeno}{}.
+They also mentioned having more interactive transformations, for example, having a slider to gradually apply a transformation such as reducing the amplitude of an audio file.
+
+\subsection{Case 4: Text-to-Image Generation}\label{sec:diffusion}
+
+For our last case study, we worked with a non-technical researcher who explores biases in deployed ML systems, in this case, the text-to-image generation model Stable Diffusion \cite{rombach_high-resolution_2022}.
+To audit this model they used \textsc{zeno}{} with the DiffusionDB Dataset \cite{wang_diffusiondb_2022}, which consists of 2 million prompt-image pairs generated using the Stable Diffusion model.
+The participant wanted to explore potential systematic biases in the images generated by Stable Diffusion.
+
+\subsubsection{Existing evaluation approach}
+The participant's work is primarily focused on auditing public-facing algorithmic systems such as search engine results and social media ads.
+They exclusively conduct manual, ad-hoc audits, testing a range of specific inputs such as search queries and individually checking the model's outputs.
+The inputs they test are often guided by existing knowledge of model biases, for example, the participant has \feedback[]{used some lingustic discrimination knowledge [...] such as knowing that certain words tend to be gendered} to test inputs with likely biased results.
+
+The participant also works with end users of algorithmic systems to understand how they audit models and what biases they are able to find. 
+They found that \feedback{people often found issues in searches that none of the researchers, including me, had even thought of}.
+Having diverse users test models is essential for finding issues, and the participant works with end-users to surface new limitations.
+
+
+\subsubsection{Findings with \textsc{zeno}{}}
+When auditing the DiffusionDB dataset with \textsc{zeno}{}, the participant took a similar approach to their previous audits but was able to come up with more systematic and validated conclusions of model biases.
+Their primary interaction with \textsc{zeno}{} was using the string search metadata cell to look for certain prompt inputs.
+Similar to how they approached debugging search engines, they used prior knowledge of likely biased prompts but were able to see dozens of examples instead of one prompt at a time.
+For example, when searching for prompts with the ``scientist'' in them, every generated image was male, encoding a typical gender bias.
+By seeing dozens of prompts the participant was able to gather more evidence that the model produced this pattern systematically and was not due to a one-off prompt.
+
+The DiffusionDB dataset also includes a measure of toxicity, or ``NSFW'' level, for both the input prompts and generated images.
+These numbers were represented as histogram distributions in \textsc{zeno}{}, and the participant found it invaluable to filter by and find potential biases.
+One interesting experiment the participant tried was to see if the average distribution of the NSFW tag would go up for certain terms.
+For example, they saw small increases in the distribution when searching for certain gendered terms, including the word ``girl'', which reflected that the images generated of women were more sexualized than those of men.
+They could only see this dataset-level pattern using the combination of \textsc{zeno}{}'s metadata distribution and instance view.
+
+Lastly, the participant reflected on how usable \textsc{zeno}{} would be for everyday users of algorithmic systems. 
+They mentioned that technical terms such as ``metadata'' may be too niche for everyday users and could be renamed.
+Otherwise, they found the system intuitive and usable if set up for use by diverse end users.
+
+\section{Discussion}
+Our case studies showed that \textsc{zeno}{}'s complementary API and UI empowered practitioners to find significant model issues across datasets and tasks.
+More generally, we found that a framework for behavioral evaluation can be effective across diverse data and model types \textbf{(D1)}.
+This generalizability can be seen by comparing two of the case studies, the malignant tumor detection (\Cref{sec:cancer}) and audio classification (\Cref{sec:dov}) cases.
+The two cases differed significantly in their data type (image vs. audio), task (binary vs. multi-class classification), model (CNN vs. decision tree), and end goal (model development vs. auditing).
+Despite these differences, both participants could effectively discover and encode model behaviors they wished to test and found limitations ranging from robustness to domain shift \textbf{(D2)}.
+
+\textsc{zeno}{}'s different affordances made the behavioral evaluation process easier, quicker, and more effective, depending on the user's goals and the challenges of each particular task.
+For example, in Case 2, the participant found the extensible API essential for creating metadata to analyze their model across \textbf{(D2)}, while in case 3, the participant found the interactive visualizations more useful given the extensive metadata already present in their dataset.
+\textsc{zeno}{} also supports users' particular strengths and skillsets - without using the API, our non-technical case study participant (Case 4) was still able to find significant model biases by using their domain knowledge to interact with the UI \textbf{(D4)}.
+
+Participants in the case studies found that \textsc{zeno}{} was easily integrated into their workflows, requiring minimal effort to adapt their code to work with the \textsc{zeno}{} API \textbf{(D1)}.
+For example, the participant in case study 1 only modified a few lines of their inference code to work with \textsc{zeno}{}, and the participant in the second case study was able to use a radiomics library in \textsc{zeno}{} with minimal setup.
+The participants also suggested ways in which \textsc{zeno}{} could be made even easier to use, such as automatically generating \textsc{zeno}{} API functions and configuration files for common ML libraries.
+
+
+While we validated that most of the design goals were met by \textsc{zeno}{}, our case studies did not thoroughly explore how \textsc{zeno}{} could be used over longer periods \textbf{(D3)}.
+All four participants worked with early-stage models and only used \textsc{zeno}{} for a limited time.
+Longer-term, in-situ studies would provide more nuanced feedback for the utility of \textsc{zeno}{}'s model comparison features.
+A benefit of \textsc{zeno}{}'s ease of use, both with the API and UI, is that users can immediately start using \textsc{zeno}{}'s model tracking and comparison features as models move from research to deployment.
+
+
+   
+   
+   
+
+   
+   
+   
+
+
+
+\section{Limitations and Future Work}
+
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+
+\textsc{zeno}{} provides a general and extensible framework for the behavioral evaluation of ML, but leaves significant room to better address the challenges in the evaluation process.
+
+\vspace{1em}
+\noindent\textit{Slice discovery.}
+A central challenge for behavioral evaluation is knowing \textit{which} behaviors are important to end users and encoded by a model.
+To directly encourage the reuse of model functions to scaffold discovery, we are currently designing \textit{ZenoHub}, a collaborative repository where people can share their \textsc{zeno}{} functions and find relevant analysis components more easily.
+Including slice discovery methods directly in \textsc{zeno}{} could also help users find important behaviors.
+\textsc{zeno}{} provides the common medium of representing metadata and slices that practitioners can use to interact with and use the results of these discovery methods.
+
+\vspace{1em}
+\noindent\textit{Improved visualizations.}
+Defining and testing metrics on data slices is the core of \textsc{zeno}{}, but it only provides a few simple visualizations of data and slices in a grid and table view.
+There are many more powerful visualization types that could improve the usability of \textsc{zeno}{}.
+Instance views that encode semantic similarity, such as DendroMap \cite{bertucci_dendromap_2022}, Facets \cite{Pushkarna2017}, or AnchorViz \cite{chen_anchorviz_2018}, could improve users' ability to find patterns and new behaviors in their data.
+\textsc{zeno}{} can also adapt existing visualizations of ML performance, such as ML Cube \cite{Kahng2016}, Neo \cite{gortler_neo_2022}, or ConfusionFlow \cite{Hinterreiter2020}, to better visualize model behaviors.
+For example, grid views showing the intersections of slices could highlight important subsets of data.
+
+
+\vspace{1em}
+\noindent\textit{Scaling.}
+\textsc{zeno}{} has a few optimizations for scaling to large datasets, including parallel computation and caching, but machine learning datasets are continuously growing and additional optimizations could speed up processing considerably.
+A potential update would be to support processing in distributed computing clusters using a library such as Ray \cite{moritz_ray_2018}.
+Another bottleneck is the cross-filtering of dozens of histograms on tables with millions of rows.
+\textsc{zeno}{} could implement an optimization strategy like Falcon \cite{moritz_falcon_2019} to support live cross-filtering on large datasets.
+
+\vspace{1em}
+\noindent\textit{Model improvement.}
+\textsc{zeno}{} is focused exclusively on \textit{evaluation} and does not include methods to update models and fix discovered failures.
+Future work can explore how to directly use the insights from \textsc{zeno}{} to improve model performance.
+For example, there are promising results in using data slices to improve model performance, such as slice-based learning \cite{Chen2019a} and group distributionally robust optimization (GDRO) \cite{sagawa_distributionally_2020, liu_just_2021}.
+
+\vspace{1em}
+\noindent\textit{Further evaluation.}
+The case studies evaluated \textsc{zeno}{} on real-world ML systems, but further evaluations could better elucidate the affordances and limitations of \textsc{zeno}{}.
+Future evaluations could explore how usable \textsc{zeno}{} is for 
+additional non-technical users and how well it works for continually updated deployed systems.
+
+\section{Conclusion}
+
+   
+   
+   
+    
+Behavioral evaluation of machine learning is essential to detect and fix model behaviors such as biases and safety issues.
+In this work, we explored the challenges of ML evaluation and designed a general-purpose tool for evaluating models across behaviors.
+
+To identify specific challenges for ML evaluation, we conducted formative interviews with 18 ML practitioners.
+From the interview results we derived four main design goals for an evaluation system, including supporting comparison over time and no-code analysis.
+We used these goals to design and implement \textsc{zeno}{}, a general-purpose framework for defining and tracking diverse model behaviors across different ML tasks, models, and data types.
+\textsc{zeno}{} combines a Python decorator API for defining core building blocks with an interactive UI for creating slices and reports.
+
+We showed how \textsc{zeno}{} can be applied to diverse domains through four case studies with practitioners evaluating real-world models.
+Participants in the case studies confirmed existing findings, hypothesized new failures, and validated and discovered behaviors using \textsc{zeno}{}.
+As a general framework for behavioral evaluation, \textsc{zeno}{} can incorporate future features, such as error discovery methods and visualizations, to support the growing complexity of models and encourage the deployment of responsible ML systems.
+
+
+\begin{acks}
+We would like to thank Fred Hohman, Alex Baüerle, Will Epperson, and Dominik Moritz for their feedback.
+This material is based upon work supported by a Mozilla Technology Fund grant, a Cisco Research Grant, an Amazon Research Award, a National Science Foundation grant under No. IIS-2040942, and the National Science Foundation Graduate Research Fellowship Program under grant No. DGE-1745016. Any opinions, findings, and conclusions or recommendations expressed in this material are those of the authors and do not necessarily reflect the views of the grantors.
+\end{acks}
+
+\bibliographystyle{ACM-Reference-Format}

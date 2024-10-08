@@ -1,0 +1,382 @@
+\section{Introduction}
+Music is a high-level human art form whose combination of harmony, melody, and rhythm makes people feel happy and adjust their mood. Its rich contents can express one's feelings or emotions and even tell a story. In recent years, music generation has been a heated study with the development of deep learning techniques. 
+
+Some works~\cite{DBLP:journals/corr/abs-2211-11216} aim at studying symbolic music generation, which learns to predict a sequence composition of notes, pitch, and dynamic attributes. The generated symbolic music does not contain performance attributes; thus, post-processing work to synthesize the audio of the music is usually needed. On the other hand, some works~\cite{DBLP:journals/corr/abs-2208-08706} aim at studying generating audio or waveform music. It does not need extra work for synthesizing; however, the generated audio signals are usually more difficult to control to have satisfactory performance attributes.
+
+Besides works on unconditional music generation, there have been some explorations about conditional music generation~\cite{DBLP:journals/corr/abs-2208-08706,DBLP:journals/corr/abs-2211-11248}, which aims to meet the application requirements in some scenarios, such as automatic video soundtrack creation and auxiliary music creation with specific genres or features. Generative models can leverage information from various modalities, such as text and image, to create relevant outputs for a conditional generation. In computer vision, works on conditional image generation have been widely studied. The amazing performance brought by these cutting-edge techniques has aroused wide-spread attention in the industry~\cite{DBLP:journals/corr/MirzaO14,DBLP:conf/nips/SohnLY15,DBLP:conf/icml/NicholDRSMMSC22,DBLP:conf/cvpr/RombachBLEO22}. 
+
+However, the problem of generating waveform music based on free-form text has yet to be well-researched. Similar to the need for video background music generation, creating music according to specific information from other modalities is also in wide demand, such as creating background music for Internet media articles. While there have been several pieces of research on text conditional music generation such as~\cite{DBLP:journals/corr/abs-2211-11216}, BUTTER~\cite{zhang2020butter} and Mubert\footnote{https://github.com/MubertAI/Mubert-Text-to-Music}, they are not able to directly generate musical audio based on free-form text. BUTTER~\cite{zhang2020butter} only receives limited keywords as text conditions and generates symbolic music scores that need further post-processing music synthesizing works. Though \cite{DBLP:journals/corr/abs-2211-11216} can process texts with richer forms, it is also a symbolic music generation work. The pieces of music from Mubert are all created by human musicians. When given specific text, the pieces of music are retrieved based on predetermined genre text labels and sequentially combined. It can only create limited music, and the transitions between different music segments are unnatural.
+
+
+In order to overcome the shortcomings of these previous works, we propose ERNIE-Music, the first attempt at free-form text-to-music generation in the waveform domain using diffusion models. To solve the problem of lacking a large-amount parallel text-to-music dataset, we collect the data from the Internet by utilizing the ``comment voting'' mechanism. We apply conditional diffusion models to process musical waveforms to model the generative process and study which kind of text format benefits the model to learn text-music relevance better. As a result, the generated music samples are diverse and graceful flowing, which outperforms methods from related works by a large margin. To conclude, the contributions of this paper are:
+
+
+1) We propose the first music generation model that receives free-form texts as the condition and generates waveform music based on the diffusion model;
+
+2) We propose to solve the problem of lacking such free-form text-music parallel data by collecting data from the Internet by utilizing the comment voting mechanism;
+
+3) We study and compare using two forms of texts to condition the generative model and proves that using free-form text obtains better text-music relevance;
+
+4) The results show that our model can generate diverse and high-quality music with higher text-music relevance, which outperforms other methods by a large margin.
+
+
+\section{Related Work}
+\subsection{Symbolic vs. Audio}
+Music representation is usually divided into two categories: symbolic representation and audio representation. 
+
+Symbolic representations are discrete variables and include many musical concepts such as pitch, duration, chords, etc. For example, the MIDI (Musical Instrument Digital Interface) is an industry-standard electronic communication protocol that defines notes and playing codes for electronic instruments and other playing devices. It allows electronic instruments, computers, mobile phones, and other electronic devices to connect, adjust and synchronize with each other to exchange performance information in real time. MIDI consists of an ordered sequence of MIDI events, each of which can control the start, end, duration, velocity, and instrument of musical notes. REMI~\cite{huang2020pop} uses the sequence model to learn MIDI-derived event representation to generate expressive piano music.
+
+Audio representations are continuous variables that retain all music-related information and possess rich acoustic details, such as timbre, articulation, etc. Audio representations can be processed using a wide range of sophisticated audio signal processing techniques. For example, WaveNet~\cite{oord2016wavenet} and SampleRNN~\cite{mehri2016samplernn} employ original audio waveforms as model inputs.
+
+\subsection{Controllable Music Generation}
+The task of controlled music generation has been plagued by the central question of how to impose constraints on music. VQ-CPC~\cite{hadjeres2020vector} learns local music features that do not contain temporal information. \cite{DBLP:journals/corr/abs-2208-08706} uses tempo information as a condition to generate "techno" genre music. BUTTER~\cite{zhang2020butter} uses a natural language representation of the music key, meter, style, and other relevant attributes to control the generation of music. \cite{DBLP:journals/corr/abs-2211-11216} further explored the effect of different pre-training models in text-to-music generation. Mubert first computes the encoded representation of the input natural language and the music tags using Sentence-BERT~\cite{reimers2019sentence}. It selects the music tags closest to the input and generates a combination of sounds from the set of sounds corresponding to these music tags. All sounds are created by musicians and sound designers.
+
+\subsection{Diffusion Models}
+
+Diffusion models~\cite{DBLP:conf/icml/Sohl-DicksteinW15,DBLP:conf/nips/HoJA20} are latent variable models motivated by the non-equilibrium thermodynamics. They gradually destroy the structure of the original data distribution through an iterative forward diffusion process and then learn the reversal to reconstruct the original data by a finite iterative denoising process. In recent years, there has been an increased popularity of diffusion models in many areas, such as image generation~\cite{DBLP:conf/icml/NicholDRSMMSC22,DBLP:conf/nips/DhariwalN21,ramesh2022hierarchical} and audio generation~\cite{DBLP:conf/iclr/ChenZZWNC21,Kreuk2022AudioGenTG}. Our work is closely related to diffusion approaches for text-to-audio generation~\cite{DBLP:conf/iclr/ChenZZWNC21,Kreuk2022AudioGenTG}, which all generate audio waveforms but cope with different tasks. This work employs diffusion models to synthesize music waveforms given arbitrary textual prompts, while previous works focus on speech generation.
+
+
+
+
+\section{Method}
+In this section, we first introduce the backgrounds of diffusion models and then describe the text-conditional diffusion model we use, in addition to the model architecture and the training objectives.
+
+\begin{figure*}[!htb]
+	\centering
+	\includegraphics[width=0.82 \textwidth]{model_v2.2.pdf}
+	\caption{The overall architecture. The original Chinese text is ``{\cn{钢琴旋律的弦音，轻轻地、温柔地倾诉心中的遐想、心中的爱恋}}''.}
+	\label{fig:model}
+\end{figure*}
+
+\subsection{Unconditional Diffusion Model}
+Diffusion Models~\cite{DBLP:conf/icml/Sohl-DicksteinW15,DBLP:conf/nips/SongE19,DBLP:conf/nips/HoJA20} consist of a \textit{forward process} which iteratively adds noise to a data sample and a \textit{reverse process} which denoises a data sample by multiple times to generate a sample that conforms to real data distribution. We adopt the diffusion model defined with continuous time~\cite{DBLP:journals/corr/abs-2107-00630,DBLP:journals/corr/abs-1905-09883,DBLP:conf/iclr/ChenZZWNC21,DBLP:conf/iclr/0011SKKEP21,DBLP:conf/iclr/SalimansH22}.
+
+Consider a data sample $x$ from distribution $p(x)$; diffusion models leverage latent variables $z_t$ where $t \in \mathbb{R}$ ranges from $0$ to $1$. The log signal-to-noise-ratio $\lambda_t$ is defined as $\lambda_t={\rm log}[\alpha_t^2/\sigma_t^2]$, where $\alpha_t$ and $\sigma_t$ denote the noise schedule. 
+
+For the \textit{forward process} or \textit{diffusion process}, Gaussian noise is added to the sample iteratively, which satisfies a Markov chain:
+\begin{align}
+q(z_t|x)&=\mathcal N (z_t;\alpha_t x, \sigma_t^2 \textbf{I}) \nonumber \\
+q(z_{t'}|z_t) &= \mathcal N (z_{t'};(\alpha_{t'}/\alpha_t)z_t, \sigma_{t'|t}^2 \textbf{I}) \nonumber
+\end{align}
+where $t,t' \in [0,1]$ and $t<t'$, and $\sigma_{t'|t}^2=(1-e^{\lambda_{t'}-\lambda_t})\sigma_{t'}^2$.
+
+In the \textit{reverse process}, a function approximation with parameters $\theta$ (denoted as $\hat{x}_\theta(z_t, \lambda_t, t) \approx x$) estimates the denoising procedure:
+\begin{equation}
+    p_\theta(z_t|z_{t'}) = \mathcal{N} (z_t; \tilde{\mu}_{t|t'}(z_{t'}, x)), \tilde{\sigma}_{t|t'}^2\textbf{I}) \nonumber
+\end{equation}
+where $\tilde{\mu}_{t|t'}(z_{t'}, x, t')) = e^{\lambda_{t'}-\lambda_t}(\alpha_t/\alpha_{t'})z_{t'} + (1-e^{\lambda_{t'}-\lambda_t})\alpha_t x$. Starting from $z_1 \sim \mathcal{N}(0,\textbf{I})$, by applying the denoising procedure on the latent variables $z_t$, $z_0 = \hat{x}$ can be generated at the end of \textit{reverse process}. To train the denoising model $\hat{x}_\theta(z_t, \lambda_t, t)$, without loss of generality, the weighted mean squared error loss is adopted:
+\begin{equation}\label{eqation_loss}
+    L = E_{t \sim [0,1], \epsilon \sim \mathcal{N} (0,\textbf{I})}[w(\lambda_t) \lVert \hat{x}_\theta(z_t, \lambda_t, t)-x \rVert _2^2]
+\end{equation}
+where $w(\lambda_t)$ denotes the weighting function and $\epsilon \sim \mathcal{N} (0,\textbf{I})$ denotes the noise.
+
+
+
+\subsection{Conditional Diffusion Model}
+Many works successfully implement generative models with conditional settings~\cite{DBLP:journals/corr/MirzaO14,DBLP:conf/nips/SohnLY15,DBLP:conf/cvpr/RombachBLEO22}. Conditional diffusion models approximate distribution $p(x|y)$ instead of $p(x)$ by modeling the denoising process $\hat{x}_\theta(z_t, \lambda_t, t, y)$, where $y$ denotes the condition. $y$ can be any type of modality such as image, text, and audio. Specifically, in our text-to-music generation scenario, $y$ is a text prompt to guide the model to generate related music. We discuss the details of modeling the conditional diffusion model in the following sections.
+
+
+\subsubsection{Model Architecture}\label{timestep_condition}
+
+For text-to-music generation, the condition $y$ for the diffusion process is text. As shown in Figure \ref{fig:model}, our overall model architecture contains a conditional music diffusion model which models the predicted \textit{velocity} $\hat{v}_\theta(z_t, t, y)$~\cite{DBLP:conf/iclr/SalimansH22}, and a text encoder ${\rm E}(\cdot)$ which maps text tokens with length $n$ into a sequence of vector representations $[ s_0; S] $ with dimension $d_E$, where $S=[ s_1, ..., s_n] $, and $s_i \in \mathbb{R}^{d_E}$, and $s_0$ is the classification representation of the text. 
+
+The inputs of the music diffusion model are latent variable $z_t \in \mathbb{R}^{d_c \times d_s}$, timestep $t$ (which is then transformed to the embedding $e_t \in \mathbb{R}^{d_t \times d_s}$), and the representation of text sequence $[ s_0; S]  \in \mathbb{R}^{(n+1) \times d_E}$, where $d_c$ denotes the number of the channels, $d_s$ denotes the sample size, $d_t$ denotes the feature size of the timestep embedding. The output is the estimated \textit{velocity} $\hat{v}_t \in \mathbb{R}^{d_c \times d_s} $.
+
+Inspired by previous works about latent diffusion models~\cite{DBLP:conf/icml/NicholDRSMMSC22,DBLP:conf/cvpr/RombachBLEO22,DBLP:conf/nips/DhariwalN21}, we adopt the architecture of UNet~\cite{DBLP:conf/miccai/RonnebergerFB15} whose key components are stacked convolutional blocks and self-attention blocks~\cite{DBLP:conf/nips/VaswaniSPUJGKP17}. Generation models can estimate the conditional distribution $p(x|y)$, and the conditional information $y$ can be fused into the generative models in many ways~\cite{DBLP:conf/nips/SohnLY15}. 
+
+Our diffusion network targets at predicting the latent velocity $\hat{v}_\theta$ at randomly sampled timestep $t$ given the noised latent $z_t$ and a textual input $[ s_0; S]$ as the condition. To introduce the condition into the diffusion process, we perform an fusing operation ${\rm Fuse}(\cdot, \cdot)$ on the timestep embedding $e_t$ and the text classification representation $s_0$ to obtain the text-aware timestep embedding ${e'}_t = {\rm Fuse}(e_t, s_0) \in \mathbb{R}^{d_{t'} \times d_s} $. Then it is concatenated with $z_t$ to obtain $z'_t = (z_t \oplus {e'}_t) \in \mathbb{R} ^{(d_{t'}+d_c)\times d_s}$. We omit the operations about the timestep embedding in Figure~\ref{fig:model} for simplicity. In the following Section \ref{compare_fuse}, we compare the performance of the different implementations of the fusing operation ${\rm Fuse}(\cdot, \cdot)$.
+
+Moreover, we introduce the conditional representation into the self-attention blocks~\cite{DBLP:conf/nips/VaswaniSPUJGKP17}, which model the global information of the music signals. In the self-attention blocks, consider the intermediate representation of $z'_t \in \mathbb{R} ^{(d_t+d_c)\times d_s}$ is $\phi(z'_t) \in \mathbb{R}^{d_a \times d_\phi}$, and $S \in \mathbb{R}^{n \times d_E}$, the output is computed as follows:
+
+
+\begin{equation}
+	{\rm Attention}(Q,K,V)={\rm softmax}(\frac{QK^T}{\sqrt{d_k}})V \nonumber
+\end{equation}
+\begin{equation}
+ 	{\rm head_i} = {\rm Attention}(Q_i, K_i, V_i) \nonumber
+\end{equation}
+\begin{equation}
+    Q_i = \phi(z'_t) \cdot W_i^Q \nonumber
+\end{equation}
+\begin{equation}
+    K_i = {\rm Concat}(\phi(z'_t) \cdot W_i^K,\, S \cdot W_i^{SK}) \nonumber
+\end{equation}
+\begin{equation}
+    V_i = {\rm Concat}(\phi(z'_t) \cdot W_i^V,\, S \cdot W_i^{SV}) \nonumber 
+\end{equation}
+\begin{equation}
+	{\rm CSA}(\phi(z'_t),\,S)={\rm Concat}({\rm head_1}, ..., {\rm head_h})W^O \nonumber
+\end{equation}
+
+\noindent where $W_i^Q \in \mathbb{R}^{d_{\phi} \times d_q}$, $W_i^K \in \mathbb{R}^{d_{\phi} \times d_k}$, $W_i^V \in \mathbb{R}^{d_{\phi} \times d_v}$, $W_i^{SK} \in \mathbb{R}^{d_{E} \times d_k}$, $W_i^{SV} \in \mathbb{R}^{d_{E} \times d_v}$, $W^O \in \mathbb{R}^{hd_{v} \times d_{\phi}}$ are parameter matrices, and $h$ denotes the number of heads, and ${\rm CSA}(\cdot, \cdot)$ denotes the conditional self-attention operation.
+
+
+\subsubsection{Training}
+Following~\cite{DBLP:conf/iclr/SalimansH22}, we set the weighting function in equation~\ref{eqation_loss} as the ``SNR+1'' weighting for a more stable denoising process. 
+
+Specifically, for the noise schedule $\alpha_t$ and $\sigma_t$, we adopt the cosine schedule~\cite{DBLP:conf/icml/NicholD21} $\alpha_t={\rm cos}(\pi t / 2)$, $\sigma_t={\rm sin}(\pi t / 2)$, and the variance-preserving diffusion process satisfies $\alpha_t^2 + \sigma_t^2 = 1$. 
+
+We denote the function approximation as $\hat{v}_\theta(z_t, t, y)$, where $y$ denotes the condition. The prediction target of $\hat{v}_\theta(z_t, t, y)$ is \textit{velocity} $v_t \equiv \alpha_t \epsilon - \sigma_t x$, which gives $\hat{x}=\alpha_tz_t-\sigma_t \hat{v}_\theta(z_t, t, y)$. Finally, our training objective is:
+\begin{align}
+L_\theta &=  (1+\alpha_t^2/\sigma_t^2) \lVert x-\hat{x}_t \rVert_2^2 \nonumber \\
+&= \lVert v_t - \hat{v}_t \rVert _2^2  \nonumber
+\end{align}
+
+Algorithm \ref{alg:train} displays the complete training process with the diffusion objective proposed by \cite{DBLP:conf/iclr/SalimansH22}.
+
+\begin{algorithm}
+\caption{Training}\label{alg:train}
+\begin{algorithmic}
+\Repeat
+  \State $x \sim p(x \vert y)$
+  \State $t \sim \text{Uniform}([0, 1])$
+  \State $\epsilon \sim \mathcal{N}(\mathbf{0}, \mathbf{I})$
+  \State $v_t \gets \alpha_t \epsilon - \sigma_t x $ 
+  \State Take gradient step on
+        \State \hskip 2em  $\nabla_\theta \Vert v_t - \hat{v}_\theta ( \alpha_t x + \sigma_t \epsilon , t, y) \Vert^2 $
+\Until{converged}
+\end{algorithmic}
+\end{algorithm}
+
+
+
+\section{Experiments}
+In this section, we introduce some implementation details of our model and details of the training data and the specific evaluation methods. We compare the performance of the generated music among our model and methods from related works by manual evaluation. Finally, we analyze several features of our generated music and the factors that might affect the text-music relevance, such as different implementations of the fusing operation and different formats of the input text.
+
+\begin{table}[h]\small
+\renewcommand\arraystretch{1.2}
+	\centering
+		\caption{\label{tab:data_statistics} The statistics of our collected Web Music with Text dataset.}
+	\begin{tabular}{p{4cm}|p{1.5cm}|p{1.5cm}}
+	
+        \hline
+         & Train & Test \\
+		\hline
+        Num. of Data Samples & 3890 & 204 \\
+        \hline
+        Avg. Text (Tokens) Length & 63.23 & 64.45 \\
+        \hline
+        Music Sample Rate & \multicolumn{2}{l}{16000} \\
+        \hline
+        Music Sample Size & \multicolumn{2}{l}{327680} \\
+        \hline
+        Music Duration & \multicolumn{2}{l}{20 seconds} \\
+        \hline
+	\end{tabular}
+\end{table}
+
+\subsection{Implementation Details}
+Following previous works~\cite{DBLP:conf/cvpr/RombachBLEO22,DBLP:conf/icml/NicholDRSMMSC22,DBLP:conf/nips/HoJA20}, we use UNet~\cite{DBLP:conf/miccai/RonnebergerFB15} architecture for the diffusion model. The UNet model uses 14 layers of stacked convolutional blocks and attention blocks for the downsample and upsample module, with skipped connections between layers with the same hidden size. It uses the input/output channels of 512 for the first ten layers and two 256s and 128s afterward. We employ the attention at 16x16, 8x8, and 4x4 resolutions. The sample size and sample rate of the waveform are 327,680 and 16,000, and the channel size is 2. The timestep embedding layer contains trainable parameters of 8x1 shape. It concatenates the noise schedule to obtain the embedding, which is then expanded to the sample size to obtain $e_t \in \mathbb{R}^{16 \times 327,680} $. We train the model for 580,000 steps using Adam optimizers with a learning rate of 4e-5 and a training batch size of 96. We save exponential moving averaged model weights with a decay rate of 0.995, except for the first 25 epochs. For the text encoder ${\rm E}(\cdot)$, we use ERNIE-M~\cite{ouyang-etal-2021-ernie}, which can process multi-lingual texts. 
+
+\subsection{Dataset}
+
+\begin{table}[h]\small
+\renewcommand\arraystretch{1.5}
+	\centering
+		\caption{\label{tab:example_data} Examples of our Web Music with Text dataset.}
+	\begin{tabular}{p{1.5cm}|p{1.5cm}|p{4cm}}
+	
+        \hline
+        Title & Musician & Text \\
+        \hline
+        
+        {\cn {风的礼物}}\newline Gift of the Wind & {\cn {西村由纪江}} \newline Yukie Nishimura & 
+         {\cn{轻快的节奏，恰似都市丽人随风飘过的衣袂。放松的心情，片刻的愉快驱散的是工作的压力和紧张，沉浸其中吧，自己的心。}}\newline The brisk rhythm is like the clothes of urban beauties drifting in the wind. A relaxed mood, a moment of pleasure, dispels the pressure and tension of work. Immerse yourself, your own heart, in it.
+     \\
+        \hline
+        {\cn {九龙水之悦}} \newline Joy of the Kowloon Water & {\cn {李志辉}} \newline Zhihui Li &  {\cn{聆听［九龙水之悦］卸下所有的苦恼，卸下所有的沉重，卸下所有的忧伤，还心灵一份纯净，还人生一份简单。}} \newline Listen to ``The Joy of the Kowloon Water" to remove all the troubles, all the heaviness, and all the sorrows and restore the purity of the soul and the simplicity of life. \\
+        \hline
+        {\cn {白云}} \newline Nuvole Bianche & {\cn{鲁多维科·伊诺}} \newline Ludovico Einaudi & {\cn{钢琴的更宁静，可大提琴的更多的是悠扬和深沉，也许是不同的演奏方式带来不同的音乐感受吧。}} \newline The piano is more serene, but the cello is more melodious and deep. Perhaps different playing methods bring different musical feelings. \\
+		\hline
+	\end{tabular}
+\end{table}
+
+There are few available parallel training data pairs of free-form text and music. To solve this problem, we collect an amount of such data from the Internet, whose language is mainly Chinese.
+
+We use the Internet's ``comment voting'' mechanism to collect such data. On the music service supporting platforms, some users enjoy writing comments on the kinds of music that interest them. If other users think these comments are of high quality, they will click the ``upvote'' button, and comments with a high count of upvotes can be selected as the ``popular comment''. By our observation, the ``popular comments'' are generally relatively high quality and usually contain much useful music-related information such as musical instruments, genres, and expressed human moods. Based on such rules, we collect a large amount of comment text-music parallel data pairs from the Internet to train the text conditional music generation model. The statistics of our collected Web Music with Text dataset and some examples are listed in Table~\ref{tab:data_statistics} and~\ref{tab:example_data}.
+
+
+
+
+
+
+
+\subsection{Evaluation Metric}
+For the text-to-music generation task, we evaluate performance in two aspects: text-music relevance and music quality. Generally, the evaluation of music can be measured by objective and subjective metrics. However, in terms of objective evaluation, there is currently a lack of well-recognized and authoritative objective evaluation methods for text-music relevance. Besides, for music quality, the objective metrics such as FAD (Frechet Audio Distance), Scale Consistency (SC), and Pitch Entropy (PE) are only calculating the closeness between the generated music and the real music instead of the actual quality of the generated music~\cite{DBLP:journals/corr/abs-2211-11248}. Therefore, we employ human evaluation methods to evaluate the music generated by our model in terms of text-music relevance and music quality.
+
+For the evaluation method, we manually score the generated music and calculate the mean score by averaging over results from different evaluators. We use the compared methods or models to generate music based on texts from the test set. We hire 10 people to perform human evaluation, scoring the music generated by each compared model, and then average the scores over the 10 people for each generated music. The identification of models corresponding to the generated music is invisible to the evaluators. Finally, we average the scores of the same model on the entire test samples to obtain the final evaluation results of the models.
+
+
+\subsection{Compared Methods}
+
+The methods for comparison are Text-to-Symbolic Music (denoted as TSM)~\cite{DBLP:journals/corr/abs-2211-11216}, Mubert and Musika~\cite{DBLP:journals/corr/abs-2208-08706}. The generated music from Mubert is actually created by human musicians, and TSM only generates music score, which needs to be synthesized into music audio by additional tools, so the music quality among Mubert, TSM, and our model is not comparable. Thus, we only compare the text-music relevance between them and our model. To synthesize the music audio based on the symbolic music score generated by TSM, we first adopt abcMIDI\footnote{https://github.com/sshlien/abcmidi} to convert the abc file output by TSM to MIDI file and then use FluidSynth\footnote{https://github.com/FluidSynth/fluidsynth} to synthesize the final music audio. For music quality, we compare our model's performance with Musika, a recent famous work that also directly generates waveform music.
+
+
+
+\begin{table}[h]\small
+\renewcommand\arraystretch{1.2}
+	\centering
+		\caption{\label{tab:main_results} Comparison of text-music relevance.}
+	\begin{tabular}{p{3.5cm}|p{1cm}|p{1cm}|p{1cm}}
+		\hline
+		Method & Score$\uparrow$ & Top Rate $\uparrow$ & Bottom Rate$\downarrow$ \\
+        \hline
+        TSM~\cite{DBLP:journals/corr/abs-2211-11216} & 2.05  & 12\% & 27\% \\ 
+        \hline
+        Mubert & 1.85 & 37\% & 32\%\\
+        \hline
+        our model & \textbf{2.43} & \textbf{55\%}  & \textbf{12\%}\\
+		\hline
+	\end{tabular}
+\end{table}
+
+\begin{table}[h]\small
+\renewcommand\arraystretch{1.2}
+	\centering
+		\caption{\label{tab:quality_results} Comparison of music quality.}
+	\begin{tabular}{p{3.5cm}|p{1cm}|p{1cm}|p{1cm}}
+		\hline
+		Method & Score$\uparrow$ & Top Rate$\uparrow$ & Bottom Rate$\downarrow$ \\
+        \hline
+        Musika~\cite{DBLP:journals/corr/abs-2208-08706} & 3.03 & 5\% & 13\% \\ 
+        \hline
+        our model & \textbf{3.63} & \textbf{15}\% & \textbf{2}\% \\
+		\hline
+	\end{tabular}
+\end{table}
+
+
+\subsection{Results}
+
+
+Table~\ref{tab:main_results} and \ref{tab:quality_results} show the evaluation results of text-music relevance and music quality. For text-music relevance evaluation, we use a ranking score of 3 (best), 2, 1 to denote which of the three models has the best relevance given a piece of text. For music quality, we use a five-level score of 5 (best), 4, 3, 2, 1, which indicates to what extent the evaluator prefers the melody and coherence of the music. The top rate means the probability that the music obtains the highest score, and the bottom rate means the probability that the music obtains the lowest score. The results indicate that our model can generate music with better quality and text-music relevance which outperforms related works by a large margin. 
+
+
+
+\subsection{Analysis}
+
+In this section, we analyze the feature of the diversity of our generated music through visualization results and study different factors that may affect the text-music relevance, including the text condition fusing operation and input text format.
+
+
+\subsubsection{Diversity}
+The music generated by our model has a high diversity. In terms of melody, our model can generate music with a softer and more soothing rhythm or more passionate and fast-paced music. In terms of emotional expression, some music sounds sad, while there is also very festive and cheerful music. In terms of musical instruments, it can generate music composed by various instruments, including piano, violin, erhu, and guitar. We selected two examples with apparent differences and analyzed them based on the visualization results. As shown in the waveform from Figure \ref{fig:spectrogram}, the fast-paced guitar piece has denser sound waves, while the piano pieces have a slower, more soothing rhythm. Moreover, the spectrogram shows that the guitar piece holds dense high and low-frequency sounds, while the piano piece is mainly in the bass part.
+
+\begin{figure*}[h]\small\centering
+    \subfigure[]{
+		\begin{minipage}[]{0.42\linewidth}
+			\includegraphics[width=1\textwidth]{smooth_music.pdf}
+		\end{minipage}
+	}
+	\subfigure[]{
+		\begin{minipage}[]{0.42\linewidth}
+			\includegraphics[width=1\textwidth]{fast_guitar.pdf}
+		\end{minipage}
+	}
+	\subfigure[]{
+		\begin{minipage}[]{0.42\linewidth}
+			\includegraphics[width=1\textwidth]{spec_smooth_music.pdf}
+		\end{minipage}
+	}
+	\subfigure[]{
+		\begin{minipage}[]{0.42\linewidth}
+			\includegraphics[width=1\textwidth]{spec_fast_guitar.pdf}
+		\end{minipage}
+	}
+	\caption{The spectrogram and waveform of generated music examples. The model can generate diverse music, including smoothing and cadenced (a, c) and fast-paced (b, d) rhythms. Text of (a, c): The piano piece is light and comfortable yet deeply affectionate. Text of (b, d): A passionate, fast-paced guitar piece.} \label{fig:spectrogram}
+\end{figure*} 
+
+\subsubsection{Comparison of Different Text Condition Fusing Operations}\label{compare_fuse}
+\begin{figure}[!htb]
+	\centering
+	\includegraphics[width=.4 \textwidth]{mse2.pdf}
+	\caption{The MSE results on the test set for two implementations of the fusing operation.}
+	\label{fig:mse_testset}
+\end{figure}
+As introduced in Section \ref{timestep_condition}, we compare two implementations of the fusing operation ${\rm Fuse}(\cdot, \cdot)$, namely concatenation and element-wise summation. To evaluate the effect, we compare the performance on the test set as the training progresses. For every 5 training steps, we adopt the model checkpoint to generate pieces of music based on the texts in the test set and calculate the Mean Squared Error (MSE) of generated music and gold music from the test set. The visualization results are shown in Figure \ref{fig:mse_testset}, which indicates no apparent difference between the two fusing operations. For simplicity, we finally adopt the element-wise summation.
+
+\subsubsection{Comparison of Different Formats of Input Text
+}
+Our proposed method leverages free-form text to generate music. However, considering that the more widely used methods in other works generate music based on a set of pre-defined music tags representing the specific music's feature~\cite{zhang2020butter}, we compare these two methods to obtain better text-music relevance of generated music. Therefore, we train two models with the two text formats and manually evaluate the text-music relevance of the generated music. Specifically, we compare two kinds of text format to condition the diffusion model: \textit{End-to-End Text Conditioning} and \textit{Music Tag Conditioning}. 
+
+
+
+
+\paragraph{End-to-End Text Conditioning} 
+Suppose the training data consists of multiple text and music pairs $<Y, X>$. The texts in $Y$ are free-form, describing some scenario, emotion, or just a few words about music features. We adopt the straightforward way to process the texts: to input them into the text encoder ${\rm E}(\cdot)$ to obtain the text representations. It relies on the natural high correlation of the $<Y, X>$, and the conditional diffusion model dynamically learns to capture the critical information from the text in the training process.
+
+\paragraph{Music Tag Conditioning}
+
+Using short and precise music tags as the text condition may make it easier for the model to learn the mapping between text and corresponding music. We analyze the text data from the training set and distill critical information from the texts to obtain music tags. Take Table \ref{tab:comment_example} for example. The key features of the music in a piece of long text are limited and can be extracted as music tags. 
+
+
+\begin{table}[h]\small
+\renewcommand\arraystretch{1.5}
+	\centering
+		\caption{\label{tab:comment_example} Examples of free-form texts and corresponding music tags.}
+	\begin{tabular}{p{5cm}|p{2cm}}
+		\hline
+		Text & Tags \\
+        \hline
+        {\cn{聆听世界著名的钢琴曲简直是一种身心享受，我非常喜欢}} \newline Listening to the world famous piano music is simply a kind of physical and mental enjoyment, I like it very much & {\cn {钢琴}} \newline piano\\ 
+        \hline
+        {\cn {钢琴旋律的弦音，轻轻地、温柔地倾诉心中的遐想、心中的爱恋}} \newline The strings of the piano melody, gently and tenderly express the reverie and love in the heart & {\cn {钢琴，轻轻，温柔，爱}} \newline piano, gentle, tender, love\\
+        \hline
+        {\cn {提琴与钢琴合鸣的方式，在惆怅中吐露出淡淡的温柔气息}} \newline The ensemble of violin and piano reveals a touch of gentleness in melancholy & {\cn {钢琴, 小提琴, 温柔, 惆怅}} \newline piano, violin, gentle, melancholic\\
+		\hline
+	\end{tabular}
+\end{table}
+
+\noindent To obtain the music tags, we use the TF-IDF model to mine terms with higher frequency and importance from the dataset. Given a set of text $Y$, the basic assumption is that the texts contain various words or phrases related to music features such as instruments and genres. We aim to mine a tag set $T$ from $Y$. We assume two rules to define a good music tag representing typical music features: 1) A certain amount of different music can be described with the tag for the model to learn the ``text(tag)-to-music'' mapping without loss of diversity; 2) A tag is worthless if it appears in the descriptions of too many pieces of music. For example, almost every piece of music can be described as ``good listening"; thus, it should not be adopted as a music tag. Based on such rules, we leverage the TF-IDF model to mine the music tags. Because the language of our dataset is Chinese, we use jieba\footnote{https://github.com/fxsjy/jieba} to cut the sentences into terms. For a term $w$, we make statistics on the total dataset to obtain the TF ${\rm tf}(w)$ and the IDF ${\rm idf}(w)$, then the term score is obtained as ${\rm score}(w) = {\rm tf}(w) \cdot {\rm idf}(w)$. We reversely sort all the terms based on ${\rm score}(w)$ and manually select 100 best music tags to obtain the ultimate music tag set $T$, which can represent the features of music such as instruments, music genres, and expressed emotions. Table \ref{tab:tag_example} displays examples of the adopted and abandoned terms.
+
+
+
+
+
+
+
+\begin{table}[h]\small
+\renewcommand\arraystretch{1.5}
+	\centering
+            \caption{\label{tab:tag_example} Examples of the adopted and abandoned tags}
+	\begin{tabular}{p{1.8cm}|p{4cm}}
+		\hline
+		 & Tags \\
+        \hline
+        Adopted & {\cn{希望，生命，钢琴，小提琴，孤独，温柔，幸福，悲伤，游戏，电影}} \newline hope, life, piano, violin, lonely, gentle, happiness, sad, game, movie  \\ 
+        \hline
+        Abandoned & {\cn{音乐，喜欢，感觉，世界，好听，旋律，永远，音符，演奏，相信}} \newline music, like, feeling, world, good-listening, melody, forever, note, play, believe \\
+        \hline
+	\end{tabular}
+\end{table}
+
+\noindent We use the mined music tags to condition the diffusion process. For a piece of music from the training data, we concatenate its corresponding music tags with a separator symbol ``{\cn {，}}'' to obtain a music tag sequence as the conditioning text to train the model.
+
+\begin{table}[h]\small
+\renewcommand\arraystretch{1.1}
+	\centering
+		\caption{\label{tab:comparison_tag_text} Comparison of text-music relevance between two conditioning text formats.}
+	\begin{tabular}{p{4cm}|p{0.8cm}|p{0.8cm}|p{0.8cm}}
+		\hline
+		Method & Score$\uparrow$ & Top Rate$\uparrow$ & Bottom Rate$\downarrow$ \\
+        \hline
+        Music Tag Conditioning & 1.7 & 22\% & 52\% \\
+        \hline
+        End-to-End Text Conditioning & \textbf{2.3} & \textbf{40\%} & \textbf{10\%}   \\ 
+		\hline
+	\end{tabular}
+\end{table}
+
+
+We randomly select 50 samples from the test set for manual evaluation. Table \ref{tab:comparison_tag_text} shows the evaluation results of the two conditioning methods, which indicates that our proposed free-form text-based music generation method obtains better text-music relevance than using pre-defined music tags. The main reason might be that the human-made music tag selection rules introduce much noise and result in the loss of some useful information from the original text. Thus it is better to use the \textit{End-to-End Text Conditioning} method for the model to learn to capture useful information dynamically. 
+
+
+
+
+
+
+
+\section{Conclusion}
+In this paper, we propose ERNIE-Music, the first music generation model to generate music audio based on free-form text. To solve the problem of lacking such text and music parallel data, we collect music from the Internet paired with their comment texts describing various music features. In order to analyze the effect of text format on learning text-music relevance, we mine music tags from the entire text collection and compare utilizing the two forms of text conditions. The results show that our free-form text-based conditional generation model creates diverse and coherent music and outperforms related works in music quality and text-music relevance.
+
+
+\bibliographystyle{named}

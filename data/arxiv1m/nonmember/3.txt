@@ -1,0 +1,562 @@
+\section{Introduction}
+
+Changepoint (CP) detection is the task of identifying sudden changes in the statistical properties of a data stream. The methods to detect CPs are used in applications including systems health monitoring \citep{stival2022doubly,yang2006adaptive},  financial data \cite{kim2022unsupervised,kummerfeld2013tracking},  climate change \citep{reeves2007review, itoh2010change}, and cyber security \citep{hallgren2022changepoint}. Existing approaches include likelihood ratio methods such as the parametric method CUSUM \citep{page1954continuous} or Change Finder methods \cite{kawahara2009change}, to  Bayesian methods such as in \citet{chib1998estimation, fearnhead2006exact}. 
+ 
+Detecting CPs in an online fashion is an even more challenging task, but can allow practitioners to act on these systems in real-time.
+In a Bayesian context, the most popular method is \emph{Bayesian online changepoint detection (BOCD)} \citep{adams2007bayesian, fearnhead2007line}. 
+Here, the data stream is assumed to come from one of several different underlying distributions; and the goal is to quantify our uncertainty over the most recent time at which the data distribution changed. 
+BOCD has many desirable properties: it is suitable for multivariate data and has the capacity to quantify uncertainty. 
+However,     it also has a significant flaw inherited from Bayesian inference: it is not robust under outliers or model misspecification. 
+This can lead to failures, where most data points inferred to be CPs are simply mild heterogeneities in the data.
+This is a significant problem, and can causes practitioners to act on safety-critical systems based upon an erroneously declared CPs.
+
+
+
+The lack of robustness in Bayesian methods has recently come to the forefront, and various strategies have been proposed to address it.
+Arguably the most successful amongst these have been generalised Bayesian methods \citep[see e.g.][]{bissiri2016general, Jewson2018,knoblauch2019generalized}.
+Building on these ideas, \citet{knoblauch2018doubly} introduced the first robust version of BOCD using generalised Bayesian inference based on $\beta$-divergences ($\beta$-BOCD). 
+
+While the resulting algorithm is generally applicable and provides robustness, it has a major drawback that has severely impeded its broader use: it is not scalable. 
+This is mainly due to the intractability of the generalised posterior and predictive distributions, which require multiple variational approximations to be performed at each time point.
+As a result, $\beta$-BOCD is practically infeasible if one is interested in online methods for high-frequency data, or if one deals with a constrained computational budget.
+
+
+\begin{figure}[t!]
+\centering
+\includegraphics[width=\columnwidth]{images/Flashcrash.png}
+\vspace{-0.8cm}
+\caption{ \textit{Twitter Flash Crash.}
+The run-length is the  time since the last changepoint (CP).
+\textit{Top:} Jow Dones Index with Maximum a posteriori CPs detected by  standard BOCD marked as ${\color{green_plot}\blacktriangle}$. 
+\textit{Middle \& Bottom:} run-length posteriors of ${\mathcal{D}}_m$-BOCD  with most likely run-length in {\textcolor{blue_plot}{\textbf{blue}}} and of standard BOCD in \textcolor{green_plot}{\textbf{green}}.
+Standard BOCD incorrectly detects a CP, ${\mathcal{D}}_m$-BOCD does not.
+}
+\label{fig:flash}
+\vspace{-0.7cm}
+\end{figure}
+
+This paper proposes a new generalised Bayesian inference scheme based on \emph{diffusion score matching} \citep{barp2019minimum}, which is effectively a  weighted version of the original score-matching divergence of \citet{Hyvarinen2006}.
+If the weights are chosen appropriately, the resulting posteriors are provably robust and the corresponding CP detection algorithm, denoted ${\mathcal{D}}_m$-BOCD, is also robust to outliers. This is illustrated in \Cref{fig:flash} on the value of the Dow Jones Industrial Average (DJIA) on the day of the `Twitter flash crash' on 17/04/2013: standard BOCD falsely identifies $3$ CPs, whilst ${\mathcal{D}}_m$-BOCD correctly identifies no CPs.
+
+
+Additionally---and unlike posteriors based on the $\beta$-divergence---${\mathcal{D}}_m$-posteriors also have a conjugacy property 
+for likelihoods of the exponential family so long as the prior is chosen to be a normal, truncated normal, or any other squared exponential distribution.
+This makes ${\mathcal{D}}_m$-BOCD very fast: specifically, it ensures that all posteriors used in the algorithm  can be updated exactly and efficiently through elementary vector and matrix calculations.
+If one uses the pruning strategies for the CP posterior proposed in \citet{adams2007bayesian}, the computational complexity of our algorithm is $\mathcal{O}(T(d^2+p^2))$; where $T$ is the length of the data stream, $d$ is the dimension of the observations, and $p$ is the number of model parameters. This is the same computational complexity as the original BOCD algorithm. This also makes ${\mathcal{D}}_m$-BOCD more than $10$ times faster than $\beta$-BOCD in our numerical experiments.
+
+
+Beyond that, ${\mathcal{D}}_m$-BOCD has benefits that make it more attractive than standard BOCD even from a purely computational point of view in certain settings.
+For example, when modelling  $d$-dimensional observations with non-Gaussian exponential family distributions, we can obtain conjugate ${\mathcal{D}}_m$-posteriors,  even though no conjugate posteriors exist in the standard Bayesian case.
+
+In summary, we make two key contributions:
+\vspace*{-0.35cm}
+\begin{itemize}
+    \item[(1)] We derive and propose the ${\mathcal{D}}_m$-posterior;  \emph{proving its robustness and closed form updates} in the process; 
+    \vspace*{-0.2cm}
+    \item[(2)] We use this posterior for BOCD, leading to the first algorithm that is \emph{both robust and scalable}.\vspace*{-0.35cm}
+\end{itemize}
+The remainder of the paper is structured as follows: \cref{sec:background} reviews BOCD and generalised Bayesian inference. \cref{sec:methodology} derives the robustness and scalability properties of ${\mathcal{D}}_m$-posteriors, and integrates them with BOCD. We then validate our approach experimentally in \cref{sec:experiments}.
+
+
+
+\section{Background}
+\label{sec:background}
+
+Our method merges generalised Bayesian posteriors based on diffusion score matching with the BOCD algorithm. 
+Here, we provide a short explanation of the concepts relevant for understanding this interface.
+
+
+\subsection{Bayesian Online Changepoint Detection (BOCD)}
+Let $x_{1:T}$ be a sequence of observations $x_1, x_2, \dots, x_T$, where $x_t \in {\mathcal{X}} \subseteq {\mathbb{R}}^{d}$ for the time index $t \in \{1,\ldots,T\}$. 
+Throughout, $x_{1:T}$ follows the product partition model of \citet{barry1993bayesian}: the data is partitioned through a sequence of changepoints (CPs) $0 = \tau_1 < \tau_2 < \dots$ so that the $i$-th segment is $x_{\tau_i:\tau_{i+1}-1}$, and data within the $i$-th segment is independently and identically distributed (i.i.d.) conditional on $\tau_i, \tau_{i+1}$. 
+In the model underlying BOCD, the data in each segment is modelled with the same model class $\{p_{\theta}:\theta \in \Theta\}$, but with a different parameter for each segment.
+The key insight for this model, reached independently by both \citet{adams2007bayesian} and \citet{fearnhead2007line}, is that Bayesian inference can be made online and efficiently if, at time $t$, one only tracks a posterior distribution over the most recent CP.
+Instead of defining a prior and posterior over the CPs directly, BOCD therefore seeks to infer the so-called \textit{run-length} $r_t$ of the current segment---the amount of time since the most recent CP.
+
+
+The remainder of this section details the hierarchical Bayesian model underlying the BOCD construction. Firstly, the approach uses a conditional prior on the run-length:
+\begin{talign*}
+    r_{t}|r_{t-1}&\sim H(r_{t}|r_{t-1}). && \text{(Conditional prior on run-length)} 
+\end{talign*}
+Since at time $t$ we either have a new CP ($r_t = 0$) or the current segment continues ($r_t = r_{t-1} +1$), $H(r_t|r_{t-1})$ has positive probability mass only for $r_t \in \{0, r_{t-1}+1\}$. See \citet{Wilson2010} for a broader discussion of prior selection.
+Conditional on $r_t$, all data points $x_{t'}$ from the same segment $(t-r_t):t$ so that $t' \in \{t-r_t, t-r_t+1, \dots, t\}$ are then modelled as i.i.d. from $p_{\theta}$ via
+\begin{talign*}
+    \theta &\sim \pi(\theta)&& \text{(Parameter prior),}
+    \\
+    x_{t'}|\theta &\sim p_{\theta}(x_{t'}) && \text{(Probability model for data). }
+\end{talign*}
+The quantity of interest is the posterior over $r_t$, which is 
+\begin{talign*}
+    p(r_{t}|x_{1:t}) = \dfrac{p(r_{t},x_{1:t})}{p(x_{1:t})} = \dfrac{p(r_{t},x_{1:t})}{\sum_{r_{t}=0}^{t}p(r_{t},x_{1:t})}.
+\end{talign*}
+This shows that the run-length posterior is tractable whenever the joint distribution between run-length and  observations given by $p(r_{t},x_{1:t})$ is also tractable.
+Intriguingly, these terms can be computed efficiently via an online recursion whenever the posterior predictive is tractable:
+\begin{IEEEeqnarray}{rCl}
+    p(r_{t},x_{1:t}) = \hspace*{-0.2cm} \sum_{r_{t-1}= 0}^{t-1}\hspace*{-0.25cm}\underbrace{p \left(x_{t}|x^{(r_t)}_{t-1}
+   
+    \right)}_{\text{  \:\:  Predictive Posterior}}
+    \hspace*{-0.25cm}\underbrace{H(r_{t}|r_{t-1})}_{\text{CP prior}}p(r_{t-1},x_{1:t-1}),
+    \nonumber
+\end{IEEEeqnarray}
+where $x^{(r_t)}_{t-1} = x_{t-r_t:t-1}$ is the segment with run-length $r_t$ except the most recent observation $x_t$, and the predictive of $x_t$ constructed from $x^{(r_t)}_{t-1}$ is
+\begin{talign}
+    p(x_{t}|x^{(r_t)}_{t-1})= \int_{\Theta}p_{\theta}(x_{t})\pi^{\operatorname{B}}(\theta|x^{(r_t)}_{t-1}
+    d\theta,
+    \label{eq:posterior-predictive}
+\end{talign}
+where $\pi^{\operatorname{B}}(\theta|x^{(r_t)}_{t-1}) \propto \prod_{i=1}^{r_t} p_\theta(x_{t-i}) \pi(\theta)$ is the Bayes posterior over $\theta$ in the current segment.
+To ensure that this integral is tractable in closed form, BOCD algorithms usually use prior densities $\pi(\theta)$ and models $p_{\theta}(x)$ forming a conjugate likelihood-prior pair. 
+
+
+Since the standard BOCD method was proposed, it has been extended in a wide range of directions. A full literature review is beyond the scope of this paper, but we highlight extensions to Gaussian processes models \cite{saatcci2010gaussian}, non-exponential families \citep{turner2013online}, multiple models in different segments \citep{knoblauch2018spatio,knoblauch2019generalized}, observations with multiple fidelity levels \citep{Gundersen2021}, and prediction \citep{Agueldo2020}. We also note that while BOCD  only quantifies uncertainty about the most recent CP, an efficient maximum a-posteriori Viterbi-style recursion can be used to efficiently update point estimates of all CP locations \citep[see e.g.][]{fearnhead2007line}. 
+
+
+Unfortunately, BOCD is not robust: it finds spurious CPs whenever the model is a poor  description of data.
+To address this issue, one can replace the standard Bayesian parameter posterior in \eqref{eq:posterior-predictive} with a robust generalised Bayesian posterior.
+
+
+
+
+\subsection{Generalised Bayesian (GB) inference}
+
+If the statistical model $p_{\theta}$ is well-specified so that for some $\theta_0 \in \Theta$,  the true data-generating mechanism is $p_{\theta_0}$, standard Bayesian updating is the optimal way of integrating prior information with data \citep{zellner1988optimal}.
+Crucially, this no longer holds if the model is misspecified. In this setting, uncertainties are miscalibrated, posterior inferences are sensitive to outliers and heterogeneity, and the Bayesian update may no longer be the best way of processing information. To address these issues, a recent line of research has advocated for the use of generalised Bayesian inference \citep[see e.g.][]{grunwald2012safe, bissiri2016general, Jewson2018, knoblauch2019generalized, fong2021martingale, Jewson2021, matsubara2021robust} which, once conditioned on some data $x_{1:T}$, is based on a belief distribution of the form
+\begin{talign}
+    \pi_{\omega}^{\mathcal{D}}(\theta | x_{1:T})\propto \pi(\theta) \exp\{-\omega T \cdot \widehat{\mathcal{D}}(\theta)\}.
+    \label{eq:gen-bayes}
+\end{talign}
+While $\widehat{\mathcal{D}}(\theta)$ could in principle represent any loss function, we consider a narrowed scope.
+Specifically, for $\mathcal{D}$ being a discrepancy measure on the space of probability measures on $\mathcal{X}$,  and $p_0$ being the true data-generating process, $\widehat{\mathcal{D}}:\Theta\to{\mathbb{R}}$ uses $x_{1:T}$ to estimate the part of the discrepancy $\mathcal{D}(p_0, p_{\theta})$ that depends on $\theta$.
+Here, $\omega>0$ is called the \emph{learning rate} and acts as a scaling parameter that determines how quickly the posterior learns from the data.
+While the choice of $\omega$ may depend on various other considerations \citep{grunwald2012safe, holmes2017assigning}, it is typically chosen to provide approximate frequentist coverage \citep{Lyddon2019,Martin2022}.
+Neither of these techniques are suitable for the online setting; and we will therefore propose a new way of choosing $\omega$ in \cref{sec:DSM-BOCD}.
+
+
+
+The posteriors in \eqref{eq:gen-bayes} are called generalised posteriors because for $\omega =1$, and $\widehat{\mathcal{D}}(\theta) = \frac{1}{T}\sum_{t=1}^T -\log p(x_{t}|\theta)$ estimating the Kullback-Leibler divergence between the model and the data-generating process, one recovers the standard Bayes  posterior.
+Using such generalisations is usually done for two main arguments: to provide robustness, and to improve computation. 
+For example, 
+\citet{Chernozhukov2003} are the first to suggest them for estimation when computing a minimum is hard.
+Rather than focusing on computational aspects, \citet{Hooker2014}, \citet{Ghosh2016} and \citet{bissiri2016general} advocated for their use to improve robustness.
+This has led to a flurry of papers proposing particular discrepancy measures that induce robustness \citep[e.g.][]{cherief2020mmd}, and their various applications in sequential Monte Carlo \citep{boustati2020generalised}, deep Gaussian processes \citep{knoblauch2019robust}, and Bayesian neural networks \citep{futami2018variational}.
+More recently, a line of work has exploited generalised posteriors both for computational gain and robustness: \citet{matsubara2021robust,matsubara2022generalised} showcased their use for robust inference in unnormalised models with both continuous and discrete data. Similarly, 
+\citet{schmon2020generalized, Dellaporta2022, Pacchiardi2021, Legramanti2022} have used them for robustness in simulation-based and likelihood-free settings.
+
+
+
+
+\subsection{Generalised Bayesian Inference in BOCD}
+
+\citet{knoblauch2018doubly} first proposed a robustification of BOCD based on \eqref{eq:gen-bayes} and the $\beta$-divergence, 
+which is robust and  well-defined for  $\beta \in (0,\infty)$ when $p_{\theta}$ is uniformly bounded on $\mathcal{X}$, and whose natural estimator was derived by \citet{basu1998robust} and is given by 
+\begin{talign*}
+    \widehat{\mathcal{D}}_{\beta}(\theta) = \dfrac{1}{T}\sum_{t=1}^{T}\dfrac{1}{1+\beta}\int_{{\mathcal{X}}}p_{\theta}(x)^{1+\beta}dx+\dfrac{1}{\beta}p_{\theta}(x_{t})^{\beta}.
+    \nonumber
+\end{talign*}
+While the resulting method can be made robust, it has several key failures that make it computationally infeasible in most settings. Firstly, the loss depends on  $\int_{{\mathcal{X}}}p_{\theta}(x)^{1+\beta}dx$. Unless this integral is available in closed form, using $\widehat{\mathcal{D}}_{\beta}$ will introduce the same challenges as working with an intractable likelihood in a standard Bayesian setting.
+Secondly, the hyperparameter $\beta$ enters the loss as the  exponent of a likelihood. Numerically, this makes the loss extremely sensitive to even very minor changes in $\beta$, which makes it very difficult to tune $\beta$ and counteracts the very robustness one hopes to achieve.
+This numerical instability is compounded by the fact that \eqref{eq:gen-bayes} depends on the exponentiation of $\widehat{\mathcal{D}}_{\beta}$---if $p_{\theta}$ is an exponential family member, then even if one ignores the integral term, $\exp\{ -\omega T \widehat{\mathcal{D}}_{\beta}(\theta) \}$ is a double exponential. 
+Thirdly, posteriors based on $\widehat{\mathcal{D}}_{\beta}$ often have to be approximated using variational methods.
+Since this has to be done for all run-lengths $r_t$ at each time step $t$  for the recursive relationship powering the algorithm, this represents a substantive computational overhead.
+
+Taken together, these issues often render posteriors based on the $\beta$-divergence computationally infeasible; especially in high-dimensional settings. 
+In principle, one could replace the $\beta$-divergence with various robust alternatives whose numerical issues are less substantive and whose hyperparameters are easier to tune---such as $\alpha$-divergences \citep{Hooker2014}, $\gamma$-divergences \citep{knoblauch2019robust}, or maximum mean discrepancies \citep{cherief2020mmd}.
+Unfortunately, none of these alternatives alleviate the problem of computationally expensive variational approximations.
+This is an issue, since ultimately, it is the conjugate forms that can be updated in terms of sufficient statistics that make BOCD computationally attractive.
+
+
+
+In the face of this, it may be tempting to postulate an inherent trade-off between robustness and computational tractability for generalised Bayes.
+But this is not so; recently, it was shown that robust posteriors based on kernel Stein discrepancies have a conjugacy property \citep[Proposition 2 of][]{matsubara2021robust}.
+These generalised posteriors however are not suitable for BOCD: Updating them from $t-1$ to $t$ observations takes $\mathcal{O}(t)$ operations---as opposed to the $\mathcal{O}(1)$ operations required for standard Bayesian posteriors. 
+Such updates would lead to an  algorithm whose computational demands per iteration increase linearly the longer it is run, leading to an `online' algorithm in name only. 
+This is why the current paper proposes a new class of generalised posteriors based on diffusion score matching \citep{barp2019minimum}: we prove that they are robust, and lead to conjugacy, with closed forms updates that take $\mathcal{O}(1)$ operations.
+
+
+
+
+
+
+\section{Methodology}
+\label{sec:methodology}
+
+We present the methodological innovations of the current paper in three steps: After an exposition of diffusion score matching, we first explain how the resulting generalised Bayesian posterior yields closed form updates.
+In a second step, we provide formal robustness guarantees for these posteriors.
+In the last step, we show how to integrate them into the BOCD framework, yielding ${\mathcal{D}}_{m}$-BOCD; and how to choose its hyperparameters.
+
+
+\subsection{Diffusion Score Matching Bayes}
+\label{sec:DSM-Bayes}
+
+
+
+\subparagraph{Notation.}
+We write the divergence operator on a vector field $f$ as $\nabla \cdot f$. 
+This condenses the formulae derived in this paper, but we provide all uncondensed versions in  \cref{appendix:background}.
+The $d$-dimensional vector (and $d\times p$ sized matrix) of partial derivatives for $f:\mathcal{X} \to \mathbb{R}$ (and $g:\mathcal{X} \to \mathbb{R}^p$) evaluated at $x \in \mathcal{X}$ is written as $\nabla f(x)$ (and $\nabla g(x)$).
+
+\vspace{-2mm}
+
+\subparagraph{Score Matching.} 
+Score matching is a discrepancy-based method for estimating parameters first proposed by \citet{Hyvarinen2006}.
+The key idea is to approximately minimise the Fisher divergence between the statistical model $\{p_{\theta}:\theta \in \Theta\}$ and the data-generating process $p_0$.
+This method takes its name from the fact that for a density $p$ on $\mathcal{X}$ and $s_{p}(x) = \nabla \log p(x)$---the so-called \textit{score function} of the density $p$---the Fisher divergence is 
+\begin{talign*}
+    {\mathcal{D}}_{I_d}(p_0||p_\theta) &= {\mathbb{E}}_{X\sim p_0 } \left[\|s_{p_{\theta}}(X) - s_{p_0}(X)\|_{2}^{2}\right].
+   
+\end{talign*}
+This divergence is therefore minimised by matching the scores of the model to that of the data-generating process $p_0$.
+This objective is convenient for two main reasons: Firstly, for the  density $p = \tilde{p}\frac{1}{Z}$ with normaliser $Z>0$, $s_p = s_{\tilde{p}}$, so that the objective is attractive when working with likelihoods whose normaliser $Z$ is unknown.
+ %
+Secondly, the objective can be rewritten so that the scores of $p_0$ do not have to be estimated to compute it.
+
+Score matching has been used widely, including for data on manifolds or other complex domains \citep{mardia2016score,liu2022estimating,Scealy2022}, energy-based models \citep{Vincent2011}, anomaly detection \citep{Zhai2016}, nonparametric density estimation \citep{Sriperumbudur2017}, score-based generative modelling \citep{Song2019}, and even for Bayesian model selection \citep{Dawid2015,Shao2019,Jewson2021} or as a scoring rule \citep{Parry2012}.
+In recent work, \citet{wu2023quickest} used score matching for change point detection.
+This work differs from ours in three major ways: they consider a frequentist setting based on the CUSUM statistic, they only consider standard score matching, and they are not concerned with robustness.
+Building on these successes, various generalised forms of score matching have been proposed over the years to address some of its shortcomings \citep[e.g.][]{Lyu2009,xu2022generalized,Yu2022, matsubara2022generalised}.
+
+\vspace{-2mm}
+
+\paragraph{Diffusion Score Matching.} The particular generalisation we consider hereafter is \emph{diffusion score matching}, which was introduced in \citet{barp2019minimum} and amounts to a weighted version of the Fisher divergence given as
+\begin{talign*}
+    {\mathcal{D}}_{m}(p_0\|p_{\theta}) = {\mathbb{E}}_{X\sim p_0 } \left[\|m^{\top}(X)(s_{p_{\theta}}(X) - s_{p_0}(X))\|_{2}^{2}\right],
+   
+\end{talign*}
+for a pointwise invertible matrix-valued function $m:\mathcal{X} \to \mathbb{R}^{d\times d}$. The function $m$ is also known as diffusion matrix due to the construction of this distance as a Stein discrepancy with a pre-conditioned diffusion Stein operator; see \citet{Anastasiou2021} for full details.
+
+
+Like ${\mathcal{D}}_{I_d}$, ${\mathcal{D}}_m$ is a statistical divergence between densities $p_{0}$ and $p_{\theta}$ on ${\mathcal{X}} = {\mathbb{R}}^d$ whenever $\int_{{\mathcal{X}}}| s_{p_{\theta}}(x) - s_{p_0}(x)|^2p_0(x)dx < \infty$. 
+Under appropriate smoothness and boundary conditions, this can be extended to the case where $\mathcal{X}$  is a connected subset of $\mathbb{R}^d$ \citep{liu2022estimating, Zhang2022}.
+More generally, ${\mathcal{D}}_m$ recovers ${\mathcal{D}}_{I_d}$ for $m(x) = I_d$ (the $d-$dimensional identity matrix), the estimator in \citet{Hyvarinen2007} for $m(x) = x$, and the generalised h-score matching method for $m(x) = \operatorname{diag}(h^{1/2}(x))$, where $h$ is defined in \citet{Yu2018, Yu2019}.
+The function $m$ can be thought of as up-weighting areas of $\mathcal{X}$ on which matching the scores of the model to that of the data-generating process is most important.
+For the purposes of the current paper, we will choose this weight to ensure that the constructed generalised posteriors are provably robust (see \cref{sec:robustness} for details).
+
+Estimating ${\mathcal{D}}_m$ directly is challenging, as it would require estimating the unknown score $s_{p_0}$.
+Fortunately, under the aforementioned smoothness and boundary conditions (\cref{appendix:boundary}) \citep{liu2022estimating}, we  can expand the above equation and use integration by parts.
+Then, up to a constant that does not depend on $\theta$, we can rewrite ${\mathcal{D}}_{m}(p_0\|p_{\theta})$ as
+\begin{IEEEeqnarray}{rCl}
+    {\mathbb{E}}_{X\sim p_0 } [\|(m^{\top}s_{p_{\theta}})(X)\|_{2}^{2} 
+    +(2\nabla\cdot(mm^{\top}\nabla s_{p_{\theta}}))(X) ]. \quad  
+    \label{eq:DSM-expansion}
+\end{IEEEeqnarray}
+Crucially, the quantity above no longer features $s_{p_0}$, and only depends on $p_0$ through an expectation.
+This leads to a natural estimator which for $x_{1:T}$ is given by 
+\begin{talign*}
+   \widehat{\mathcal{D}}_m(\theta) & =  \dfrac{1}{T}\sum_{t=1}^{T}d_m(\theta, x_t), \quad \text{ where } \nonumber \\
+    d_m(\theta, x_t) & =  \|(m^{\top}s_{p_{\theta}})(x_{t})\|_{2}^{2}  +(2\nabla\cdot(mm^{\top}\nabla s_{p_{\theta}}))(x_{t}).
+\end{talign*}
+
+
+\vspace{-2mm}
+
+\paragraph{Diffusion Score Matching Bayes.} Based on the estimator $\widehat{\mathcal{D}}_m$ for the part of $\mathcal{D}_m$ that depends on $\theta$, we can construct 
+\begin{IEEEeqnarray}{rCl}
+    \pi^{{\mathcal{D}}_m}_{\omega}(\theta| x_{1:T}) \propto \pi(\theta) \exp(-\omega T \widehat{\mathcal{D}}_{m}(\theta)).  
+    \label{eq:DSM-bayes}
+\end{IEEEeqnarray}
+Using score matching for a generalised Bayes posterior was first discussed in passing in Section 4.2 of \citet{Giummole2019}, though the context is about reference priors for objective Bayesian inference, and the method is only briefly mentioned. 
+This previous work also does not robustify the resulting posterior through the introduction of a weighting matrix $m$, or derive its conjugate posteriors.
+
+\subsection{Conjugacy for Exponential Family Models}
+\label{sec:conjugacy}
+The conjugacy of posteriors of the form \eqref{eq:DSM-bayes} make them more attractive than potential alternatives. For exponential family likelihoods, these posteriors  depend on two parameters available in closed form.
+The exponential family is given the collection of models with a probability density function 
+\begin{IEEEeqnarray}{rCl}
+    p_{\theta}(x) = \exp{(\eta(\theta)^{\top}r(x)-a(\theta)+b(x))},
+    \label{eq:exponential-family}
+\end{IEEEeqnarray}
+where $\eta:\Theta\to{\mathbb{R}}^{p}$, $r:{\mathcal{X}}\to{\mathbb{R}}^{p}$,  $a:\Theta\to{\mathbb{R}}$, and $b:{\mathcal{X}}\to{\mathbb{R}}$. When $\eta(\theta) = \theta$, we say that the exponential family model is in natural form, and one can reparametrise a model to natural form by reparameterising with the map $\eta^{-1}$.
+Exponential family class of distributions includes the Gaussian, exponential, Gamma, and Beta distributions.
+\begin{proposition}
+\label{DSM-exponential}
+If $p_{\theta}$ is given by \eqref{eq:exponential-family}, then
+\begin{IEEEeqnarray*}{rCl}
+    \pi^{{\mathcal{D}}_m}_{\omega}(\theta| x_{1:T}) \propto \pi(\theta) \exp(-\omega T [\eta(\theta)^{\top} \Lambda_{T}\eta (\theta)+\eta (\theta)^{\top}\nu_{T}]),
+\end{IEEEeqnarray*}
+for $\Lambda_{T} = \frac{1}{T}\sum_{t=1}^{T}\Lambda(x_{t})$, $\nu_{T} = \frac{2}{T}\sum_{t=1}^{T} \nu(x_{t})$, and 
+\begin{talign*}
+    \Lambda(x) &= (\nabla r^{\top}mm^{\top} \nabla r)(x),\\
+    \nu(x) &= \left( \nabla r^{\top}mm^{\top} \nabla b + \nabla\cdot(mm^{\top}\nabla r)\right)(x).
+\end{talign*}
+Taking  $\eta(\theta)=\theta$ and choosing a squared exponential prior $\pi(\theta) \propto\exp{(-\frac{1}{2} (\theta-\mu)^{\top}\Sigma^{-1}(\theta-\mu))}$, also makes $\pi^{{\mathcal{D}}_m}_{\omega}(\theta| x_{1:T})$ a (truncated) normal of the form
+\begin{talign*}
+   \pi^{{\mathcal{D}}_m}_{\omega}(\theta| x_{1:T}) &\propto\exp{\left(-\frac{1}{2} (\theta-\mu_{T})^{\top}\Sigma_{T}^{-1}(\theta-\mu_{T})\right)},
+\end{talign*}
+    for $\Sigma_{T}^{-1} = \Sigma^{-1}+2\omega T \Lambda_{T}$ and
+    $\mu_{T} = \Sigma_{T} \left(\Sigma^{-1}\mu-\omega T \nu_{T}\right)$.
+\end{proposition}
+The proof is in \cref{proof:DSM-exponential}. The natural exponential family allows us to recover a form of Gaussian conjugacy, since the diffusion score matching squared becomes a quadratic form in this case. This renders DSM-Bayes scalable; as we will elaborate upon in \cref{sec:DSM-BOCD}, $\Sigma_{T}^{-1}$ and $ \mu_{T}$ can be updated with a new observation in ${\mathcal{O}}(p^2+d^2)$ operations.
+
+
+\subsection{Global Bias-Robustness}
+\label{sec:robustness}
+\begin{figure}[t]
+    \centering
+\includegraphics{images/contamination.pdf}
+    \vspace*{-0.4cm}
+    \caption{
+    \textit{Impact of misspecification in posteriors.}
+    The robust \textcolor{blue_plot}{\textbf{${\mathcal{D}}_m$-posterior}} and non-robust \textcolor{green_plot}{\textbf{standard Bayes}} posterior predictive when the data are incorrectly modelled as Gaussian, but  follow an $\varepsilon$-contamination model ${\mathbb{P}} = 0.95\mathcal{N}(0,1)+0.05\delta_{10}$.
+    }
+    \label{fig:contamination}
+    \vspace*{-0.4cm}
+\end{figure}
+
+
+Building a BOCD algorithm based on $\pi^{{\mathcal{D}}_m}_{\omega}(\theta| x_{1:T})$ is attractive not only computationally, but also due to its robustness.
+We prove this robustness formally by using the classical framework of $\varepsilon$-contamination models \citep[see, e.g.][]{huber2011robust}.
+Given a distribution ${\mathbb{P}}$, we consider its $\varepsilon$-contaminated counterpart ${\mathbb{P}}_{\varepsilon,y} = (1-\varepsilon){\mathbb{P}}+\varepsilon\delta_{y}$, where  $\delta_y$ is the dirac-measure at some $y\in{\mathcal{X}}$, and $\varepsilon\in[0,1]$. 
+The classical perspective on robustness  proceeds by defining a point estimator $E:\mathcal{P}(\mathcal{X}) \to \Theta$ that maps from $\mathcal{P}(\mathcal{X})$, the space of distributions on $\mathcal{X}$, to $\Theta$. 
+One then investigates its robustness via $\lim_{\varepsilon\to 0}\frac{1}{\varepsilon}\|E({\mathbb{P}})-E({\mathbb{P}}_{\varepsilon, y})\|_2$, which under mild conditions is equivalent to the derivative  $\frac{\partial}{\partial\varepsilon}\|E({\mathbb{P}}_{\varepsilon, y})\|_2\big|_{\varepsilon=0}$.
+This limit is the so-called \textit{influence function}. It quantifies the impact of an infinitesimal contamination at $y$ on the estimator, and is a classical tool to measure outlier robustness.
+
+The Bayesian case is slightly more complicated and depicted in \cref{fig:contamination}: we are not concerned by estimators on $\Theta$, but on $\mathcal{P}(\Theta)$.
+The estimates under study are thus  infinite-dimensional objects that vary over $\Theta$.
+To get a handle on this, we first define an influence function \textit{pointwise} for each $\theta \in \Theta$.
+To this end, note that $\widehat{\mathcal{D}}_{m}(\theta) = \mathbb{E}_{X \sim {\mathbb{P}}_T}[d_m(\theta, X)]$. 
+We can now define the density-valued estimator $\pi^{{\mathcal{D}}_m}_{\omega}(\theta|{\mathbb{P}}) \propto \pi(\theta) \exp\{ - \omega T \mathbb{E}_{X \sim {\mathbb{P}}}[d_m(\theta, X)] \}$, noting 
+$\pi^{{\mathcal{D}}_m}_{\omega}(\theta|{\mathbb{P}}_T) = \pi^{{\mathcal{D}}_m}_{\omega}(\theta|x_{1:T})$ for ${\mathbb{P}}_T = \frac{1}{T}\sum_{t=1}^T\delta_{x_t}$.
+Its pointwise posterior influence function (PIF) is 
+\begin{IEEEeqnarray}{rCl}
+    \text{PIF}(y,\theta,{\mathbb{P}}) = \dfrac{d}{d\varepsilon}\pi^{{\mathcal{D}}_m}_{\omega}(\theta|{\mathbb{P}}_{\varepsilon, y})\big|_{\varepsilon=0}.
+    \nonumber
+\end{IEEEeqnarray}
+Since this is a definition of sensitivity that is local to both $\theta$ and $y$, making a global statement for all of $\pi^{{\mathcal{D}}_m}_{\omega}(\theta|x_{1:T})$ requires that we aggregate a notion of sensitivity over both arguments.
+The easiest way to do this is to investigate $\sup_{\theta \in \Theta, y \in \mathcal{X}}\text{PIF}(y,\theta,{\mathbb{P}}_{T})$.
+If this double supremum is bounded, we call a posterior \textit{globally bias-robust}, which means that the impact of contamination on the posterior density is uniformly bounded---both over the parameter space, and the location of said contamination in the data space.
+This way of studying the robustness of generalised posteriors was pioneered in \citet{Ghosh2016}, and extended by \citet{matsubara2021robust}.
+We build on these advances, and provide a simple condition on $m$ for global bias-robustness of $\pi^{{\mathcal{D}}_m}_{\omega}(\theta|x_{1:T})$ in some exponential family models.
+\begin{proposition}
+\label{Robust m}
+If $p_{\theta}$ is as in \eqref{eq:exponential-family} so that $ \eta(\theta) = \theta $ and $\nabla b = 0$, and if the prior is a squared exponential as in \Cref{DSM-exponential}, then $\pi^{{\mathcal{D}}_m}_{\omega}(\theta|x_{1:T})$ is globally bias-robust if  $m:{\mathcal{X}}\to{\mathbb{R}}^{d\times d}$ is chosen so  that $\theta^{\star}\neq 0_p$  and
+\begin{talign*}
+ m_{ij}(x) = \left\{
+ \begin{aligned}
+     &\dfrac{1}{\sqrt{1+(\nabla r(x) \theta^{\star})_{i}^{2}}} && \text{if }i=j, \\
+     &0 && \text{if }i\neq j.
+ \end{aligned}
+\right.
+\end{talign*}
+\end{proposition}
+While $m$ could in principle depend on $\theta$, this would break the conjugacy presented in \Cref{DSM-exponential}.
+The above choice of $m$ does \textit{not} depend on $\theta$, and therefore maintains the computational advantages of $\pi^{{\mathcal{D}}_m}_{\omega}(\theta|x_{1:T})$.
+The result's conditions are also mild:
+we can always ensure that $\eta(\theta) = \theta $ by re-parameterising.
+Similarly, most distributions of interest satisfy $\nabla b = 0$. Examples include Gaussians, exponentials, (inverse) Gamma, and Beta distributions.
+Note also that $m$ is only applicable to models with support $\mathcal{X}={\mathbb{R}}^{d}$, as the expansion in \eqref{eq:DSM-expansion} is otherwise not valid without additional boundary conditions.
+However, we prove that the proposed weight matrix $m$ 
+ also leads to a well-defined discrepancy measure for various distributions defined on subsets of $\mathcal{X}$, including the Gamma and the exponential distribution (see \cref{appendix:boundary}).
+
+
+\subsection{${\mathcal{D}}_m$-BOCD}
+\label{sec:DSM-BOCD}
+
+Using our robust posterior within BOCD is straightforward, as its only appearance is in the  posterior predictive via
+\begin{talign*}
+    p\big(x_{t}|x^{(r)}_{t-1}\big) = \int_{\Theta}p_{\theta}(x_{t})\pi^{{\mathcal{D}}_m}_{\omega}\big(\theta|x^{(r)}_{t-1}\big)d\theta.
+    \nonumber
+\end{talign*}
+If $p_{\theta}$ is a natural exponential family with a squared exponential prior, then $\pi^{{\mathcal{D}}_m}_{\omega}(\theta| x^{(r)}_{t-1}))$ is a normal distribution parameterised by inverse covariance matrix $\Sigma_{t-1, r}^{-1}$ and mean $\mu_{t-1, r}$ by virtue of \ref{DSM-exponential}.
+This makes the predictive  easy to compute---either in closed form or by sampling from $\pi^{{\mathcal{D}}_m}_{\omega}$---which is a significant advantage over the $\beta$-BOCD framework. For the latter, the posterior will generally be intractable so that the algorithm relies on variational approximations.
+Importantly, there is no way to both efficiently and exactly update variational approximations based on $x_{1:t}$ once observation $x_{t+1}$ arrives: one either uses cheap updates that lead to subpar variational approximations of the posterior, or one re-computes the approximation from scratch  at the expense of a substantive computational overhead.
+
+In contrast, our approach allows for a cheap and exact update: if we store
+$\Sigma_{t-1, r}^{-1}$ and $\mu_{t-1, r}$, we can perform the update $\pi^{{\mathcal{D}}_m}_{\omega}(\theta|x^{(r)}_{t-1}) \mapsto \pi^{{\mathcal{D}}_m}_{\omega}(\theta|x^{(r+1)}_{t})$ that adds $x_t$ into the parameter posterior of the segment $x^{(r)}_{t-1}$ via
+\begin{talign*}
+    \Sigma_{t, r+1}^{-1} &= \Sigma_{t-1, r}^{-1}+2\omega \Lambda(x_{t}),
+    \nonumber \\
+    \mu_{t, r+1} &=   \Sigma_{t, r+1} \left(\Sigma_{t-1, r}^{-1}\mu_{t-1, r} -2\omega\nu(x_{t})\right).
+\end{talign*}
+If we have access to the un-inverted matrix $\Sigma_{t, r+1}$, all of these operations are basic matrix and vector additions or multiplications that take ${\mathcal{O}}(p^2+d^2)$ operations to execute.
+While naively computing $\Sigma_{t, r+1}$ from $\Sigma_{t, r+1}^{-1}$ would take ${\mathcal{O}}(p^3)$ operations, we can apply the Sherman-Morrison formula to the update of $\Sigma_{t, r+1}^{-1}$ to reduce this to ${\mathcal{O}}(p^2)$, maintaining the overall complexity of ${\mathcal{O}}(p^2+d^2)$. 
+This is also the complexity of standard BOCD with the Gaussian likelihood and conjugate prior \citep{adams2007bayesian}.
+In CP methods for high-frequency data, both the number of parameters $p$ and the data dimension $d$ are typically small, so that an update of ${\mathcal{O}}(p^2+d^2)$ is attractive.
+
+\vspace{-2mm}
+
+\paragraph{Run-length pruning.}
+A naive implementation of ${\mathcal{D}}_m$-BOCD would keep a posterior over all possible run-lengths $r_t = \{0,1\dots, t-1\}$, but this would lead to an algorithm with overall complexity ${\mathcal{O}}(\sum_{t=1}^T t(d^2+p^2) ) = {\mathcal{O}}(T^2(d^2+p^2))$ for a time series of length $T$.
+To prevent this, authors have proposed to `prune' the run-length posterior to a constant length \citep{adams2007bayesian, fearnhead2007line}.
+Here, we follow the most popular strategy \citep[e.g.][]{adams2007bayesian, saatcci2010gaussian, knoblauch2018spatio} by keeping only the $k$ most probable run-lengths. 
+For all experiments, we take $k=50$.
+
+\begin{figure*}[t]
+    \centering    \includegraphics[trim= {0cm 0.4cm 0cm 0cm}, clip]{images/Well_no_RL.pdf}
+    \vspace*{-0.4cm}
+    \caption{ \textit{Well-log data.} MAP segmentation  indicated by {\textcolor{blue_plot}{\textbf{blue}}} dashed lines for ${\mathcal{D}}_m$-BOCD, ${\color{orange_plot}\blacktriangledown}$ for $\beta$-BOCD, and  ${\color{green_plot}\blacktriangle}$ for standard BOCD.
+    %
+    Standard BOCD mistakenly labels outliers as CPs, while both ${\mathcal{D}}_m$-BOCD and $\beta$-BOCD are robust and identify lasting changes.
+    }
+    \label{fig:well}
+    \vspace*{-0.4cm}
+\end{figure*}
+
+\vspace{-2mm}
+
+\paragraph{Choice of $m$} Throughout, we choose $m$ as per \Cref{Robust m}, as it ensures robustness---even for certain distributions with boundaries (see \cref{appendix:boundary}).
+Regarding $\theta^{\star}$, we found that ${\mathcal{D}}_m$-BOCD was not very sensitive to this choice; likely because tuning $\omega$ offsets any sensitivity to it. 
+In all experiments, we thus picked $\theta^{\star}$ as the maximum likelihood estimate computed on the full data set. We note that one known issue with robust CP detection method is that they can experience a latency when it comes to detecting actual CPs. Interestingly, this is not something we observe in our experiments with this choice of $m$ and $\theta^*$.
+
+\vspace{-2mm}
+
+\paragraph{Choice of $\omega$}
+How to choose $\omega$ is an important question for generalised Bayesian inference, and has more than one answer \citep{Lyddon2019,Syring2019,matsubara2022generalised,Bochkina2022,Wu2023}. 
+Previous methods are computationally expensive, asymptotically motivated, and focus on tuning the learning rate to provide asymptotically correct frequentist coverage.
+As the computational overhead of these methods is substantial and their asymptotic arguments generally do not apply to the CP setting, we pursue a different  strategy: 
+we match the uncertainty of the generalised posterior to that of its standard counterpart on the first $t^{\star}$ observations of the data stream.
+To operationalise this, we choose
+\begin{talign*}
+    \omega^{\star} = \argmin_{\omega>0} \operatorname{KL} \left(
+        \pi^{{\mathcal{D}}_m}_{\omega}
+        (\theta|x_{1:t^{\star}}) 
+        \| \pi^{\operatorname{B}}
+        (\theta|x_{1:t^{\star}})
+    \right). 
+   
+\end{talign*}
+Computing $\omega^{\star}$ is implemented using automatic differentiation via \texttt{jax} \citep{jax2018github}. This is possible  even if the standard Bayes posterior $\pi^{\operatorname{B}}$  is intractable, since $\pi^{{\mathcal{D}}_m}_{\omega}$ has a conjugacy property (see \Cref{DSM-exponential}).
+Since the standard Bayes posterior is reliable in the absence of outliers and heterogeneity, this yields reasonable uncertainty quantification if the degree of misspecification is mild at the beginning of the data stream. 
+Our experiments confirm this: the uncertainty is well-calibrated, both predictively and with regards to the run-length posterior.
+
+ \begin{figure}[t!]
+     \centering
+     \includegraphics[trim= {0cm 0.4cm 0cm 0cm}, clip]{images/Cryptocrash_no_RL.pdf}
+     \vspace*{-0.4cm}
+      \caption{
+      \textit{Crypto-crash.}
+      MAP segmentation  indicated by {\textcolor{blue_plot}{\textbf{blue}}} dashed lines for ${\mathcal{D}}_m$-BOCD, and  by ${\color{green_plot}\blacktriangle}$ for standard BOCD.
+      %
+      There are no outliers, so both methods  identify the correct CP.
+      }
+     \label{fig:tfx}
+     \vspace*{-0.4cm}
+ \end{figure}
+
+
+
+
+
+
+\section{Experiments}
+\label{sec:experiments}
+
+
+We investigate ${\mathcal{D}}_m$-BOCD empirically in several numerical experiments. 
+In doing so, we highlight its computational and inferential advantages over standard BOCD and $\beta$-BOCD.
+In all experiments, we choose conjugate priors as in \cref{DSM-exponential}, and $m$ and $\omega$ as in \cref{sec:DSM-BOCD}. All code and data is publicly available at \url{https://github.com/maltamiranomontero/DSM-bocd}.
+
+\vspace{-3mm}
+
+\paragraph{Computational complexity.}
+
+We compare the complexity of the three BOCD methods in different settings and show that ${\mathcal{D}}_m$-BOCD is considerably faster than $\beta$-BOCD, even when sampling is needed. 
+Moreover, we show that ${\mathcal{D}}_m$ is as fast as standard BOCD when $d=1$ and the predictive posterior is available in closed form. See \cref{app:additional-computation-experiemnt} for details. 
+
+\vspace{-3mm}
+
+\paragraph{Twitter flash crash \& Cryptocrash.}
+
+A robust CP detection algorithm must not to be fooled by outliers while detecting CP correctly. 
+We show that ${\mathcal{D}}_m$-BOCD has this capability on two real-world examples: the first is the Dow Jones Industrial Average (DJIA) index every minute on 17/04/2013, the day of the \textit{Twitter flash crash}. The data is publicly available on FirstRate Data.\footnote{https://firstratedata.com/free-intraday-data}
+That day, the Associated Press' Twitter account was hacked and falsely tweeted that explosions at the White House had injured then-president Barack Obama.
+In response, the DJIA dropped by 150 points in a matter of seconds before bouncing back. 
+As \cref{fig:flash} shows, this is a clear outlier. Modelling the time series with a Gaussian, the plot shows that ${\mathcal{D}}_m$-BOCD successfully ignores this blip, while standard BOCD incorrectly labels it as a CP. 
+The second example tracks the average daily value of FTT and Bitcoin between 10/2022 and 12/2022, data which is publicly available on Yahoo finance.\footnote{https://finance.yahoo.com/} FTT was the token issued by FTX, one of the biggest crypto-exchanges before it failed due to a liquidity crisis on November 11th 2022. 
+The ensuing collapse of FTX marked a crash in the value of various crypto-currencies, including Bitcoin.
+Using a two-dimensional Gaussian distribution for both ${\mathcal{D}}_m$-BOCD and standard BOCD, \cref{fig:tfx} shows  that both methods correctly detect the CP. 
+\cref{fig:tfx_full} in \cref{appendix:expDetails} also displays the run-length posteriors, and shows that robustness does not lead to increased CP detection latency.
+
+\begin{figure*}[ht]
+    \centering
+    \includegraphics[trim= {0cm 0.35cm 0cm 0cm}, clip, width=\textwidth]{images/Bond.png}
+    \vspace*{-0.8cm}
+    \caption{
+    \textit{UK's 10 year government bond yield 2018-2023.}
+    %
+    The MAP-segmentation resulting from ${\mathcal{D}}_m$-BOCD is indicated in dashed {\textcolor{blue_plot}{\textbf{blue}}} lines.
+    %
+    The bottom panel displays the corresponding run-length posterior, with the most likely run-length marked in {\textcolor{blue_plot}{\textbf{blue}}}.
+    %
+    A series of political events of national importance closely track the segmentation, and are marked with solid
+    \textcolor{gray}{\textbf{gray}} lines:
+    %
+    1. Theresa May announces her resignation from her position as prime minister;
+    2. Boris Johnson sworn in as prime minister;
+    3. the first Covid case recorded in EU;
+    4. the first Covid wave in the UK is officially declared;
+    5. the third Covid wave in the UK is officially declared;
+    6. the legal limits on social contact removed in UK;
+    7. Covid 'Plan B' measures are implemented in UK in response to the spread of the Omicron variant;
+    8. Liz Truss is sworn in as prime minister.}
+    \vspace*{-0.4cm}
+    \label{fig:bond}
+\end{figure*}
+
+\vspace{-3mm}
+
+\paragraph{Well-log.}
+The well-log data was introduced in \citet{ruanaidh1996numerical}, and consists in 4,050 nuclear magnetic resonance measurements recorded while drilling a well. CPs in the sequence correspond to changes in the sediment layers the drill is penetrating.
+On top of these clear changes, the data contains outliers and contaminants corresponding to more short-term events in geological history---such as flooding, earthquakes, or volcanic activity.
+When this data set is studied, its outliers have traditionally
+been removed before CP detection algorithms are run \citep[see e.g.][]{adams2007bayesian, BSCPD2, LassoCP}.
+We leave them in, and \cref{fig:well} shows that this is unproblematic for ${\mathcal{D}}_m$-BOCD, but does lead to falsely labelled CPs with BOCD.
+We also compare the algorithm with  $\beta$-BOCD   \citep{knoblauch2018doubly}, and find that the detected changes are almost identical.
+On a machine with processor Intel i7-7500U 2.7 GHz, and 12GB of RAM, ${\mathcal{D}}_m$-BOCD took about 10 times less than $\beta$-BOCD.
+
+\vspace{-3mm}
+
+\paragraph{Multivariate synthetic data.}
+
+In certain settings, ${\mathcal{D}}_m$-posteriors are conjugate when standard posteriors are not.
+An example is a multivariate time series whose dimensions follow different distributions belonging to the exponential family.
+To this end, we generate 1000 samples from a time series with CPs at $t=250, 750$.
+Conditional on the CPs, the data is generated independently from an exponential in the first dimension and Gaussian distribution in the second dimension.
+${\mathcal{D}}_m$-BOCD is immediately applicable, and \cref{fig:synthetic} shows that the algorithm functions reliably.
+We do not compare to BOCD in this setting: for this model, standard Bayesian posteriors would require expensive sampling algorithms or variational approximations to be employed, rendering the algorithm impractical.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics{images/Synthetic.png}
+    \vspace{-0.4cm}
+    \caption{
+    %
+    \textit{Multivariate synthetic example.}
+    A 2-dimensional CP problem.
+    For the chosen model, ${\mathcal{D}}_m$-BOCD is computationally efficient, but standard BOCD is computationally infeasible.
+    The MAP segmentation is indicated by dashed {\textcolor{blue_plot}{\textbf{blue}}} lines, and the bottom panel shows the run-length distribution, with the most likely value in {\textcolor{blue_plot}{\textbf{blue}}}.}
+    \vspace{-0.4cm} \label{fig:synthetic}
+\end{figure}
+
+\vspace{-3mm}
+
+\paragraph{UK 10 year government bond yield.}
+Finally, we run the ${\mathcal{D}}_m$-BOCD on the daily yield of 10 year UK government bonds from 2018 to 2022 (see \cref{fig:bond}). The data is publicly available via the Bank of England database.\footnote{{https://www.bankofengland.co.uk/boeapps/database/}}
+Since the 10-year yield has been positive throughout history, we model it using the gamma distribution. 
+As shown in \cref{fig:bond}, we detect changes in the yield curve that correspond to important political events in the UK.
+This distribution leads to a  ${\mathcal{D}}_m$-posterior that is a  Gaussian truncated at zero. 
+For standard Bayes, a conjugate prior exists, but it leads to a posterior with intractable normalisation constant. 
+Like the multivariate synthetic data example, this constitutes another instance where ${\mathcal{D}}_m$-posteriors have better computational properties than standard Bayes.
+
+
+\section{Conclusion}
+
+We proposed ${\mathcal{D}}_m$-BOCD, a new version of BOCD that is both \emph{robust to outliers and scalable}. 
+The algorithm relies on a new generalised Bayesian inference scheme constructed with  diffusion score-matching.
+These posteriors have closed form updates for models that are members of the exponential family, and provide robustness by appropriately tuning the diffusion matrix $m$.
+For $T$ observations, $d$-dimensional data, and $p$ model parameters, the overall run time of the method is ${\mathcal{O}}(T(p^2+d^2))$, and we demonstrate that it is just as fast as standard BOCD.
+By showcasing the various computational and inferential benefits of ${\mathcal{D}}_m$-BOCD on a range of examples, we demonstrate that it is a powerful and needed addition to the literature. 
+In the future, we will also investigate the applicability of ${\mathcal{D}}_m$-BOCD to regression models.
+This is not trivial: the regression setting changes both the definition of valid score matching losses, as well as how to show their robustness  \citep{xu2022generalized}.
+
+
+${\mathcal{D}}_m$-posteriors also are of independent interest for computational challenges in Bayesian inference: 
+like the generalised posterior in \citet{matsubara2021robust} and \citet{matsubara2022generalised}, they can be computed even without access to the normalising constant of the likelihood.
+This suggests that ${\mathcal{D}}_m$-posteriors should be studied more broadly as a potential competitor to other Bayesian methods for intractable likelihood problems.
+
+
+
+\subsection*{Acknowledgements}
+JK was funded by  EPSRC grant EP/W005859/1. FXB was supported by the Lloyd’s Register Foundation Programme on Data-Centric Engineering and The Alan Turing Institute under  EPSRC grant EP/N510129/1.
+
+
+

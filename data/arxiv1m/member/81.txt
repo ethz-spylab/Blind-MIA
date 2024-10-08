@@ -1,0 +1,657 @@
+\section{Introduction}
+Anomaly detection (AD) has numerous real-world applications, especially for tabular data, including detection of fraudulent transactions, intrusions for cybersecurity, and adverse outcomes in healthcare.
+We propose a novel method that targets the following challenges in tabular AD:
+\begin{itemize}[noitemsep,nolistsep,leftmargin=*]
+\item \textbf{Noisy and irrelevant features}: 
+Tabular data (such as Electronic Health Records) often contain noisy or irrelevant features caused by measurement noise, outliers and inconsistent units.
+Yet, even a change in a small subset of features may be considered anomalous.
+
+\item \textbf{Heterogeneous features}: 
+Unlike image or text data, tabular data features can have values with significantly different types (numerical, boolean, categorical, and ordinal), ranges and distributions.
+
+\item \textbf{Some labeled data}: 
+In many applications, often a small set of labeled data is available.
+AD accuracy can be substantially boosted by using labeled information to identify some representative anomalies and ignore irrelevant ones. 
+\item \textbf{Interpretability}: 
+Without interpretable outputs, humans cannot understand the rationale behind anomalies, take actions to improve the AD model performance and build trust.
+Verification of model accuracy is particularly challenging for tabular data as they are not easy to visualize for humans.
+An interpretable AD model should identify important features used to classify anomalies to enable verification and build trust.
+\end{itemize}
+
+Most AD methods for tabular data fail to address the above challenges -- their performance often deteriorates with noisy features (see Sec.~\ref{sec:experiments}), they cannot incorporate labeled data, and they cannot provide interpretability (see Sec.~\ref{sec:related_work}).
+
+
+In this paper, we aim to address these challenges by proposing a \textbf{D}ata-efficient \textbf{I}nterpretable \textbf{AD} approach, which we call \textbf{DIAD}. Our model architecture is inspired by Generalized Additive Models (GAMs) that have been shown to obtain high accuracy and interpretability for tabular data~\citep{caruana2015intelligible,chang2021interpretable,liu2021controlburn} and are widely used in many applications such as finding outlier patterns and auditing fairness~\citep{tan2018distill}. 
+We propose to employ intuitive notions of Partial Identification (PID) as AD objective and propose to learn them with differentiable GAMs. 
+PID scales to high-dimensional features and handles heterogeneous features, while the differentiable GAM architecture allows fine-tuning with labeled data and retain interpretability.
+Furthermore, by fine-tuning using a differentiable AUC loss with a small amount of labeled samples, DIAD outperforms other semi-supervised learning AD methods.
+For example, DIAD improves from 86.2\% to 89.4\% AUC with 5 labeled anomalies by unsupervised AD.
+DIAD provides rationale on why an example is classified as anomalous using the GAM graphs and also gives insights on the impact of labeled data on decision boundary, which can be used to build global understanding about the task and to help improve the AD performance.
+
+
+
+
+
+
+
+
+
+
+
+
+\section{Related Work}
+\label{sec:related_work}
+AD methods only with normal data are widely studied~\citep{kddtutorial}.
+The methods closest to the proposed are the tree-based AD. 
+Isolation Forest (IF)~\citep{liu2008isolation} grows decision trees randomly and the shallower the tree depth for the data is, the more anomalous the data is. 
+However, this approach shows performance degradation when feature dimensionality increases.
+Robust Random Cut Forest (RRCF, \citet{guha2016robust}) further improves IF by choosing features to split based on the size of its range, but it is more sensitive to scale.
+PIDForest~\citep{gopalan2019pidforest} zooms on the features which have large variances which makes it robust to noisy or irrelevant features.
+
+Another family of AD methods are based on generative approaches that learn to reconstruct input features, and use the error of reconstructions or density to identify anomalies.
+\citet{bergmann2018improving} employs auto-encoders for image data. 
+DAGMM~\citep{zong2018deep} first learns an auto-encoder and uses a Gaussian Mixture Model to estimate density in the low-dimensional latent space.
+Since these generative approaches are based on reconstructing input features, they may not easily fit in high-dimensional tabular data with noisy and heterogeneous features and small amount of labeled examples.
+
+
+\setlength\tabcolsep{1.5pt}
+\begin{table}[tbp]
+\centering
+\caption{Comparison of related works.}
+\label{table:related_work}
+\resizebox{\columnwidth}{!}{
+\begin{tabular}{c|ccccc}
+\toprule
+& \small{\textbf{\makecell{Utilizing\\unlabeled\\data}}} & \small{\textbf{\makecell{Handling\\noisy\\features}}} & \small{\textbf{\makecell{Handling\\heterogen-\\ous features}}} & \small{\textbf{\makecell{Utilizing\\labeled\\data}}} & \small{\textbf{\makecell{Interpret-\\ability}}} \\
+\midrule
+PIDForest                        & \checkmark                                 & \checkmark                                              & \checkmark                                        & \ding{55}                                            & \ding{55}                        \\
+DAGMM & \checkmark                                 & \ding{55}                                               & \ding{55}                                         & \ding{55}                                            & \checkmark                       \\
+GOAD                             & \checkmark                                 & \checkmark                                              & \checkmark                                        & \ding{55}                                            & \ding{55}                        \\
+Deep SAD                         & \checkmark                                 & \checkmark                                              & \checkmark                                        & \checkmark                                           & \ding{55}                        \\
+ICL                              & \checkmark                                 & \ding{55}                                               & \checkmark                                        & \ding{55}                                            & \checkmark                       \\
+DevNet                           & \ding{55}                                  & \checkmark                                              & \checkmark                                        & \checkmark                                           & \ding{55}                        \\ \midrule
+\makecell{DIAD\\(Ours)}                   & \checkmark                                 & \checkmark                                              & \checkmark                                        & \checkmark                                           & \checkmark \\
+\bottomrule
+\end{tabular}
+}
+\end{table}
+
+Recently, methods with pseudo-tasks have been proposed for AD.
+One major line of work is to predict geometric transformations~\citep{golan2018deep, bergman2020classification}, such as rotation or random transformations, and use the prediction errors to detect anomalies.
+\citet{qiu2021neural} instead learns a set of diverse transformations and show improvements for tabular and text data.
+CutPaste~\citep{li2021cutpaste} learns to classify the images with patches replaced by another image, combined with density estimation in the latent space for image data.
+
+Several recent works focus on contrastive learning.
+\citet{tack2020csi} learns to distinguish synthetic samples from the original distribution and achieves success on image data.
+\citet{sohn2021learning} first learns a distribution-augmented contrastive representation and then uses a one-class classifier to identify anomalies.
+Internal Contrastive Learning (ICL, \citet{shenkar2022anomaly}) tries to distinguish between in-window and out-of-window features by a sliding window over features and utilizes the error to identify anomalies, achieving state-of-the-art performance for tabular data.
+
+
+A few AD works focus on explainability.
+\citet{vinh2016discovering,liu2020lp} explain anomalies from other off-the-shelf detectors; thus, their explanations may not reflect the rationales of the detectors.
+\citet{liznerski2021explainable} proposes to identify anomalies with a one-class classifier; it uses a CNN without fully connected layers so each output unit corresponds to a receptive field in the input image. 
+This allows visualizations of which part of the input images leads to high error in the output with accurate localization; however, this approach is limited to image data.
+
+Several works have been proposed for semi-supervised AD.
+Deep SAD~\citep{ruff2019deep} extends the deep one-class classification method DSVDD~\citep{ruff2018deep} into the semi-supervised setting.
+However, their approach is non-interpretable and performs even worse than the unsupervised One-Class SVM for tabular data, while the DIAD outperforms it.
+DevNet~\citep{pang2019deep} formulates the AD problem into a regression problem and achieves better sample complexity under limited labeled data.
+\citet{yoon2020vime} trains an embedding similar to BERT~\citep{devlin2018bert} combined with consistency loss~\citep{sohn2020fixmatch} and achieves the state-of-the-art semi-supervised performance in tabular data.
+See Table~\ref{table:related_work} for a comparison.
+
+
+
+
+
+
+
+
+\section{Methods}
+
+
+\paragraph{Model Architecture}
+
+To render AD interpretable and allow back-propagation to learn from labeled data, our work is inspired from the NodeGAM~\citep{chang2021node}, an interpretable and differentiable tree-based GAM model.
+
+\paragraph{What are GAM and GA$^2$M?}
+
+GAMs and GA$^2$Ms are considered as white-box models since they allow humans to visualize their functional forms in 1-D or 2-D plots by not allowing any 3-way or more feature interactions.
+Specifically, given an input $x\in\mathbb{R}^{D}$, a label $y$, a link function $g$ (e.g. $g$ is $\log ({p}/{1 - p})$ in binary classification), main effects $f_j$ for each feature $j$, and 2-way feature interactions $f_{jj'}$, GAM and GA$^2$M are expressed as:
+\begin{align*}
+    &\text{\textbf{GAM}:\ \ \ \ }
+    g(y) = f_0 + \sum_{j=1}^D f_j(x_j), \ \ \ \\
+    &\text{\textbf{GA$^2$M}:\ \ \ \ }
+    g(y) = f_0 + \sum_{j=1}^D f_j(x_j) + \sum_{j=1}^D\sum_{j' > j} f_{jj'}(x_j, x_{j'}).
+\end{align*}
+Unlike commonly-used deep learning architectures that use all the feature interactions, GAMs and GA$^2$M are restricted to lower-order interaction (1 or 2-way), so the impact of each $f_j$ or interaction $f_{jj'}(x_j, x_{j'})$ can be visualized independently as a graph.
+That means, for $f_j$, we may plot $x_j$ on the x-axis and $f_j(x_j)$ on the y-axis. To plot $f_{jj'}$, we show a scatter plot with $x_j$ on the x-axis and $x_j'$ on the y-axis, where color indicates the value $f_{jj'}$.
+Note that a linear model is a special case of GAM.
+Humans can easily simulate the decision making of a GAM by reading $f_j$ and $f_{jj'}$ from the graph for each feature $j$ and $j'$ and taking the sum.
+
+Here we review NodeGA$^2$M relevant to our changes.
+NodeGA$^2$M is based on GA$^2$M but uses the neural trees to learn feature functions $f_j$ and $f_{jj'}$.
+Specifically, NodeGA$^2$M consists of $L$ layers where each layer has $m$ differentiable soft oblivious decision trees (ODT) of equal depth $C$ where each tree only interacts with at most 2 features.
+Next, we describe ODTs.
+
+
+
+
+\begin{algorithm}[tb]
+   \caption{A soft decision tree}
+   \label{alg:pid_tree}
+\begin{algorithmic}
+    \STATE {\bfseries Input:} Mini-batch $\bm{X} \in \mathbb{R}^{B \times D}$, Temperature $T$ ($T$ $\xrightarrow{}$ 0)
+    \STATE {\bfseries Symbols:} Tree Depth $C$, Entmoid $\sigma$
+    \STATE {\bfseries Trainable Parameters}: Feature selection logits $\bm{F}^1, \bm{F}^2 \in \mathbb{R}^{D}$, split Thresholds $\bm{b} \in \mathbb{R}^{C}$, split slope $\bm{S} \in \mathbb{R}^{C}$, 
+   
+    \vspace{-5pt}
+    \\\hrulefill
+    \STATE $\bm{F} = [\bm{F}^1, \bm{F}^2, \bm{F}^1,...]^T \in \mathbb{R}^{D \times C}$ \COMMENT{Alternating $\bm{F}^1$, $\bm{F}^2$}
+    
+    \STATE $G = \bm{X} \cdot \text{EntMax}(\bm{F} / T, \text{dim=0}) \in \mathbb{R}^{B \times C}$  
+   
+    \FOR{$c=1$ {\bfseries to} $C$}
+        \STATE $H^c = \sigma(\frac{(\bm{G^c} - b^c)}{S^c \cdot T})$ \COMMENT{Soft binary split}
+    \ENDFOR
+    \STATE
+    $
+    \bm{e} = \left( {\begin{bmatrix}
+        H^1 \\
+        (1 - H^1)
+    \end{bmatrix} }
+    \otimes \dots \otimes
+    {\begin{bmatrix}
+        (H^C) \\
+        (1 - H^C)
+    \end{bmatrix} }
+    \right) \in \mathbb{R}^{B \times 2^C}
+    $
+   
+   
+    \STATE
+    $E = \text{sum}(\bm{e}, \text{dim=0}) \in \mathbb{R}^{2^C}$ \COMMENT{Sum across batch}
+    \STATE {\bfseries Return:} $E$ count
+   
+\end{algorithmic}
+\end{algorithm}
+
+
+
+\begin{algorithm}[tbp]
+   \caption{DIAD Update}
+   \label{alg:pid_update}
+\begin{algorithmic}
+    \STATE {\bfseries Input:} Mini-batch $\bm{X}$, Tree model $\mathcal{M}$, Smoothing $\delta$, Leaf weights $w_{tl}$ for each tree $t$ and leaf $l$ in $\mathcal{M}$
+   
+    \vspace{-5pt}
+    \\\hrulefill
+    
+    \STATE $\bm{X}$ = MinMaxTransform($X$, min=$-1$, max=$1$) 
+    \STATE $\bm{X_U} \sim U[-1, 1]$ \COMMENT{Data uniformly drawn from [-1, 1]}
+    \STATE $E^{tl} = \mathcal{M}(X)$ \COMMENT{counts -- See Alg.~\ref{alg:pid_tree}}
+    \STATE $E_U^{tl} = \mathcal{M}(X_U)$
+    \STATE $E^{tl} = E^{tl} + \delta$, $E_U^{tl} = E_U^{tl} + \delta$ \COMMENT{Smooth the counts}
+    
+    \STATE $V_{tl} = \frac{E^{tl}}{\sum_{n'} E^{tl'}}$ \COMMENT{Volume ratio}
+    \STATE $D_{tl} = \frac{E_U^{tl}}{\sum_{n'} E_U^{tl'}}$ \COMMENT{Data ratio}
+    \STATE $M_{tl} = \frac{V_{tl}^2}{P_{tl}}$ \COMMENT{Second moments}
+   
+    \STATE $m_t \sim \text{Bernoulli}(p)$ \COMMENT{Sample masks per tree $t$}
+    \STATE $M_{tl} = \frac{m_t}{p} * M_{tl} + (1 - m_t) * M_{tl}$ \COMMENT{Per-tree dropout}
+    \STATE $L_M = -\sum_{t,l} M_{tl}$ \COMMENT{Maximize the second moments}
+    \STATE $\hat{s}_{tl} = {V_{tl}} / {P_{tl}}$ \COMMENT{Sparsity}
+    \STATE $s_{tl} =  (\frac{2\hat{s}_{tl}}{(\max \hat{s}_{tl} - \min \hat{s}_{tl})} - 1)$ \COMMENT{Normalize to [-1, 1] -- Eq.~\ref{eq:norm_sp}}
+    \STATE $w_{tl} = (1 - \gamma)w_{tl} + \gamma s_{tl}$ \COMMENT{Update weights -- Eq.~\ref{eq:sp_update}}
+   
+   \STATE Optimize $L_M$ by Adam optimizer
+
+\end{algorithmic}
+\end{algorithm}
+
+
+
+\paragraph{Differentiable ODTs:}
+An ODT works like a traditional decision tree except for all nodes in the same depth share the same input features and thresholds, which allows parallel computation and makes it suitable for deep learning. 
+Specifically, an ODT of depth $C$ compares chosen $C$ input features to $C$ thresholds, and returns one of the $2^C$ possible options.
+Mathematically, for feature functions $F^c$ which choose what features to split, splitting thresholds $b^c$, and a response vector $\bm{R} \in \mathbb{R}^{2^C}$,
+the tree output $h(\bm{x})$ is given as:
+\begin{equation}
+    h(\bm{x}) = \bm{R} \cdot \left( {\begin{bmatrix}
+        \mathbb{I}(F^1(\bm{x}) - b^1) \\
+        \mathbb{I}(b^1 - F^1(\bm{x}))
+    \end{bmatrix} }
+    {\otimes}
+    \dots {\otimes}
+    {\begin{bmatrix}
+        \mathbb{I}(F^C(\bm{x}) - b^C) \\
+        \mathbb{I}(b^C - F^C(\bm{x}))
+    \end{bmatrix} },
+    \right).
+\end{equation}
+where $\mathbb{I}$ is the step function, $\otimes$ is the outer product and $\cdot$ is the inner product.
+Both feature functions $F^c$ and $\mathbb{I}$ would prevent differentiability.
+To address this, $F^c(\bm{x})$ is replaced with a weighted sum of features with a temperature annealing that makes it gradually one-hot:
+\begin{equation}
+\label{eq:split}
+F^c(\bm{x}) = \sum_{j=1}^D x_j \text{entmax}_{\alpha}(F^c / T)_{j}, \ \ \ \ T \rightarrow 0.
+\end{equation}
+where $\bm{F}^c \in \mathbb{R}^{D}$ are the logits for which features to choose, and entmax$_{\alpha}$~\citep{entmax} is the entmax normalization function as the sparse version of softmax such that the sum equals to $1$.
+As $T \rightarrow 0$, the output of entmax will gradually become one-hot.
+Also, we replace $\mathbb{I}$ with entmoid which works like a sparse sigmoid that has output values between $0$ and $1$.
+Unlike NodeGAM, we also introduce a temperature annealing in the entmoid to make it closer to $\mathbb{I}$ since it performs better under our AD objective. That is:
+\begin{equation}
+    \text{entmoid}(\frac{\bm{x}}{T}) \rightarrow \mathbb{I},  \ \ \ \ \text{as\ \ } T \rightarrow 0.
+\end{equation}
+Differentiability of all operations (entmax, entmoid, outer and inner products), render ODT differentiable.
+
+\paragraph{Stacking trees into deep layers:}
+Similar to residual connections, all tree outputs $\bm{h}(\bm{x})$ from previous layers become the inputs to the next layer.
+For input features $\bm{x}$, the inputs $\bm{x}^l$ to each layer $l$ become:
+\begin{equation}
+   
+    \bm{x}^1 = \bm{x}, \ \ \ \bm{x}^l = [\bm{x}, \bm{h}^{1}(\bm{x}^1), ... , \bm{h}^{(l-1)}(\bm{x}^{(l-1)})] \text{\ \  for\ \  } l > 1.
+\end{equation}
+The final output of the model $\hat{y}(\bm{x})$ is the average of all the tree outputs ${\bm{h}_1,...,\bm{h}_L}$ of all $L$ layers:
+\begin{equation}
+    \label{eq:final_output}
+    \hat{y}(x) = \sum\nolimits_{l=1}^L \sum\nolimits_{i=1}^{m} h_{li}(\bm{x^l}) / ({L \cdot m}).
+\end{equation}
+
+\setlength\tabcolsep{2pt}
+
+
+
+
+\paragraph{GA$^2$M design}
+To allow only maximum two-way interactions, for each tree, at most two logits $\bm{F}^1$ and $\bm{F}^2$ are allowed, and let the rest of the depth the same as either $\bm{F}^1$ or $\bm{F}^2$: $\bm{F}^c = \bm{F}^{\left \lfloor{c / 2}\right \rfloor}$ for $c > 2$ -- this allows at most $2$ features to interact within each tree.
+Also, we avoid the connection between two trees that focus on different feature combinations, since it may create higher feature interactions.
+See Alg.~\ref{alg:pid_tree} for pseudo code.
+
+
+
+\begin{table*}[tbp]
+\centering
+\caption{Unsupervised AD performance (\% of AUC) on 18 tabular datasets for DIAD and 9 baselines. Metrics with standard error overlapped with the best number are bolded. Methods not involving randomness do not have standard error. We show the number of samples (N) and the number of features (P). Datasets are ordered by N.}
+\label{table:unsup_perf}
+
+\begin{tabular}{c|cccccccccc|cc}
+\toprule
+ & \textbf{DIAD} & \textbf{PIDForest} & \textbf{IF} & \textbf{COPOD} & \textbf{PCA} & \textbf{ICL} & \textbf{kNN} & \textbf{RRCF} & \textbf{LOF} & \textbf{OC-SVM} & N & P \\
+\midrule
+Vowels & 78.3\tiny{ $\pm$ 0.9 } & 74.0\tiny{ $\pm$ 1.0 } & 74.9\tiny{ $\pm$ 2.5 } & 49.6 & 60.6 & 90.8\tiny{ $\pm$ 2.1 } & \textbf{97.5} & 80.8\tiny{ $\pm$ 0.3 } & 5.7 & 77.8 & 1K & 12 \\
+Siesmic & 72.2\tiny{ $\pm$ 0.4 } & 73.0\tiny{ $\pm$ 0.3 } & 70.7\tiny{ $\pm$ 0.2 } & 72.7 & 68.2 & 65.3\tiny{ $\pm$ 1.6 } & \textbf{74.0} & 69.7\tiny{ $\pm$ 1.0 } & 44.7 & 60.1 & 3K & 15 \\
+Musk & 90.8\tiny{ $\pm$ 0.9 } & \textbf{100.0}\tiny{ $\pm$ 0.0 } & \textbf{100.0}\tiny{ $\pm$ 0.0 } & 94.6 & \textbf{100.0} & 93.3\tiny{ $\pm$ 0.7 } & 37.3 & 99.8\tiny{ $\pm$ 0.1 } & 58.4 & 57.3 & 3K & 166 \\
+Satimage & \textbf{99.7}\tiny{ $\pm$ 0.0 } & 98.2\tiny{ $\pm$ 0.3 } & 99.3\tiny{ $\pm$ 0.1 } & 97.4 & 97.7 & 98.0\tiny{ $\pm$ 1.3 } & 93.6 & 99.2\tiny{ $\pm$ 0.2 } & 46.0 & 42.1 & 6K & 36 \\
+Thyroid & 76.1\tiny{ $\pm$ 2.5 } & \textbf{88.2}\tiny{ $\pm$ 0.8 } & 81.4\tiny{ $\pm$ 0.9 } & 77.6 & 67.3 & 75.9\tiny{ $\pm$ 2.2 } & 75.1 & 74.0\tiny{ $\pm$ 0.5 } & 26.3 & 54.7 & 7K & 6 \\
+A. T. & 78.3\tiny{ $\pm$ 0.6 } & \textbf{81.4}\tiny{ $\pm$ 0.6 } & 78.6\tiny{ $\pm$ 0.6 } & 78.0 & 79.2 & 79.3\tiny{ $\pm$ 0.7 } & 63.4 & 69.9\tiny{ $\pm$ 0.4 } & 43.7 & 67.0 & 7K & 10 \\
+NYC & 57.3\tiny{ $\pm$ 0.9 } & 57.2\tiny{ $\pm$ 0.6 } & 55.3\tiny{ $\pm$ 1.0 } & 56.4 & 51.1 & 64.5\tiny{ $\pm$ 0.9 } & \textbf{69.7} & 54.4\tiny{ $\pm$ 0.5 } & 32.9 & 50.0 & 10K & 10 \\
+Mammography & 85.0\tiny{ $\pm$ 0.3 } & 84.8\tiny{ $\pm$ 0.4 } & 85.7\tiny{ $\pm$ 0.5 } & \textbf{90.5} & 88.6 & 69.8\tiny{ $\pm$ 2.7 } & 83.9 & 83.2\tiny{ $\pm$ 0.2 } & 28.0 & 87.2 & 11K & 6 \\
+CPU & 91.9\tiny{ $\pm$ 0.2 } & 93.2\tiny{ $\pm$ 0.1 } & 91.6\tiny{ $\pm$ 0.2 } & \textbf{93.9} & 85.8 & 87.5\tiny{ $\pm$ 0.3 } & 72.4 & 78.6\tiny{ $\pm$ 0.3 } & 44.0 & 79.4 & 18K & 10 \\
+M. T. & 81.2\tiny{ $\pm$ 0.2 } & 81.6\tiny{ $\pm$ 0.3 } & 82.7\tiny{ $\pm$ 0.5 } & 80.9 & \textbf{83.4} & 81.8\tiny{ $\pm$ 0.4 } & 75.9 & 74.7\tiny{ $\pm$ 0.4 } & 49.9 & 79.6 & 23K & 10 \\
+Campaign & 71.0\tiny{ $\pm$ 0.8 } & \textbf{78.6}\tiny{ $\pm$ 0.8 } & 70.4\tiny{ $\pm$ 1.9 } & \textbf{78.3} & 73.4 & 72.0\tiny{ $\pm$ 0.5 } & 72.0 & 65.5\tiny{ $\pm$ 0.3 } & 46.3 & 66.7 & 41K & 62 \\
+smtp & 86.8\tiny{ $\pm$ 0.5 } & \textbf{91.9}\tiny{ $\pm$ 0.2 } & 90.5\tiny{ $\pm$ 0.7 } & 91.2 & 82.3 & 82.2\tiny{ $\pm$ 2.0 } & 89.5 & 88.9\tiny{ $\pm$ 2.3 } & 9.5 & 84.1 & 95K & 3 \\
+Backdoor & \textbf{91.1}\tiny{ $\pm$ 2.5 } & 74.2\tiny{ $\pm$ 2.6 } & 74.8\tiny{ $\pm$ 4.1 } & 78.9 & 88.7 & \textbf{91.8}\tiny{ $\pm$ 0.6 } & 66.8 & 75.4\tiny{ $\pm$ 0.7 } & 28.6 & 86.1 & 95K & 196 \\
+Celeba & \textbf{77.2}\tiny{ $\pm$ 1.9 } & 67.1\tiny{ $\pm$ 4.8 } & 70.3\tiny{ $\pm$ 0.8 } & 75.1 & \textbf{78.6} & 75.4\tiny{ $\pm$ 2.6 } & 56.7 & 61.7\tiny{ $\pm$ 0.3 } & 56.3 & 68.5 & 203K & 39 \\
+Fraud & \textbf{95.7}\tiny{ $\pm$ 0.2 } & 94.7\tiny{ $\pm$ 0.3 } & 94.8\tiny{ $\pm$ 0.1 } & 94.7 & 95.2 & \textbf{95.5}\tiny{ $\pm$ 0.2 } & 93.4 & 87.5\tiny{ $\pm$ 0.4 } & 52.5 & 94.8 & 285K & 29 \\
+Census & \textbf{65.6}\tiny{ $\pm$ 2.1 } & 53.4\tiny{ $\pm$ 8.1 } & 61.9\tiny{ $\pm$ 1.9 } & \textbf{67.4} & 66.1 & 58.4\tiny{ $\pm$ 0.9 } & 64.6 & 55.7\tiny{ $\pm$ 0.1 } & 45.0 & 53.4 & 299K & 500 \\
+http & 99.3\tiny{ $\pm$ 0.1 } & 99.2\tiny{ $\pm$ 0.2 } & \textbf{100.0}\tiny{ $\pm$ 0.0 } & 99.2 & 99.6 & 99.3\tiny{ $\pm$ 0.1 } & 23.1 & 98.4\tiny{ $\pm$ 0.2 } & 64.7 & 99.4 & 567K & 3 \\
+Donors & \textbf{87.7}\tiny{ $\pm$ 6.2 } & 61.1\tiny{ $\pm$ 1.3 } & 78.3\tiny{ $\pm$ 0.7 } & 81.5 & 82.9 & 65.5\tiny{ $\pm$ 11.8 } & 61.2 & 64.1\tiny{ $\pm$ 0.0 } & 40.2 & 70.2 & 619K & 10 \\ 
+\midrule
+Average & \textbf{82.5} & 80.7 & 81.2 & 81.0 & 80.5 & 80.3 & 70.6 & 76.8 & 40.2 & 71.0 & - & - \\
+Rank & \textbf{3.6} & 4.4 & 4.0 & 4.2 & 4.2 & 4.7 & 6.6 & 6.7 & 9.8 & 6.8 & - & - \\
+\bottomrule
+\end{tabular}
+\vspace{-5pt}
+\end{table*}
+
+
+\paragraph{AD Objectives}
+Here we introduce the AD objective for our tree-based model: Partial Identification (PID)~\citep{gopalan2019pidforest}.
+Consider all patients admitted into an ICU. 
+We might consider patients with blood pressure (BP) as 300 as anomalous, since it deviates from most others.
+In this example, BP of 300 is in a "sparse" feature space since very few people are more than 300.
+
+To formalize this intuition, we need to introduce the concept of volume.
+We first define the max and min value of each feature value.
+Then, we define the volume of a tree leaf as the product of the proportion of the splits within the min and max value.
+For example, assuming the max value of BP is 400 and min value is 0, the tree split of "BP $\ge$ 300" has a volume $0.25$.
+
+We define the sparsity $s_l$ of a tree leaf $l$ as the ratio between the volume of the leaf $V_l$ and the \% of data in the leaf $D_l$:
+$$
+    s_l = {V_l} / {D_l},
+$$
+and we treat the higher sparsity as more anomalous.
+Let's assume only less than 0.1\% have values more than 300 and the volume of "BP $\ge$ 300" is 0.25, this patient is quite anomalous in the data by having a large sparsity $\frac{0.25}{0.1\%}$. 
+
+
+
+
+
+
+
+
+
+To learn the effective splitting of regions with high vs. low sparsity, we optimize the tree structures to maximize the variance of sparsity across leafs, as it splits the space into a high (anomalous) and a low (normal) sparsity region. 
+
+Note that the expected sparsity weighted by the number of data in each leaf is a constant $1$. 
+Given each tree leaf $l$, the \% of data in the leaf is $D_l$, sparsity $s_l$:
+\begin{equation}
+    \mathbb{E}[s] = \sum_l [D_l s_l] = \sum_l [D_l \frac{V_l}{D_l}] = \sum_l [V_l] = 1.
+\end{equation}
+Therefore, maximizing variance equals to maximizing the second moment of sparsity since the first moment is $1$:
+\begin{equation}
+    \max \text{Var}[s] = \max \sum\nolimits_l D_l s_l^2 = \max \sum\nolimits_l {V_l^2}/{D_l}.
+\end{equation}
+
+
+\paragraph{Estimating volume and the data ratio}
+The above objectives require estimating \% of volume $V_l$ and \% of data $D_l$ for each leaf $l$.
+However, calculating volume exactly is not trivial in an oblivious decision tree since it involves complicated rules extractions.
+Instead, we sample random points uniformly in the input space, and count the number of the random points that end up in each tree leaf.
+And more points in a leaf indicate higher volume.
+To avoid the zero count in the denominator, we use Laplacian smoothing, which adds a constant $\delta$ to each count.
+We find it's crucial to set a large $\delta$, around 50-100, to encourage models to ignore the tree leaves with fewer counts.
+Similarly, we estimate $D_l$ by counting the data ratio in each mini-batch.
+We add $\delta$ for both $V_l$ and $D_l$.
+
+
+\paragraph{Regularization}
+To encourage diverse trees, we introduce a per-tree dropout noise on the estimated momentum to make each tree operate on a different subset of samples in a mini-batch.
+We also restrict each tree to only split on $\rho\%$ of features randomly to promote diverse trees (Supp.~\ref{appx:hparams}).
+
+\paragraph{Updating leafs' weight}
+We set the leafs' response as the sparsity to reflect the degree of the anomaly.
+However, since sparsity estimation involves randomness, we set the response as the damped value of sparsity to stabilize the performance.
+Specifically, given the training step $i$, sparsity $s_l^i$ for each leaf $l$, and the update rate $\gamma$:
+\begin{equation}
+    w_l^i = (1 - \gamma)w_l^{(i-1)} + \gamma s_l^i.
+\label{eq:sp_update}
+\end{equation}
+
+
+
+\paragraph{Normalizing sparsity}
+Because of the residual connections, the output of each tree adds with the input features and the summation becomes the input to the next tree.
+But this creates a very large magnitude difference -- as the output of trees could have sparsity values up to $10^4$ but the input feature is normalized to -1 and 1, naive optimization tends to ignore the input features.
+Also, the large outputs of trees make fine-tuning hard and lead to inferior performance in the semi-supervised setting (Sec.~\ref{sec:ablation}).
+To circumvent this magnitude difference, we linearly scale the min and max value of the estimated sparsity to -1 and 1: 
+\begin{equation}
+    \hat{s}_l = {V_l} / {D_l},\ \ \ \ \  s_l =  {2\hat{s}_l} / {(\max_l \hat{s}_l - \min_l \hat{s}_l)} - 1.
+\label{eq:norm_sp}
+\end{equation}
+Algorithm ~\ref{alg:pid_update} overviews all training update steps.
+
+\paragraph{Incorporating labeled data}
+To optimize the labeled data in the imbalanced setting, we optimize the differentiable AUC loss~\citep{yan2003optimizing} which has been shown effective in the imbalanced setting.
+Specifically, given a mini-batch of labeled positive data $X_P$ and labeled negative data $X_N$, model $\mathcal{M}$, it minimizes
+\begin{equation}
+    L_{PN} = \frac{1}{|X_P| |X_N|} \sum_{x_p \in X_P, x_n \in X_N} \max(\mathcal{M}(x_n) - \mathcal{M}(x_p), 0).
+\end{equation}
+We compare this AUC loss to commonly-used Binary Cross Entropy (BCE) loss (Sec.~\ref{sec:ablation}).
+\paragraph{Data Loader} Similar to Devnet~\citep{devnet}, we upsample the positive samples to make each mini-batch have the same number of positive and negative samples.
+We find it improves over uniform sampling (Sec.~\ref{sec:ablation}).
+
+
+
+
+\setlength\tabcolsep{2pt}
+\begin{figure*}[tbp]
+\begin{center}
+
+\begin{tabular}{ccccc}
+  & (a) Vowels & (b) Satimage & (c) Thyroid & (d) NYC \\
+ \raisebox{4\normalbaselineskip}[0pt][0pt]{\rotatebox[origin=c]{90}{\small AUC}}
+ & \includegraphics[width=0.24\linewidth]{figures/ss_summary2/vowels.pdf}
+ & \includegraphics[width=0.24\linewidth]{figures/ss_summary2/satimage-2_nolegend.pdf}
+ & \includegraphics[width=0.24\linewidth]{figures/ss_summary2/thyroid_nolegend.pdf}
+  & \includegraphics[width=0.24\linewidth]{figures/ss_summary2/nyc_taxi_nolegend.pdf} \vspace{-5pt} \\
+ & \ \ \ \ \ No. Anomalies & \ \ \ \ \ No. Anomalies & \ \ \ \ \ No. Anomalies & \ \ \ \ \ No. Anomalies  \vspace{5pt} \\
+ & (e) CPU & (f) Campaign  & (g) Backdoor & (h) Donors \\
+ \raisebox{4\normalbaselineskip}[0pt][0pt]{\rotatebox[origin=c]{90}{\small AUC}}
+ & \includegraphics[width=0.24\linewidth]{figures/ss_summary2/cpu_utilization_asg_misconfiguration.pdf}
+ & \includegraphics[width=0.24\linewidth]{figures/ss_summary2/campaign_nolegend.pdf}
+ & \includegraphics[width=0.24\linewidth]{figures/ss_summary2/backdoor_nolegend.pdf}
+ & \includegraphics[width=0.24\linewidth]{figures/ss_summary2/donors_nolegend.pdf}  \vspace{-5pt} \\
+ & \ \ \ \ \ No. Anomalies & \ \ \ \ \ No. Anomalies & \ \ \ \ \ No. Anomalies & \ \ \ \ \ No. Anomalies  \vspace{5pt} \\
+  \end{tabular}
+\end{center}
+  \caption{
+     Semi-supervised AD performance on 8 tabular datasets (out of 15) with varying number of anomalies.
+     Our method `DIAD' (blue) outperforms other semi-supervised baselines. Summarized results can be found in Table.~\ref{table:ss_summary}.
+     See the remaining plots with 7 tabular datasets in Supp.~\ref{appx:ss_figures_appx}.
+  }
+  \label{fig:ss}
+\end{figure*}
+
+
+\section{Experiments}
+\label{sec:experiments}
+We evaluate DIAD on various tabular datasets, in both unsupervised and semi-supervised settings. Detailed experimental settings and additional results are in Supplementary.
+
+\subsection{Unsupervised Anomaly Detection}
+We compare methods on $20$ tabular datasets, including $14$ datasets used in \citet{gopalan2019pidforest} and $6$ larger datasets from \citet{devnet}.
+Since it's hard to tune hyperparameters in the unsupervised setting, for fair comparisons we compare all baselines using default hyperparameters. We run experiments 8 times with different random seeds and take average if methods involve randomness.
+
+\begin{table*}[t]
+\caption{Unsupervised AD performance (\% of AUC) with additional 50 noisy features for DIAD and 9 baselines. We find both DIAD and OC-SVM deteriorate around 2-3\% while other methods deteriorate 7-17\% on average.}
+\label{table:unsup_noisy_perf}
+
+\centering
+\begin{tabular}{c|cccccccccc}
+\toprule
+ & \textbf{DIAD} & \textbf{PIDForest} & \textbf{IF} & \textbf{COPOD} & \textbf{PCA} & \textbf{ICL} & \textbf{kNN} & \textbf{RRCF} & \textbf{LOF} & \textbf{OC-SVM} \\
+\midrule
+Thyroid & 76.1\tiny{ $\pm$ 2.5 } & 88.2\tiny{ $\pm$ 0.8 } & 81.4\tiny{ $\pm$ 0.9 } & 77.6 & 67.3 & 75.9\tiny{ $\pm$ 2.2 } & 75.1 & 74.0\tiny{ $\pm$ 0.5 } & 26.3 & 54.7 \\
+Thyroid (noise) & 71.1\tiny{ $\pm$ 1.2 } & 76.0\tiny{ $\pm$ 2.9 } & 64.4\tiny{ $\pm$ 1.6 } & 60.5 & 61.4 & 49.5\tiny{ $\pm$ 1.6 } & 49.5 & 53.6\tiny{ $\pm$ 1.1 } & 50.8 & 49.4 \\
+Mammography & 85.0\tiny{ $\pm$ 0.3 } & 84.8\tiny{ $\pm$ 0.4 } & 85.7\tiny{ $\pm$ 0.5 } & 90.5 & 88.6 & 69.8\tiny{ $\pm$ 2.7 } & 83.9 & 83.2\tiny{ $\pm$ 0.2 } & 28.0 & 87.2 \\
+Mammography (noise) & 83.1\tiny{ $\pm$ 0.4 } & 82.0\tiny{ $\pm$ 2.2 } & 71.4\tiny{ $\pm$ 2.0 } & 72.4 & 76.8 & 69.4\tiny{ $\pm$ 2.4 } & 81.7 & 79.1\tiny{ $\pm$ 0.7 } & 37.2 & 87.2 \\ \midrule
+Average $\downarrow$ & $\bm{3.5}$ & 7.5 & 15.6 & 17.6 & 8.9 & 13.4 & 13.9 & 12.2 & -16.8 & $\bm{2.7}$ \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+
+\paragraph{Baselines}
+We compare with ICL~\citep{shenkar2022anomaly}, a recent deep-learning AD method, and non-deep learning methods including PIDForest~\citep{gopalan2019pidforest}, COPOD~\citep{copod}, PCA, k-nearest neighbors (kNN), RRCF~\citep{guha2016robust}, LOF~\citep{breunig2000lof} and OC-SVM~\citep{scholkopf2001estimating}.
+
+We use 2 aggregate metrics to summarize the performances across datasets: (1) \textbf{Average}: we take the average of AUC across datasets, (2) \textbf{Rank}: to avoid dominant impact of a few datasets, we calculate the rank of each method in each dataset and average across datasets (lower rank is better).
+
+We demonstrate overall AUC performances in Table~\ref{table:unsup_perf}. 
+On average, our method performs the best in both Average and Rank. 
+DIAD, using up to 2nd order interactions, performs better or on par with other models for most datasets.
+Compared to PIDForest, DIAD often underperforms on smaller datasets such as Musk and Thyroid, but outperforms on larger datasets like Backdoor, Celeba, Census and Donors.
+
+In Table.~\ref{table:unsup_noisy_perf}, we evaluate the robustness of AD methods with the additional noisy features. 
+More specifically, we follow the experiment settings in \citet{gopalan2019pidforest} to include 50 additional noisy features which are randomly sampled from $[-1, 1]$ to Thyroid and Mammography datasets, and create Thyroid (noise) and Mammography (noise) respectively.
+In Table.~\ref{table:unsup_noisy_perf}, we show that the performance of DIAD is robust with additional noisy features (76.1$\rightarrow$71.1, 85.0$\rightarrow$83.1), while others show significant performance degradation. For example, on Thyroid (noise), ICL decreases from 75.9$\rightarrow$49.5, KNN from 75.1$\rightarrow$49.5, and COPOD from 77.6$\rightarrow$60.5.
+
+
+\setlength\tabcolsep{2pt}
+\begin{figure*}[tbp]
+\centering
+\begin{tabular}{cccccccc}
+  & (a) Contrast (Sp=$0.38$) &  & (b) Noise (Sp=$0.21$) &  & (c) Area (Sp=$0.18$) &  & \makecell{(d) Area x Gray Level\\(Sp=$0.05$)} \\
+ \raisebox{4\normalbaselineskip}[0pt][0pt]{\rotatebox[origin=c]{90}{\small Sparsity}}\hspace{-5pt}
+ & \includegraphics[width=0.23\linewidth]{figures/mammography/0_imp0.382_contrast.pdf}
+ & \raisebox{4\normalbaselineskip}[0pt][0pt]{\rotatebox[origin=c]{90}{\small Sparsity}}\hspace{-5pt}
+ & \includegraphics[width=0.23\linewidth]{figures/mammography/1_imp0.206_rms_noise_flucutation.pdf}
+ & \raisebox{4\normalbaselineskip}[0pt][0pt]{\rotatebox[origin=c]{90}{\small Sparsity}}\hspace{-5pt}
+ & \includegraphics[width=0.23\linewidth]{figures/mammography/2_imp0.181_area.pdf}
+ & \raisebox{4\normalbaselineskip}[0pt][0pt]{\rotatebox[origin=c]{90}{\small Gray Level}}\hspace{-5pt}
+ & \includegraphics[width=0.23\linewidth]{figures/mammography/3_imp0.053_area_gray_level.pdf}\vspace{-5pt} \\
+ & \ \ \ \ \ Contrast &  & \ \ \ \ \ Noise & &  \ \ \ \ \ Area & &  Area  \vspace{5pt} \\
+\end{tabular}
+\caption{
+ Explanations of the most anomalous sample in the Mammography dataset.
+ We show the top 4 contributing GAM plots with 3 features (a-c) and 1 two-way interaction (d). 
+ (a-c) x-axis is the feature value, and y-axis is the model's predicted sparsity (higher sparsity represents more anomalous). Model's predicted sparsity is shown in the blue line. 
+ The red backgrounds indicate data density and the green line indicates the value of the most anomalous sample with Sp as its sparsity.
+ The model finds it anomalous because it has high Contrast, Noise and Area differing from values where majority of other samples have.
+ (d) x-axis is the Area and y-axis is the Gray Level with color indicating the sparsity (blue/red indicates anomalous/normal). The green dot is the value of the data that has 0.05 sparsity.
+}
+\label{fig:mammography_gam_plots}
+\end{figure*}
+
+
+
+
+
+\subsection{Semi-supervised Anomaly Detection}
+\label{sec:ss_result}
+Next, we focus on the semi-supervised setting. 
+We show how much DIAD can improve the performance with small labeled data in comparison to alternatives.
+We first divide the data into 64\%-16\%-20\% train-val-test splits, and within the training set only a small part of data is labeled. 
+Specifically, we assume the existence of labels for a small subset of the training set (5, 15, 30, 60 or 120 positives and the corresponding negatives to have the same anomaly ratio).
+
+The validation set is used for model selection and we report the average performances evaluated on the disjoint 10 data splits.
+We compare with 3 baselines: (1) \textbf{DIAD w/o PT}: we directly optimize our model under the small labeled data without the first AD pre-training stage. (2) \textbf{CST}: we compare with the Consistency Loss proposed in~\citet{vime} which regularizes the model to make similar predictions between unlabeled data under dropout noise injection. (3) \textbf{DevNet}~\citep{devnet}: the state-of-the-art semi-supervised AD methods.
+Hyperparameters are in Supp.~\ref{appx:ss_hparams}.
+
+
+
+\setlength\tabcolsep{4pt}
+\begin{table}[tbp]
+\centering
+\caption{Summary of semi-supervised AD performances. We show the average \% of AUC across 15 datasets with varying number of anomalies.}
+\label{table:ss_summary}
+
+\begin{tabular}{c|cccccc}
+\toprule
+\textbf{No. Anomalies} & \textbf{0} & \textbf{5} & \textbf{15} & \textbf{30} & \textbf{60} & \textbf{120} \\
+\midrule
+DIAD & \textbf{87.1}  & \textbf{89.4}       & \textbf{90.0}        & \textbf{90.4}        & \textbf{89.4}        & \textbf{91.0}         \\
+DIAD w/o PT   & - & 86.2       & 87.6        & 88.3        & 87.2        & 88.8         \\
+CST    & - & 85.3       & 86.5        & 87.1        & 86.6        & 88.8         \\
+DevNet & - & 83.0       & 84.8        & 85.4        & 83.9        & 85.4 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Fig.~\ref{fig:ss} shows the AUC across 8 of 15 datasets (the rest can be found in Supp.~\ref{appx:ss_figures_appx}). The proposed version of DIAD (blue) outperforms DIAD without pre-training (orange) consistently in 14 of 15 datasets (except Census dataset), which demonstrates that learning the PID objectives from unlabeled data help improve the performance.
+Second, both the consistency loss (green) and DevNet (red) do not always improve the performance in comparison to the supervised setting.
+To conclude, DIAD outperforms all baselines and improve from the unlabeled setting.
+
+\setlength\tabcolsep{2pt}
+\begin{figure*}[tbp]
+\begin{center}
+
+\begin{tabular}{cccccccc}
+  & (a) Great Chat &  & \makecell{(b) Great Messages\\Proportion} &  & (c) Fully Funded &  & (d) \makecell{Referred Count} \\
+ \raisebox{4\normalbaselineskip}[0pt][0pt]{\rotatebox[origin=c]{90}{\small Output}}\hspace{-5pt}
+ & \includegraphics[width=0.23\linewidth]{figures/ft_donors/great_chat=t.pdf}
+ & \raisebox{4\normalbaselineskip}[0pt][0pt]{\rotatebox[origin=c]{90}{\small Output}}\hspace{-5pt}
+ & \includegraphics[width=0.23\linewidth]{figures/ft_donors/great_messages_proportion.pdf}
+ & \raisebox{4\normalbaselineskip}[0pt][0pt]{\rotatebox[origin=c]{90}{\small Output}}\hspace{-5pt}
+ & \includegraphics[width=0.23\linewidth]{figures/ft_donors/fully_funded=t.pdf}
+ & \raisebox{4\normalbaselineskip}[0pt][0pt]{\rotatebox[origin=c]{90}{\small Output}}\hspace{-5pt}
+ & \includegraphics[width=0.23\linewidth]{figures/ft_donors/teacher_referred_count.pdf}\vspace{-5pt} \\
+  \end{tabular}
+\end{center}
+  \caption{
+     4 GAM plots on the Donors dataset before (orange) and after (blue) fine-tuning on the labeled samples. In (a, b) we show two features that the labeled information agrees with the notion of sparsity; thus, after fine-tuning the magnitude increases. In (c, d) the label information disagrees with the notion of sparsity; thus, the magnitude changes or decreases after the fine-tuning.
+  }
+  \label{fig:donors_ft}
+\end{figure*}
+
+
+
+\subsection{Qualitative analyses on GAM explanations}
+\paragraph{Explaining anomalous data}
+To let domain experts understand and debug why a sample is considered anomalous, we demonstrate explaining the most anomalous sample considered by DIAD on Mammography dataset.
+The task is to detect breast cancer from radiological scans, specifically the presence of clusters of microcalcifications that appear bright on a mammogram.
+The 11k images are segmented and preprocessed by vision pipelines and extracted 6 image-related features including the area of the cell, constrast, and noise etc.
+In Fig.~\ref{fig:mammography_gam_plots}, we show the most anomalous data and see which feature contributes the most for sparsity (i.e. anomalous).
+We illustrate why the model predicts this sample as anomalous; the unusually-high `Contrast' (Fig.~\ref{fig:mammography_gam_plots}(a)) of the image differs from other samples.
+Also, the unusually high noise (Fig.~\ref{fig:mammography_gam_plots}(b)) and `Large area' (Fig.~\ref{fig:mammography_gam_plots}(c)) also makes it anomalous.
+Finally, it is also considered quite anomalous in a 2-way interaction (Fig.~\ref{fig:mammography_gam_plots}(d)).
+Since the sample has `middle area' and `middle gray level' which constitute a rare combination for the dataset.
+
+
+\paragraph{Qualitative analyses on the impact of fine-tuning with labeled data}
+In Fig.~\ref{fig:donors_ft}, we visualize how predictions change before and after fine-tuning with labeled samples on Donors dataset.
+Donors dataset consists of 620k educational proposals for K12 level with 10 features, and the anomalies are defined as the top 5\% ranked proposals as outstanding.
+Here, we show 4 GAM plots before and after fine-tuning. 
+Figs.~\ref{fig:donors_ft} a \& b show that both `Great Chat' and `Great Messages Proportion' increase its magnitude after fine-tuning, showing that the sparsity of these two features is consistent with the labels.
+On the other hand, Figs.~\ref{fig:donors_ft} c \& d show that after fine-tuning, the model learns the opposite trend.
+The sparsity definition treats values with less density as more anomalous -- in this case \textit{`Fully Funded'=0} is treated as more anomalous.
+But in fact `Fully Funded' is a good indicator of outstanding proposals, so after fine-tuning model learns that \textit{`Fully Funded'=1} is in fact more anomalous.
+This shows the importance of incorporating labeled data into the model to let the model correct its anomaly objective and learn what the intended anomalies are.
+  
+
+\section{Ablation and sensitivity analysis}
+\label{sec:ablation}
+To analyze the source of gains, we perform ablation studies with some variants of DIAD. The results are presented in Table~\ref{table:ablation}. First, we find fine-tuning with AUC is better than BCE.
+Sparsity normalization plays an important role in fine-tuning, since sparsity could have values up to $10^4$ which negatively affect fine-tuning.
+Upsampling the positive samples also contributes to performance improvements.
+
+
+\setlength\tabcolsep{6pt}
+\begin{table}[h!]
+\centering
+\vspace{-10pt}
+\caption{Ablation study for semi-supervised AD. We test our method with fine-tuning only AUC vs. BCE loss. The performance benefits from more labels. Removing sparsity normalization substantially decreases the performance.}
+\label{table:ablation}
+\begin{tabular}{c|ccccc}
+\toprule
+\textbf{No. Anomalies} & \textbf{5} & \textbf{15} & \textbf{30} & \textbf{60} & \textbf{120} \\
+\midrule
+DIAD    & \textbf{89.4}       & \textbf{90.0}        & \textbf{90.4}        & \textbf{89.4}        & \textbf{91.0}         \\
+Only AUC    & 88.9       & 89.4        & 90.0        & 89.1        & 90.7         \\
+Only BCE    & 88.8       & 89.3        & 89.4        & 88.3        & 89.2  \\
+\makecell{Unnormalized\\sparsity} & 84.1 & 85.6 & 85.7 & 84.2 & 85.6 \\
+No upsampling & 88.6 & 89.1 & 89.4 & 88.5 & 90.1 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+\setlength\tabcolsep{5pt}
+\begin{table}[h!]
+\centering
+\caption{Semi-supervised AD performance with 25\% of the original validation data (4\% of total data).
+}
+\label{table:ss_val_ratio_main}
+
+\begin{tabular}{c|ccccc}
+\toprule
+ & \multicolumn{5}{c}{25\% val data (4\% of total data)} \\
+\midrule
+\textbf{No. Anomalies} & \textbf{5} & \textbf{15} & \textbf{30} & \textbf{60} & \textbf{120} \\
+\midrule
+DIAD      & \textbf{89.0}       & \textbf{89.3}        & \textbf{89.7}        & \textbf{89.1}        & \textbf{90.4}     \\
+\makecell{DIAD w/o PT}& 85.4       & 87.1        & 86.9        & 86.4        & 87.9     \\
+CST    & 83.9       & 84.9        & 85.7        & 85.6        & 88.2       \\
+DevNet & 82.0       & 83.4        & 84.4        & 82.0        & 84.6 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+In practice we might not have a large (e.g. 16\% of the labeled dat) validation dataset, as in Sec.~\ref{sec:ss_result}, thus, it would be valuable to evaluate the performances of DIAD with a smaller validation dataset. In Table~\ref{table:ss_val_ratio_main}, we reduce the validation dataset size to only 4\% of the labeled data and find DIAD still consistently outperforms others. Additional results can be found in Supp.~\ref{appx:ss_less_val}.
+
+We also perform a sensitivity analysis in Supp.~\ref{appx:sensitivity} that varies hyperparameters in the unsupervised AD benchmarks.
+Our method performs quite stable in less than $2\%$ differences across a variety of hyperparameters.
+
+\section{Discussions and Conclusions}
+As all unsupervised AD methods rely on approximate objectives to discover anomalies such as reconstruction loss, predicting geometric transformations, or contrastive learning. The objectives inevitably would not align with labels on some datasets, as inferred from the performance ranking fluctuations across datasets.
+This motivates for abilities to incorporate labeled data to boost performances and incorporate interpretability to find out whether the model could be trusted and whether the approximate objective aligns with the human-defined anomalies.
+
+Beyond the inspirations from NodeGAM for the model architecture and PID loss for the objective, we introduce novel contributions that are key for highly accurate and interpretable AD: we modify the architecture by temperature annealing, introduce a novel way to estimate and normalize sparsity, propose a novel regularization for improved generalization, and introduce semi-supervised AD via supervised fine-tuning of the unsupervised learnt representations. 
+Our contributions play a crucial role to push both unsupervised and semi-supervised AD benchmarks. 
+Furthermore, our method provides interpretability which is crucial in high-stakes applications with needs of explanations such as finance or healthcare.
+
+
+
+
+
+
+
+
+
+     
+
+
+
+
+
+
+

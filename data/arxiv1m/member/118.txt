@@ -1,0 +1,701 @@
+
+
+
+\section{Introduction}
+Developing machines equipped with mathematical reasoning capabilities is one of the long-standing goals of artificial intelligence. Solving math word problems (MWPs) is a well-defined task to diagnose the ability of intelligent systems to perform numerical reasoning and problem-solving as humans. A surge of datasets has been proposed to facilitate the research in this domain \citep{upadhyay2017annotating,amini2019mathqa,miao2020diverse,cobbe2021training}. However, most existing MWP datasets focus on textual math word problems only. Tables, widely distributed in different documents such as invoices, health records, and financial reports, contain rich structured information different from unstructured text. Solving math word problems in such a tabular context is much more challenging than existing MWP benchmarks since the system needs to make cell selections and align heterogeneous information before performing further numerical reasoning.
+
+\begin{figure}[t!]
+ \centering
+ \vspace{-5mm}
+ \includegraphics[width=1.0\textwidth]{figures/fig_dataset.pdf}
+ \caption{Two examples from the \textsc{TabMWP}\xspace dataset. The example above is a \textit{free-text} problem with a numerical answer; the example below is a \textit{multi-choice} problem with a textual answer.} 
+ \vspace{-5mm}
+ \label{fig:dataset}
+\end{figure}
+
+To fill this gap, we propose \text{Tab}ular \text{M}ath \text{W}ord \text{P}roblems (\textsc{TabMWP}\xspace{}), a new large-scale dataset that contains 38,431 math word problems with tabular context, taken from grade-level math curricula. There are two question types: \textit{free-text} questions in which the answer is an integer or decimal number, and \textit{multi-choice} questions where the answer is a text span chosen from option candidates. Different from existing MWP datasets, each problem in \textsc{TabMWP}\xspace{} is accompanied by a tabular context, which is represented in three formats: an image, a semi-structured text, and a structured table. Each problem is also annotated with a detailed solution that reveals the multi-step reasoning steps to ensure full explainability.
+To solve problems in \textsc{TabMWP}\xspace, a system requires multi-hop mathematical reasoning over heterogeneous information by looking up table cells given textual clues and conducting multi-step operations to predict the final answer. Take the problem above in Figure \ref{fig:dataset} as an example. To answer the question ``\textit{how much will she spend (if Tracy buys three kinds of beads)}?'', we first need to look up the corresponding three rows in the given table, calculate the individual cost for each kind of bead, and finally sum three costs up to get the answer of 31.44.
+
+Inspired the success of the large pre-trained language model GPT-3 \citep{chen2020big} in solving math word problems \citep{wei2022chain,wang2022self}, we first build a strong baseline using few-shot GPT-3 on \textsc{TabMWP}\xspace{}. A few in-context examples are randomly selected from the training set, along with the test example, and are constructed as a prompt for GPT-3 to predict the answer. However, recent studies have shown that this type of few-shot learning can be highly unstable across different selections of in-context examples \citep{zhao2021calibrate, liu2022makes, lu2022fantastically}. It could be worse on \textsc{TabMWP}\xspace{} since its problems are distributed across multiple question types and diverse table layouts. \cite{liu2022makes} try to address this issue by retrieving semantically similar examples. However, this method might not work well on \textsc{TabMWP}\xspace{} because it is not capable of measuring the similarity of structured information, such as the number of cells in tables.
+
+To alleviate this challenge, we further propose a novel approach that can learn to select in-context examples from a small amount of training data via policy gradient for prompt learning, termed \textsc{PromptPG}\xspace. As illustrated in Figure \ref{fig:model}, an agent learns to find optimal in-context examples from a candidate pool, with the goal of maximizing the prediction rewards on given training examples when interacting with the GPT-3 environment. A policy network defines the strategy of how to select the in-context examples given the current training example. The policy network is built on top of the language model BERT \citep{devlin2018bert} with fixed parameters, followed by a one-layer linear neural network with learnable parameters. The learnable parameters are updated following the policy gradient strategy \citep{sutton1998introduction}. Unlike random selection \citep{wei2022chain,wang2022self}, brute-force search, or retrieval-based selection \citep{liu2022makes}, \textsc{PromptPG}\xspace learns to construct the prompt dynamically given the candidate pool when interacting with the GPT-3 API.
+
+We implement two state-of-the-art methods as baselines, i.e., UnifiedQA \citep{khashabi2020unifiedqa} on general question answering and TAPEX \citep{liu2022tapex} on tabular question answering. Both are implemented in pre-trained and fine-tuned settings. Experimental results show that our model \textsc{PromptPG}\xspace can achieve an overall accuracy of 68.23\% on \textsc{TabMWP}\xspace, which greatly surpasses previous methods by a large margin of up to 5.31\%. Further analysis demonstrates that \textsc{PromptPG}\xspace can select better in-context examples compared with a wide range of existing selection strategies and reduce the prediction variance significantly compared to random selection.
+
+The main contributions of our work are as follows: (a) We present a new large-scale dataset, \textsc{TabMWP}\xspace, the first dataset for math word problems with tabular context; (b) We propose a novel approach, \textsc{PromptPG}\xspace, which learns the prompt dynamically via policy gradient to select in-context examples for few-shot GPT-3. To the best of our knowledge, it is the first work that applies reinforcement learning to select in-context examples for the few-shot GPT-3 model; (c) Experimental results show that \textsc{PromptPG}\xspace achieves an improvement of up to 5.31\% on \textsc{TabMWP}\xspace over existing methods, with reduced selection instability compared to random selection.
+
+\begin{figure}[t!] 
+ \centering
+ \vspace{-5mm}
+ \includegraphics[width=0.9\textwidth]{figures/fig1_model.pdf}
+ \caption{Our proposed \textsc{PromptPG}\xspace is able to learn to select performing in-context examples via policy gradient when interacting with the GPT-3 API without any manually designed heuristics.} 
+ \vspace{-3mm}
+ \label{fig:model}
+\end{figure}
+
+
+\section{The \textsc{TabMWP}\xspace Dataset}
+\subsection{Task Formulation}
+A tabular math word problem $p$ is represented as a pair ($t$, $q$), where $t$ is a table context and $q$ is a question. The table $t$ could be represented in a visual format as an image, semi-structured text, or a structured database. In this work, we focus on the semi-structured format as the table context for simplicity. The table $t$ features complicated layouts and formats: it contains multiple rows and columns, and each cell can be a string of text, a string of a number, or a mix of them. Depending on the question and answer types, the question $q$ may be accompanied by multiple-choice options $c=\{c_1, c_2, \dots, c_n\}$ or a unit $u$. Given a semi-structured tabular context $t$ and an unstructured question text $q$, the task is to generate the answer $a$, which is either numerical only text for a \textit{free-text} question, or a text span from given options for a \textit{multiple-choice} question.
+
+
+\subsection{Dataset Construction}
+\textbf{Data collection.} We construct \textsc{TabMWP}\xspace{} based on openly available content and more details are provided in Appendix \ref{appx:dataset}. Only math word problems that are accompanied by a tabular context and a detailed solution are collected. We develop a script to extract the tabular context, the question, options that apply, the correct answer, and the solution for each problem. These elements can be precisely identified using HTML tags. For each table, we take a screenshot and store its raw text.
+
+\textbf{Data preprocessing.} To make \textsc{TabMWP}\xspace{} compatible with various baselines, we represent the tabular context as three formats: an image, \textit{semi-structured} text, and a \textit{structured} spreadsheet. The semi-structured format is created by converting the raw table text into a flattened token sequence, with each row separated by a newline character `\texttt{$\backslash$n}' and each column separated by `\texttt{$\mid$}'. The semi-structured text is further transformed to the structured format, which can be easily retrieved and executed by SQL-based methods \citep{liu2022tapex} using packages like \texttt{pandas}. For clarity, the table title is separated from the raw table. Examples of three formats are shown in Appendix \ref{appx:dataset}.
+
+For better quantitative evaluation, we formalize the \textsc{TabMWP}\xspace{} problems as two question types: (a) \textit{free-text} questions, where the answer is numerical text only and the unit text is separately extracted; and (b) \textit{multi-choice} questions, the answer of which is the text span from choice options. The order of choice options is shuffled to alleviate distribution bias. Redundant information in solutions is removed, and some solutions are manually rewritten to be more human-readable. Finally, problems with the same table, question, and answer text are regarded as redundant and thus removed. We further conduct quality control to ensure data quality, which is discussed in Appendix \ref{appx:dataset}. 
+
+
+\subsection{Dataset Statistics}
+
+\begin{wraptable}{r}{0.42\textwidth}
+\vspace{-3mm}
+ \centering
+\renewcommand\tabcolsep{1.5pt}
+ \small
+ \begin{tabular}{lr}
+ \toprule
+ \textbf{Statistic} & \textbf{Number} \\
+ \midrule
+ Total questions & 38,431 \\
+ ~~* \textit{free-text} questions & 28,719 \\
+ ~~* \textit{multi-choice} questions & 9,712 \\
+ \midrule
+ \# of different questions & 28,876 \\ 
+ \# of different answers & 6,153 \\ 
+ \# of different solutions & 35,442 \\ 
+ \midrule
+ \# of different tables & 37,644 \\
+ \# of tables with a title & 23,259 \\
+ \midrule
+ \# of table cells (Average/Max) & 12.9 / 54 \\
+ \# of table rows (Average/Max) & 5.9 / 11 \\
+ \# of table columns (Average/Max) & 2.2 / 6 \\
+ \midrule
+ Question length (Average/Max) & 22.1 / 92 \\
+ Answer length (Average/Max) & 1.1 / 27 \\ 
+ Solution length (Average/Max) & 49.5 / 350 \\ 
+ \bottomrule
+ \end{tabular}
+ \captionof{table}{Key statistics for \textsc{TabMWP}\xspace{}.}
+ \vspace{-5mm}
+ \label{tab:statistics}
+\end{wraptable}
+
+
+\textbf{Key statistics.} The \textsc{TabMWP}\xspace dataset contains 38,431 tabular math word problems, which are partitioned with 6:2:2 into the training, development, and test splits, corresponding to 23,059, 7,686, and 7,686 problems. Their main statistics are shown in Table \ref{tab:statistics}. 74.7\% of the questions in \textsc{TabMWP}\xspace belong to \textit{free-text} questions, while 25.3\% are \textit{multi-choice} questions. There are 28,876 different questions, 6,153 different answers, and 35,442 different solutions, indicating that \textsc{TabMWP}\xspace has a rich diversity in the problem distribution. The questions have an average of 22.1 words in length and solutions of 49.5, showing that they have lexical richness.
+
+One distinct characteristic of \textsc{TabMWP}\xspace is that each problem is accompanied by a tabular context, without which the problem would be unsolvable. There are 37,644 different tables in total, and 60.5\% of the tables have a title. The table has an average of 5.9 rows and 2.2 columns, which results in an average of 12.9 cells and a maximum of 54 cells. These statistics suggest that tables in \textsc{TabMWP}\xspace distribute diversely across semantics and layouts. 
+
+\textbf{Comparison to existing datasets.} As shown in Table \ref{tab:datasets}, \textsc{TabMWP}\xspace differs from related datasets in various aspects: (1) \textsc{TabMWP}\xspace is the first dataset to study math word problems over tabular context on open domains and is the largest in terms of data size; (2) Problems in \textsc{TabMWP}\xspace are annotated with the tabular context, unlike previous MWP datasets in the first segment; (3) Different from Table QA datasets like FinQA, TAT-QA, and MultiHiertt, a lack of either mathematical reasoning or the tabular context renders the problems in \textsc{TabMWP}\xspace unanswerable; (4) There are two question types in \textsc{TabMWP}\xspace, and the answer could be a text span, an integer number, or a decimal number; (5) Each problem is annotated with natural language solutions to reveal multi-hop reasoning steps.
+
+\begin{figure}[th!] 
+ \centering
+ \renewcommand\tabcolsep{4.0pt}
+ \resizebox{1.0\linewidth}{!}{
+ \begin{tabular}{p{2.8cm}rrcccccccccc} 
+ \toprule
+ \multirow{3}{*}{Dataset} & \multirow{3}{*}{Size} & \multirow{3}{*}{\#Table} & \multirow{2}{*}{Need} & \multirow{2}{*}{Need} & \multicolumn{2}{c}{Table Type} & \multicolumn{2}{c}{Question Type} & \multicolumn{3}{c}{Answer Type} & \multirow{2}{*}{Solution} \\
+ \cmidrule(lr){6-7} \cmidrule(lr){8-9} \cmidrule(lr){10-12} 
+ & & & Math? & Table? & Domain & Format & Free-text & MC & Text & Integer & Decimal & Type \\
+ \midrule
+Dolphin18K \citeyearpar{huang2016well} & 831 & \textcolor{red!50!black}{\ding{55}}~~~ & \textcolor{green!50!black}{\ding{51}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{green!50!black}{\ding{51}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{green!50!black}{\ding{51}} & \textcolor{green!50!black}{\ding{51}} & formula \\
+DRAW-1K \citeyearpar{upadhyay2017annotating} & 1,000 & \textcolor{red!50!black}{\ding{55}}~~~ & \textcolor{green!50!black}{\ding{51}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{green!50!black}{\ding{51}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{green!50!black}{\ding{51}} & \textcolor{green!50!black}{\ding{51}} & formula \\
+Math23K \citeyearpar{wang2017deep} & 23,162 & \textcolor{red!50!black}{\ding{55}}~~~ & \textcolor{green!50!black}{\ding{51}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{green!50!black}{\ding{51}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{green!50!black}{\ding{51}} & \textcolor{green!50!black}{\ding{51}} & formula \\
+MathQA \citeyearpar{amini2019mathqa} & 37,297 & \textcolor{red!50!black}{\ding{55}}~~~ & \textcolor{green!50!black}{\ding{51}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{green!50!black}{\ding{51}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{green!50!black}{\ding{51}} & \textcolor{green!50!black}{\ding{51}} & formula \\
+ASDiv \citeyearpar{miao2020diverse} & 2,305 & \textcolor{red!50!black}{\ding{55}}~~~ & \textcolor{green!50!black}{\ding{51}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{green!50!black}{\ding{51}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{green!50!black}{\ding{51}} & \textcolor{green!50!black}{\ding{51}} & \textcolor{green!50!black}{\ding{51}} & formula \\
+SVAMP \citeyearpar{patel2021nlp} & 1,000 & \textcolor{red!50!black}{\ding{55}}~~~ & \textcolor{green!50!black}{\ding{51}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{green!50!black}{\ding{51}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{green!50!black}{\ding{51}} & \textcolor{red!50!black}{\ding{55}} & formula \\
+GSM8K \citeyearpar{cobbe2021training} & 8,792 & \textcolor{red!50!black}{\ding{55}}~~~ & \textcolor{green!50!black}{\ding{51}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{green!50!black}{\ding{51}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{green!50!black}{\ding{51}} & \textcolor{red!50!black}{\ding{55}} & text \\
+IconQA \citeyearpar{lu2021iconqa} & \underline{107,439} & \textcolor{red!50!black}{\ding{55}}~~~ & \textcolor{green!50!black}{\ding{51}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{green!50!black}{\ding{51}} & \textcolor{green!50!black}{\ding{51}} & \textcolor{green!50!black}{\ding{51}} & \textcolor{green!50!black}{\ding{51}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{red!50!black}{\ding{55}} \\
+\midrule
+FinQA \citeyearpar{chen2021finqa} & 8,281 & 2,766 & \textcolor{green!50!black}{\ding{51}} & 76.6\% & finance & text & \textcolor{green!50!black}{\ding{51}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{green!50!black}{\ding{51}} & \textcolor{green!50!black}{\ding{51}} & program \\
+TAT-QA \citeyearpar{zhu2021tat} & 16,552 & 2,747 & 50.0\% & \textcolor{green!50!black}{\ding{51}} & finance & text & \textcolor{green!50!black}{\ding{51}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{green!50!black}{\ding{51}} & \textcolor{green!50!black}{\ding{51}} & \textcolor{red!50!black}{\ding{55}} \\
+MultiHiertt \citeyearpar{zhao2022multihiertt} & 10,440 & 9,843 & \textcolor{green!50!black}{\ding{51}} & 89.8\% & finance & text & \textcolor{green!50!black}{\ding{51}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{red!50!black}{\ding{55}} & \textcolor{green!50!black}{\ding{51}} & \textcolor{green!50!black}{\ding{51}} & \textcolor{red!50!black}{\ding{55}} \\
+\midrule
+\textbf{\textsc{TabMWP}\xspace{} (ours)} & \textbf{38,431} & \textbf{37,644} & \textcolor{green!50!black}{\ding{51}} & \textcolor{green!50!black}{\ding{51}} & \textbf{open} & \textbf{text*} & \textcolor{green!50!black}{\ding{51}} & \textcolor{green!50!black}{\ding{51}} & \textcolor{green!50!black}{\ding{51}} & \textcolor{green!50!black}{\ding{51}} & \textcolor{green!50!black}{\ding{51}} & \textbf{text}\\
+\bottomrule
+ \end{tabular}
+ }
+ \captionof{table}{A comparison of MWP and Table QA datasets that require numerical reasoning. \textit{text*}: each table in \textsc{TabMWP}\xspace{} is accompanied by an image format.}
+ \vspace{-2mm}
+ \label{tab:datasets}
+\end{figure}
+
+
+
+
+\section{Methods}
+
+\subsection{Few-shot GPT-3 for \textsc{TabMWP}\xspace{}}
+
+Provided with a few in-context examples of math word problems as the context, GPT-3 can generate the answer for a test problem, and show impressive performance across different MWP datasets \citep{wei2022chain,wang2022self}. Inspired by its success, we first build a strong baseline using few-shot GPT-3 on our \textsc{TabMWP}\xspace{} dataset. Specifically, a few training examples, along with the test example $p_i$, are provided to GPT-3 for the answer prediction. Each training example consists of a table context $t$, a question $q$, options $c$ that apply, and an answer $a$. To make the few-shot GPT-3 model workable on \textsc{TabMWP}\xspace{}, we utilize the semi-structured format as the tabular context. Following \cite{wei2022chain}, a solution $s$ can be augmented in front of the answer $a$ to reveal the multi-step reasoning process, which is able to boost the prediction performance.
+
+\subsection{Dynamic Prompting via Policy Gradient} 
+The in-context examples can be randomly \citep{wei2022chain, wang2022self} or retrieval-based selected \citep{liu2022makes} from the training set. Recent research, however, has shown that few-shot GPT-3 can be highly unstable across different selections of in-context examples and permutations of those examples \citep{zhao2021calibrate, liu2022makes, lu2022fantastically}. This instability may be more severe on \textsc{TabMWP}\xspace{}, where examples are more distinct because they include both unstructured questions of various types and semi-structured tables in various layouts. To alleviate this issue, we aim to propose a novel approach that can learn to select performing in-context examples using a policy gradient strategy, without brute-force searching or manually designed heuristics.
+
+Formally, given a \textsc{TabMWP}\xspace{} problem $p_i$, we want the agent to find $K$ in-context examples $e_i = \{e_i^1, e_i^2,...,e_i^K\}$ from a candidate pool $E_{\text{cand}}$, and generate the answer $\hat{a}_i$, maximizing a reward $r_i =  R(\hat{a}_i | p_i)$. 
+The in-context examples are selected according to a policy
+\begin{equation}
+ e_i^k \sim \pi_{\theta}(e_i|p_i), ~e_i^k \in E_{\text{cand}}, e_i^k ~\text{are independent for} ~k=\{1,2,...,K\},
+\end{equation}
+where $\theta$ are the policy's parameters. The answer is generated through: $\hat{a}_i = \text{GPT-3}(e_i, p_i)$ using the selected examples and the given problem as the input prompt. The reward is then computed by evaluating the generated answer $\hat{a}_i$ with respect to the ground truth answer $a_i$:
+\begin{equation}
+ r_i = R(\hat{a}_i | p_i) = \textsc{Eval}(\hat{a}_i, a_i), ~r_i \in \{-1, 1\}.
+\end{equation}
+The function $\textsc{Eval}()$ returns a reward of $1$ if the generated answer aligned with the label and $-1$ otherwise. 
+Our goal is to maximize the expected reward of the generated answer under the policy $\mathbb{E}_{e_i \sim \pi_{\theta}(e_i|p_i)}[R(\text{GPT-3}(e_i,p_i))]$. 
+We optimize the reward with respect to the parameters of the policy network using the Policy Gradient method~\citep{sutton1998introduction}. The expected reward cannot be computed in closed form, so we compute an unbiased estimation with Monte Carlo Sampling,
+\begin{equation}
+ \mathbb{E}_{e_i \sim \pi_{\theta}(e_i|p_i)}\left[R(\text{GPT-3}(e_i,p_i))\right] \approx \frac{1}{N}\sum_{i=1}^{N}R(\text{GPT-3}(e_i,p_i)), ~e_i \sim \pi_{\theta}(e_i|p_i),
+\end{equation}
+where $N$ is the size of each batch yielded from our training problem set $P_{\text{train}}$. In this work, we experiment using the REINFORCE policy gradient algorithm~\citep{williams1992simple}:
+\begin{equation}
+\fontsize{9.5pt}{\baselineskip}\selectfont
+\begin{aligned}
+ \nabla \mathbb{E}_{e_i \sim \pi_{\theta}(e_i|p_i)}\left[R(\text{GPT-3}(e_i,p_i))\right] &= \mathbb{E}_{e_i \sim \pi_{\theta}(e_i|p_i)} \nabla_{\theta}\log(\pi_{\theta}(e_i|p_i))R(\text{GPT-3}(e_i,p_i)) \\
+ &\approx \frac{1}{N}\sum_{i=1}^N\nabla_{\theta}\log(\pi_{\theta}(e_i|p_i))R(\text{GPT-3}(e_i,p_i)), ~e_i \sim \pi_{\theta}(e_i|p_i).
+\end{aligned}
+\end{equation}
+Intuitively, if the predicted answer is correct, we update the policy so that the probability of selecting the same prompts gets higher. Otherwise, we update the policy to reduce the probability of selecting such less matched examples. The learning process is summarized in Algorithm \ref{alg:policy} in the appendix. 
+
+To get the contextualized representation of the given problem and candidate examples, we use the BERT~\citep{devlin2018bert} \texttt{[CLS]} token representation as the problem encoding. We add a small linear layer on top of the BERT final pooling layer. That allows our model to learn both the semantic similarity that the pre-trained BERT model provides and the hidden logical similarity shared among the math problems. During training, the parameters of BERT are fixed and only the appended linear layer is updated, i.e., $\theta$ is composed of the learnable parameters $\mathbf{W}$ and $\mathbf{b}$:
+\begin{equation}
+ \begin{aligned}
+  \mathbf{h}(e_i) &= \mathbf{W}(\textsc{BERT}(e_i)) + \mathbf{b}, \\
+  \mathbf{h}(p_i) &= \mathbf{W}(\textsc{BERT}(p_i)) + \mathbf{b}, \\
+  \pi_{\theta}(e_i|p_i) &= \frac{\exp{[\mathbf{h}(e_i) \cdot \mathbf{h}(p_i)}]}{\sum_{e_i' \in E_{\text{cand}}} \exp{[\mathbf{h}(e_i') \cdot \mathbf{h}(p_i)}]}.
+ \end{aligned}
+\end{equation}
+
+
+\section{Experiments}
+
+\subsection{Experimental Settings}
+
+\textbf{Baselines.} We first develop two large language models, UnifiedQA \citep{khashabi2020unifiedqa} and TAPEX \citep{liu2022tapex}, in both pre-trained and fine-tuned settings, as strong baselines on \textsc{TabMWP}\xspace. Different model sizes are included to examine the performance across different model capacities. We further implement the zero-shot GPT-3 model, the few-shot GPT-3 model, and their chain-of-thought (CoT) reasoning variants \citep{wei2022chain}. We also study the heuristic guess baseline and human performance to analyze the lower and upper bounds on \textsc{TabMWP}\xspace, respectively. 
+
+\textbf{Evaluation metric.} The answer part is extracted from the GPT-3 generation using manually designed regular regressions. To evaluate the baselines and our method, we utilize the accuracy metric to determine if the generated answer is correct given the ground truth answer. For \textit{free-text} problems where the answer is set as a number, we normalize the prediction and the label to decimal numbers with two-digit precision and check if their values are equivalent. For \textit{multi-choice} problems, we choose the most similar one from options to the generated answer following \cite{khashabi2020unifiedqa}. 
+
+\textbf{Implementation details.} 
+Fine-tuned UnifiedQA and TAPEX baselines are trained on the train split and evaluated on the test split. Few-shot GPT-3 and few-shot-CoT GPT-3 randomly select two in-context examples from the training data to build the prompt. Our \textsc{PromptPG}\xspace is built on top of few-shot GPT-3 with a different selection strategy: (a) in the training stage, the agent learns to select two examples from 20 candidates and is evaluated on 160 training examples to calculate the reward; (b) in the test stage, the agent with an optimal policy chooses two examples from 20 candidates for each test example. The candidates are randomly selected from the training set. Experiments for two few-shot GPT-3 baselines and our \textsc{PromptPG}\xspace are repeated three times, and the average accuracy is reported in Table \ref{tab:results}. More implementation details can be found in Appendix \ref{appx:details}.
+
+\subsection{Experimental Results}
+
+Table~\ref{tab:results} demonstrates the results of different baselines and our method on the \textsc{TabMWP}\xspace{} dataset. Benefiting from pre-training on the tabular corpus, the TAPEX baseline performs better on average than UnifiedQA with a similar model size, which is only pre-trained on unstructured textual data. Increasing the model size can improve the prediction accuracy for both UnifiedQA and TAPEX. Fine-tuned on \textsc{TabMWP}\xspace{}, the baseline models can significantly improve the prediction performance on the average and all aggregated accuracy metrics.
+
+
+\begin{figure}[t!] 
+ \centering
+ \renewcommand\tabcolsep{3.9pt}
+\renewcommand1.5{1.1}
+ \resizebox{1.0\linewidth}{!}{
+ \begin{tabular}{lcccccccccccl} 
+ \toprule
+ \multirow{3}{*}{\textbf{Method}} & 
+ \multirow{2}{*}{\textbf{Training}} & 
+ \multirow{2}{*}{\textbf{Selection}} & 
+ \multicolumn{2}{c}{\textbf{Question Types}} & \multicolumn{5}{c}{\textbf{Answer Types}} &
+ \multicolumn{2}{c}{\textbf{Grades}} &
+ \multirow{3}{*}{\textbf{~Avg.}} \\
+ \cmidrule(lr){4-5} \cmidrule(lr){6-10} \cmidrule(lr){11-12} 
+ & \textbf{Data} & \textbf{Strategy} & FREE & MC & INT & DEC & EXTR & BOOL & OTH & 1-6 & 7-8 & \\
+ \midrule
+ \rowcolor[rgb]{0.93,0.93,0.93} 
+ \multicolumn{13}{l}{\textit{Heuristic Baselines}} \\
+ Heuristic guess & - & - & 6.71 & 39.81 & 8.37 & 0.26 & 30.80 & 51.22 & 26.67 & 17.55 & 12.27 & 15.29 \\
+ Human performance & - & - & \underline{84.61} & \underline{93.32} & \underline{84.95} & \underline{83.29} & \underline{97.18} & \underline{88.69} & \underline{96.20} & \underline{94.27} & \underline{81.28} & \underline{90.22} \\
+ \rowcolor[rgb]{0.93,0.93,0.93} 
+ \multicolumn{13}{l}{\textit{pre-trained Baselines}} \\
+ UnifiedQA$_{\textsc{Small}}$ & - & - & 1.18 & 43.62 & 1.37 & 0.43 & 38.70 & 49.78 & 37.14 & 15.57 & 7.65 & 12.18 \\
+ UnifiedQA$_{\textsc{Base}}$ & - & - & 4.60 & 43.02 & 5.28 & 1.97 & 37.08 & 50.11 & 38.10 & 17.14 & 11.11 & 14.56 \\
+ UnifiedQA$_{\textsc{Large}}$ & - & - & 4.48 & \underline{48.80} & 5.19 & 1.72 & \underline{48.33} & \underline{50.33} & \underline{40.00} & 19.78 & 10.87 & 15.96 \\
+ TAPEX$_{\textsc{Base}}$ & - & - & 7.32 & 39.76 & 8.68 & \underline{2.06} & 35.06 & 47.11 & 20.95 & 18.67 & 11.81 & 15.73 \\
+ TAPEX$_{\textsc{Large}}$ & - & - & \underline{8.80} & 46.59 & \underline{10.62} & 1.72 & 46.91 & 48.11 & 30.48 & \underline{22.65} & \underline{13.18} & \underline{18.59} \\
+ \rowcolor[rgb]{0.93,0.93,0.93} 
+ \multicolumn{13}{l}{\textit{fine-tuned Baselines}} \\
+ UnifiedQA$_{\textsc{Small}}$ & 7,686 & - & 22.27 & 51.31 & 27.27 & 2.83 & 52.28 & 48.11 & 69.52 & 35.85 & 21.71 & 29.79 \\
+ UnifiedQA$_{\textsc{Base}}$ & 7,686 & - & 34.02 & 70.68 & 40.74 & 7.90 & 84.09 & 55.67 & 73.33 & 53.31 & 30.46 & 43.52 \\
+ UnifiedQA$_{\textsc{Large}}$ & 7,686 & - & 48.67 & \underline{82.18} & 55.97 & \underline{20.26} & 94.63 & \underline{68.89} & \underline{79.05} & 65.92 & 45.92 & 57.35 \\
+ TAPEX$_{\textsc{Base}}$ & 7,686 & - & 39.59 & 73.09 & 46.85 & 11.33 & 84.19 & 61.33 & 69.52 & 56.70 & 37.02 & 48.27 \\
+ TAPEX$_{\textsc{Large}}$ & 7,686 & - & \underline{51.00} & 80.02 & \underline{59.92} & 16.31 & \textbf{95.34} & 64.00 & 73.33 & \underline{67.11} & \underline{47.07} & \underline{58.52} \\
+ \rowcolor[rgb]{0.93,0.93,0.93} 
+ \multicolumn{13}{l}{\textit{Prompting Baselines w/ GPT-3}} \\
+ Zero-shot & - & - & 53.57 & 66.67 & 55.55 & 45.84 & 78.22 & 55.44 & 54.29 & 63.37 & 48.41 & 56.96 \\
+ Zero-shot-CoT & - & - & 54.36 & 66.92 & 55.82 & 48.67 & \underline{78.82} & 55.67 & 51.43 & 63.62 & 49.59 & 57.61 \\
+ Few-shot (2-shot) & 2 & Random & 54.69 & 64.11 & 58.36 & 40.40 & 75.95 & 52.41 & 53.02 & 63.10 & 49.16 & 57.13 \\
+ Few-shot-CoT (2-shot) & 2 & Random & \underline{60.76} & \underline{69.09} & \underline{60.04} & \underline{63.58} & 76.49 & \underline{61.19} & \textbf{67.30} & \underline{68.62} & \underline{55.31} & \underline{62.92} \\
+ \rowcolor[rgb]{0.93,0.93,0.93} 
+ \multicolumn{13}{l}{\textit{\textbf{\textsc{PromptPG}\xspace w/ GPT-3 (Ours)}}} \\
+ Few-shot-CoT (2-shot) & 160+20 & Dynamic & \textbf{66.17} & \textbf{74.11} & \textbf{64.12} & \textbf{74.16} & 76.19 & \textbf{72.81} & 65.71 & \textbf{71.20} & \textbf{64.27} & \textbf{68.23}$_{5.31\uparrow}$ \\
+ \bottomrule 
+ \end{tabular}
+ }
+ \captionof{table}{Evaluation results of various baselines and our method on \textsc{TabMWP}\xspace{}. Training Data: number of used training data; Selection Strategy: strategy of selecting in-context examples for few-shot GPT-3; FREE: \textit{free-text} questions; MC: \textit{multi-choice} questions; INT: integer answers; DEC: decimal answers; EXTR: extractive text answers; BOOL: Boolean text answers; OTH: other text answers.}
+ \vspace{-2mm}
+ \label{tab:results}
+\end{figure}
+
+
+Without any example provided to GPT-3, zero-shot GPT-3 achieves a comparable accuracy as the best fine-tuned baselines UnifiedQA$_{\textsc{Large}}$ and TAPEX$_{\textsc{Large}}$, showing its surprisingly good generalization ability on \textsc{TabMWP}\xspace. Provided with two randomly sampled in-context examples as the prompt, few-shot GPT-3 gets an improvement of 0.17\%. Generating the multi-step solution before the answer, the few-shot-CoT GPT-3 model reports the best performance among all of these baseline models, with an accuracy of 62.92\%.
+Unlike few-shot-CoT GPT-3 randomly selecting the in-context examples, our proposed \textsc{PromptPG}\xspace learns to select performing examples with the help of policy gradient. \textsc{PromptPG}\xspace establishes a state-of-the-art performance on the \textsc{TabMWP}\xspace{} dataset: it surpasses the best baseline few-shot-CoT GPT-3 by 5.31\% on average. \textsc{PromptPG}\xspace shows its consistent advantages on two question types, two grade groups, and most of the answer types. 
+
+\textbf{Heuristic guess and human performance.} 
+The accuracy of \textit{multi-choice} questions by heuristic guess is 39.81\%, which aligns with the fact that there are 2.88 options on average. The accuracy for \textit{free-text} questions is considerably low since the inputs of \textsc{TabMWP}\xspace problems do not have direct clues for the answers. Humans outperform all benchmarks consistently across question types, answer types, and grade groups, with a 21.99\% average accuracy advantage over our best performing \textsc{PromptPG}\xspace. This gap is to be filled by future research on semi-structured mathematical reasoning.
+
+\textbf{Problem types and difficulty.} 
+Among all the baselines, we find it is easier for models to answer \textit{multi-choice} questions than \textit{free-text} questions. Questions with the boolean (BOOL) and other (OTH) answer types tend to have lower accuracy scores than the extractive (EXTR) answer type, because the former ones need the abilities of fact verification and language understanding on diverse options, respectively. It is also not surprising for us to find that all the models perform worse on problems in grades 7-8 than in a lower-level group of 1-6.
+
+\subsection{Ablation Study}
+Here, we will study how different factors have an effect on the performances of baselines and our method on \textsc{TabMWP}\xspace{}. Experiments are conducted on 1,000 development examples.
+
+\textbf{Blind study of the dataset.} We evaluate the information gain of each component of the \textsc{TabMWP}\xspace problems by removing it from model inputs. To eliminate the impact and variance caused by example selection, the study is conducted using the zero-shot GPT-3 model. As shown in Table \ref{tab:blind}, there is a dramatic decline when either the tabular context (T) or the question text (Q) is missing from the inputs. For example, T$\rightarrow$A and Q$\rightarrow$A only attain an average accuracy of 6.10\% and 7.00\%, respectively, and their accuracies are near to zero on the \textit{multi-choice} questions. Taking both tabular and textual data as inputs (TQ$\rightarrow$A), the model significantly beats the heuristic guess. With the complete input information (TQ(C)$\rightarrow$A), the full model achieves the best performance. The blind study shows that our \textsc{TabMWP}\xspace{} is robust and reliable in distribution, and all input components are indispensable parts that provide necessary information for answering the questions.
+
+
+\begin{figure}[h!] 
+ \centering
+ \small
+ \renewcommand\tabcolsep{4.0pt}
+ \resizebox{1.0\linewidth}{!}{
+ \begin{tabular}{lcccccccccccc} 
+ \toprule
+ \textbf{Model} & \textbf{Format} & FREE & MC & INT & DEC & EXTR & BOOL & OTH & 1-6 & 7-8 & \textbf{Avg.} \\
+ \midrule
+ Heuristic guess & TQ(C)$\rightarrow$A & 7.31 & 40.36 & 9.20 & 0.00 & 34.44 & 47.32 & 50.00 & 17.99 & 13.96 & 16.40 \\
+ \midrule
+ Zero-shot GPT-3 & T$\rightarrow$A & 8.28 & 0.36 & 10.24 & 0.67 & 0.66 & 0.00 & 0.00 & 9.41 & 1.02 & 6.10 \\
+ Zero-shot GPT-3 & Q$\rightarrow$A & 9.24 & 1.09 & 10.94 & 2.68 & 1.32 & 0.89 & 0.00 & 10.23 & 2.03 & 7.00 \\
+ Zero-shot GPT-3 & T(C)$\rightarrow$A & 8.28 & 41.82 & 10.24 & 0.67 & 36.42 & 50.89 & 25.00 & 23.60 & 8.12 & 17.50 \\
+ Zero-shot GPT-3 & Q(C)$\rightarrow$A & 9.10 & 33.09 & 10.94 & 2.01 & 25.17 & 44.64 & 25.00 & 21.29 & 7.11 & 15.70 \\
+ Zero-shot GPT-3 & TQ$\rightarrow$A & 55.31 & 68.36 & 56.60 & 50.34 & 79.47 & 54.46 & 58.33 & 66.34 & 47.46 & 58.90 \\
+ Zero-shot GPT-3 (full model) & TQ(C)$\rightarrow$A & 54.76 & 72.00 & 56.42 & 48.32 & 76.82 & 66.07 & 66.67 & 67.00 & 47.97 & 59.50 \\
+ \bottomrule 
+ \end{tabular}
+ }
+\captionof{table}{Blind studies on \textsc{TabMWP}\xspace{}. T: tabular context; Q: question; C: choice options; A: answer.}
+ \label{tab:blind}
+\end{figure}
+
+
+
+\begin{figure}[ht] 
+ \begin{minipage}{0.48\textwidth} 
+ \vspace{-2mm}
+ \centering
+ \includegraphics[width=0.85\textwidth]{figures/fig_acc_diff_train_num.pdf}
+ \caption*{(a) Accuracy w.r.t. different numbers of training examples, given 20 candidate examples.} 
+ \end{minipage}
+ \hfill
+ \begin{minipage}{0.48\textwidth} 
+ \centering
+ \includegraphics[width=0.85\textwidth]{figures/fig_acc_diff_cand_num_font16.pdf}
+ \caption*{(b) Accuracy w.r.t. different numbers of candidates, given 80 and 160 training examples.}
+ \end{minipage}
+ \vspace{-2mm}
+ \caption{Accuracy w.r.t. different numbers of training and candidate examples. Experiments are conducted on 1,000 development instances, and each setting is repeated with four random seeds.}
+ \vspace{-2mm}
+\label{fig:ablation}
+\end{figure}
+
+\textbf{Number of training examples.}
+We study the effect of different numbers of training examples on our dynamic prompt learning in Figure~\ref{fig:ablation} (a). With more training examples, the prediction accuracy first gradually increases to a peak of around 160 training examples. After that, the accuracy goes down with a growing variance. We reckon it is because the policy gradient algorithm can benefit from the scaling-up training data but fails to exploit more examples efficiently.
+
+\textbf{Number of candidate examples.}
+In Figure~\ref{fig:ablation} (b), we investigate how different numbers of candidate examples can affect policy learning performance. With the increasing candidate number, it is observed that the prediction accuracy will first go up and then go down after a threshold, given 80 or 160 training examples. It is probably because when the candidate pool is too small, the policy gradient algorithm has a limited action space to explore enough problem types. In contrast, too many candidates could make the algorithm hard to learn an optimal policy in a large search space.
+
+\begin{wraptable}{r}{0.44\textwidth}
+\vspace{-3.0mm}
+\centering
+\fontsize{9.0pt}{\baselineskip}\selectfont
+\renewcommand\tabcolsep{3.0pt}
+\renewcommand1.5{0.88}
+\begin{tabular}{lc} 
+\toprule
+\textbf{Selection strategy} & \textbf{Acc. (\%)} \\ 
+\midrule
+Same question type & 66.2 $\pm$ 0.60 \\
+Same answer type & 67.9 $\pm$ 0.38 \\
+Same grade level & 67.9 $\pm$ 1.87 \\
+\midrule
+Most complex (\# of table cells) & 64.0 $\pm$ 0.42 \\
+Most complex (\# of ques. words) & 68.2 $\pm$ 0.26 \\
+\midrule
+Random selection & 65.2 $\pm$ 4.01 \\
+Nearest neighbor & 68.2 $\pm$ 0.29 \\
+\midrule
+\textbf{\textsc{PromptPG}\xspace (Ours}) & \textbf{70.9 $\pm$ 1.27}\\
+\bottomrule
+\end{tabular}
+\vspace{-2mm}
+\caption{Evaluation results w.r.t. different strategies for selecting in-context examples.}
+\label{tab:selection}
+\vspace{-2mm}
+\end{wraptable}
+
+\textbf{Different selection strategies.} In Table~\ref{tab:selection}, we compare the proposed \textsc{PromptPG}\xspace with random selection and other heuristic-based example selection strategies for the few-shot-CoT GPT-3 model. Compared to random selection, selecting the same question or answer type of examples helps the model to take the task-relevant examples as the prompt, thus improving the accuracy and reducing the variance. Choosing the most complex examples does not boost the prediction performance consistently. The most semantically similar examples, as a kind of nearest neighbor search of the test example, help construct the performing and stable prompt for GPT-3. \textsc{PromptPG}\xspace shows its effectiveness in selecting optimal in-context examples over other strategies and largely reduces the instability caused by randomness.
+
+\subsection{Case Study}
+We conduct the case study in Appendix \ref{appx:case_study}. We visualize the two in-context examples selected by strategies of our \textsc{PromptPG}\xspace, nearest neighbor search, and random selection, in Figure \ref{fig:selected_exp_promptpg}, \ref{fig:selected_exp_nearest}, and \ref{fig:selected_exp_random}, respectively. The nearest neighbor search strategy selects the ``superficially'' similar examples to the test example. Instead, \textsc{PromptPG}\xspace tends to select examples that have multiple reasoning steps in the solution and similar abilities in mathematical reasoning, which results in higher prediction accuracy. Successful examples in Figure \ref{fig:accurate_1} - \ref{fig:accurate_5} show that \textsc{PromptPG}\xspace is able to generate reasonable reasoning steps to predict correct answers for a wide range of \textsc{TabMWP}\xspace problems. Failure examples in Figure \ref{fig:wrong_1} - \ref{fig:wrong_6} suggest that \textsc{PromptPG}\xspace has limitations when solving problems provided with complex tabular contexts or requiring a high-level ability of mathematical reasoning.
+
+\section{Related Work}
+
+\subsection{Math Word Problems}
+
+The task of solving Math Word Problems (MWPs) is to predict the answer given a natural language description of a math problem. There have been great efforts in developing datasets for MWPs, including Dolphin18K \citep{huang2016well}, DRAW-1K \citep{upadhyay2017annotating}, Math23K \citep{wang2017deep}, MathQA \citep{amini2019mathqa}, ASDiv \citep{miao2020diverse}, and SVAMP \citep{patel2021nlp}. However, these datasets only involve the textual modality, and most are limited to a small data scale. Some recent datasets like DVQA \citep{kafle2018dvqa}, Geometry3K \citep{lu2021inter} and IconQA \citep{lu2021iconqa} introduce math problems with diagrams as the visual context, where the system needs to perform mathematical reasoning over multi-modal information. To the best of our knowledge, our dataset \textsc{TabMWP}\xspace is the first dataset that requires mathematical reasoning over heterogeneous information from both the textual question and the tabular context. To solve MWPs, one popular line of previous methods is to generate the intermediate expressions and execute them to get the final answers \citep{huang2017learning,roy2017unit,amini2019mathqa}. Inspired by the recent progress achieved by GPT-3 in solving MWPs \citep{wei2022chain,wang2022self,kojima2022large}, we evaluate \textsc{TabMWP}\xspace using GPT-3 models in zero-shot and few-shot learning manners.
+
+\subsection{Table QA Datasets}
+Table Question Answering (Table QA) refers to the task of answering questions about tabular data. Numerous datasets have been developed for Table QA. For example, TabMCQ \citep{jauhar2016tabmcq} is an early dataset collected from grade exams. Datasets like WTQ \citep{pasupat2015compositional}, WikiSQL \citep{zhong2017seq2sql}, and SQA \citep{iyyer2017search} contain semi-structured tables from Wikipedia, while Spider \citep{yu2018spider} collects structured tables sourced from databases. Recent work aims at introducing datasets that require multi-hop reasoning between the textual and tabular data: HybridQA \citep{chen2020hybridqa}, OTTQA \citep{chen2020open}, MultiModalQA \citep{talmor2020multimodalqa}, AIT-QA \citep{katsis2021ait}, and FeTaQA \citep{nan2022fetaqa}. Datasets most related to our \textsc{TabMWP}\xspace{} dataset are FinQA \citep{chen2021finqa}, TAT-QA \citep{zhu2021tat}, and MultiHiertt \citep{zhao2022multihiertt} because they need numerical reasoning on financial reports with tabular data. Note that 77.6\% of questions in TAT-QA can be solvable without mathematical reasoning and 50.0\% of questions in FinQA are not table-must to be answered. In contrast, our proposed \textsc{TabMWP}\xspace collects questions where both mathematical reasoning and tabular context are necessary.
+
+
+\subsection{Prompt Learning for Language Models}
+
+Large pre-trained language models, such as GPT-3 \citep{chen2020big}, have shown their remarkable ability of few-shot learning on a wide range of downstream tasks \citep{houlsby2019parameter,brown2020language,lu2022learn}. Given a few in-context examples as demonstrations, GPT-3 can generalize to unseen test examples without parameter updating. For example, \cite{wei2022chain} randomly select different in-context examples from the training set and formulate their corresponding prompt with a test sample. However, recent studies show that few-shot GPT-3 highly depends on the selection of in-context examples and could be unstable, varying from the near chance to near state-of-the-art performance \citep{zhao2021calibrate,liu2022makes}. To mitigate the volatility of selecting in-context examples, \cite{lu2022fantastically} propose retrieving relevant examples that are semantically similar to 
+the test sample. Other possible strategies could be using brute-force permutation search or relying on manually designed heuristics like choosing the most complex examples. Inspired by reinforcement learning's ability to search for an optimal action policy, we propose applying the policy gradient strategy \citep{sutton1998introduction} to learn to select in-context examples more efficiently and stably without designing human-designed heuristics.
+
+
+\section{Conclusion}
+In this paper, we propose \textsc{TabMWP}\xspace{}, the first large-scale dataset for math word problems in tabular contexts. \textsc{TabMWP}\xspace{} contains 38,431 open-domain problems with two question types and three answer types, and each problem is annotated with a multi-step solution. We evaluate \textsc{TabMWP}\xspace{} using state-of-the-art QA and TableQA methods in both pre-trained and fine-tuned settings, as well as the large pre-trained language model GPT-3. We further propose a novel approach, \textsc{PromptPG}\xspace, for few-shot GPT-3, which utilizes policy gradient to learn to select in-context examples from the training data and construct the performing prompt for the test example. Experimental results show that \textsc{PromptPG}\xspace outperforms existing strong baselines by a large margin of 5.31\% and reduces the accuracy volatility compared to random selection. To the best of our knowledge, it is the first work that applies reinforcement learning to select in-context examples for the few-shot GPT-3 model.
+
+
+\section{Acknowledge}
+
+We would like to thank Zhou Yu and Jiuxiang Gu for insightful discussions on dataset collection. We thank Chenhao Mu and Yao Fu for constructive suggestions in developing baselines and experiments. The work does not relate to Liang Qiu's position at Amazon Alexa.
+
+
+
+
+
+\section{Submission of conference papers to ICLR 2023}
+
+ICLR requires electronic submissions, processed by
+\url{https://openreview.net/}. See ICLR's website for more instructions.
+
+If your paper is ultimately accepted, the statement {\tt
+  {\textbackslash}iclrfinalcopy} should be inserted to adjust the
+format to the camera ready requirements.
+
+The format for the submissions is a variant of the NeurIPS format.
+Please read carefully the instructions below, and follow them
+faithfully.
+
+\subsection{Style}
+
+Papers to be submitted to ICLR 2023 must be prepared according to the
+instructions presented here.
+
+
+Authors are required to use the ICLR \LaTeX{} style files obtainable at the
+ICLR website. Please make sure you use the current files and
+not previous versions. Tweaking the style files may be grounds for rejection.
+
+\subsection{Retrieval of style files}
+
+The style files for ICLR and other conference information are available online at:
+\begin{center}
+   \url{http://www.iclr.cc/}
+\end{center}
+The file \verb+iclr2023_conference.pdf+ contains these
+instructions and illustrates the
+various formatting requirements your ICLR paper must satisfy.
+Submissions must be made using \LaTeX{} and the style files
+\verb+iclr2023_conference.sty+ and \verb+iclr2023_conference.bst+ (to be used with \LaTeX{}2e). The file
+\verb+iclr2023_conference.tex+ may be used as a ``shell'' for writing your paper. All you
+have to do is replace the author, title, abstract, and text of the paper with
+your own.
+
+The formatting instructions contained in these style files are summarized in
+sections \ref{gen_inst}, \ref{headings}, and \ref{others} below.
+
+\section{General formatting instructions}
+\label{gen_inst}
+
+The text must be confined within a rectangle 5.5~inches (33~picas) wide and
+9~inches (54~picas) long. The left margin is 1.5~inch (9~picas).
+Use 10~point type with a vertical spacing of 11~points. Times New Roman is the
+preferred typeface throughout. Paragraphs are separated by 1/2~line space,
+with no indentation.
+
+Paper title is 17~point, in small caps and left-aligned.
+All pages should start at 1~inch (6~picas) from the top of the page.
+
+Authors' names are
+set in boldface, and each name is placed above its corresponding
+address. The lead author's name is to be listed first, and
+the co-authors' names are set to follow. Authors sharing the
+same address can be on the same line.
+
+Please pay special attention to the instructions in section \ref{others}
+regarding figures, tables, acknowledgments, and references.
+
+
+There will be a strict upper limit of 9 pages for the main text of the initial submission, with unlimited additional pages for citations. 
+
+\section{Headings: first level}
+\label{headings}
+
+First level headings are in small caps,
+flush left and in point size 12. One line space before the first level
+heading and 1/2~line space after the first level heading.
+
+\subsection{Headings: second level}
+
+Second level headings are in small caps,
+flush left and in point size 10. One line space before the second level
+heading and 1/2~line space after the second level heading.
+
+\subsubsection{Headings: third level}
+
+Third level headings are in small caps,
+flush left and in point size 10. One line space before the third level
+heading and 1/2~line space after the third level heading.
+
+\section{Citations, figures, tables, references}
+\label{others}
+
+These instructions apply to everyone, regardless of the formatter being used.
+
+\subsection{Citations within the text}
+
+Citations within the text should be based on the \texttt{natbib} package
+and include the authors' last names and year (with the ``et~al.'' construct
+for more than two authors). When the authors or the publication are
+included in the sentence, the citation should not be in parenthesis using \verb|\citet{}| (as
+in ``See \citet{Hinton06} for more information.''). Otherwise, the citation
+should be in parenthesis using \verb|\citep{}| (as in ``Deep learning shows promise to make progress
+towards AI~\citep{Bengio+chapter2007}.'').
+
+The corresponding references are to be listed in alphabetical order of
+authors, in the \textsc{References} section. As to the format of the
+references themselves, any style is acceptable as long as it is used
+consistently.
+
+\subsection{Footnotes}
+
+Indicate footnotes with a number\footnote{Sample of the first footnote} in the
+text. Place the footnotes at the bottom of the page on which they appear.
+Precede the footnote with a horizontal rule of 2~inches
+(12~picas).\footnote{Sample of the second footnote}
+
+\subsection{Figures}
+
+All artwork must be neat, clean, and legible. Lines should be dark
+enough for purposes of reproduction; art work should not be
+hand-drawn. The figure number and caption always appear after the
+figure. Place one line space before the figure caption, and one line
+space after the figure. The figure caption is lower case (except for
+first word and proper nouns); figures are numbered consecutively.
+
+Make sure the figure caption does not get separated from the figure.
+Leave sufficient space to avoid splitting the figure and figure caption.
+
+You may use color figures.
+However, it is best for the
+figure captions and the paper body to make sense if the paper is printed
+either in black/white or in color.
+\begin{figure}[h]
+\begin{center}
+\fbox{\rule[-.5cm]{0cm}{4cm} \rule[-.5cm]{4cm}{0cm}}
+\end{center}
+\caption{Sample figure caption.}
+\end{figure}
+
+\subsection{Tables}
+
+All tables must be centered, neat, clean and legible. Do not use hand-drawn
+tables. The table number and title always appear before the table. See
+Table~\ref{sample-table}.
+
+Place one line space before the table title, one line space after the table
+title, and one line space after the table. The table title must be lower case
+(except for first word and proper nouns); tables are numbered consecutively.
+
+\begin{table}[t]
+\caption{Sample table title}
+\label{sample-table}
+\begin{center}
+\begin{tabular}{ll}
+\multicolumn{1}{c}{\bf PART}  &\multicolumn{1}{c}{\bf DESCRIPTION}
+\\ \hline \\
+Dendrite         &Input terminal \\
+Axon             &Output terminal \\
+Soma             &Cell body (contains cell nucleus) \\
+\end{tabular}
+\end{center}
+\end{table}
+
+\section{Default Notation}
+
+In an attempt to encourage standardized notation, we have included the
+notation file from the textbook, \textit{Deep Learning}
+\cite{goodfellow2016deep} available at
+\url{https://github.com/goodfeli/dlbook_notation/}.  Use of this style
+is not required and can be disabled by commenting out
+\texttt{math\_commands.tex}.
+
+
+\centerline{\bf Numbers and Arrays}
+\bgroup
+\def1.5{1.5}
+\begin{tabular}{p{1in}p{3.25in}}
+$\displaystyle a$ & A scalar (integer or real)\\
+$\displaystyle {\bm{a}}$ & A vector\\
+$\displaystyle {\bm{A}}$ & A matrix\\
+$\displaystyle {\tens{A}}$ & A tensor\\
+$\displaystyle {\bm{I}}_n$ & Identity matrix with $n$ rows and $n$ columns\\
+$\displaystyle {\bm{I}}$ & Identity matrix with dimensionality implied by context\\
+$\displaystyle {\bm{e}}^{(i)}$ & Standard basis vector $[0,\dots,0,1,0,\dots,0]$ with a 1 at position $i$\\
+$\displaystyle \text{diag}({\bm{a}})$ & A square, diagonal matrix with diagonal entries given by ${\bm{a}}$\\
+$\displaystyle {\textnormal{a}}$ & A scalar random variable\\
+$\displaystyle {\mathbf{a}}$ & A vector-valued random variable\\
+$\displaystyle {\mathbf{A}}$ & A matrix-valued random variable\\
+\end{tabular}
+\egroup
+\vspace{0.25cm}
+
+\centerline{\bf Sets and Graphs}
+\bgroup
+\def1.5{1.5}
+
+\begin{tabular}{p{1.25in}p{3.25in}}
+$\displaystyle {\mathbb{A}}$ & A set\\
+$\displaystyle \mathbb{R}$ & The set of real numbers \\
+$\displaystyle \{0, 1\}$ & The set containing 0 and 1 \\
+$\displaystyle \{0, 1, \dots, n \}$ & The set of all integers between $0$ and $n$\\
+$\displaystyle [a, b]$ & The real interval including $a$ and $b$\\
+$\displaystyle (a, b]$ & The real interval excluding $a$ but including $b$\\
+$\displaystyle {\mathbb{A}} \backslash {\mathbb{B}}$ & Set subtraction, i.e., the set containing the elements of ${\mathbb{A}}$ that are not in ${\mathbb{B}}$\\
+$\displaystyle {\mathcal{G}}$ & A graph\\
+$\displaystyle \parents_{\mathcal{G}}({\textnormal{x}}_i)$ & The parents of ${\textnormal{x}}_i$ in ${\mathcal{G}}$
+\end{tabular}
+\vspace{0.25cm}
+
+
+\centerline{\bf Indexing}
+\bgroup
+\def1.5{1.5}
+
+\begin{tabular}{p{1.25in}p{3.25in}}
+$\displaystyle {a}_i$ & Element $i$ of vector ${\bm{a}}$, with indexing starting at 1 \\
+$\displaystyle {a}_{-i}$ & All elements of vector ${\bm{a}}$ except for element $i$ \\
+$\displaystyle {A}_{i,j}$ & Element $i, j$ of matrix ${\bm{A}}$ \\
+$\displaystyle {\bm{A}}_{i, :}$ & Row $i$ of matrix ${\bm{A}}$ \\
+$\displaystyle {\bm{A}}_{:, i}$ & Column $i$ of matrix ${\bm{A}}$ \\
+$\displaystyle {\etens{A}}_{i, j, k}$ & Element $(i, j, k)$ of a 3-D tensor ${\tens{A}}$\\
+$\displaystyle {\tens{A}}_{:, :, i}$ & 2-D slice of a 3-D tensor\\
+$\displaystyle {\textnormal{a}}_i$ & Element $i$ of the random vector ${\mathbf{a}}$ \\
+\end{tabular}
+\egroup
+\vspace{0.25cm}
+
+
+\centerline{\bf Calculus}
+\bgroup
+\def1.5{1.5}
+\begin{tabular}{p{1.25in}p{3.25in}}
+$\displaystyle\frac{d y} {d x}$ & Derivative of $y$ with respect to $x$\\ [2ex]
+$\displaystyle \frac{\partial y} {\partial x} $ & Partial derivative of $y$ with respect to $x$ \\
+$\displaystyle \nabla_{\bm{x}} y $ & Gradient of $y$ with respect to ${\bm{x}}$ \\
+$\displaystyle \nabla_{\bm{X}} y $ & Matrix derivatives of $y$ with respect to ${\bm{X}}$ \\
+$\displaystyle \nabla_{\tens{X}} y $ & Tensor containing derivatives of $y$ with respect to ${\tens{X}}$ \\
+$\displaystyle \frac{\partial f}{\partial {\bm{x}}} $ & Jacobian matrix ${\bm{J}} \in \mathbb{R}^{m\times n}$ of $f: \mathbb{R}^n \rightarrow \mathbb{R}^m$\\
+$\displaystyle \nabla_{\bm{x}}^2 f({\bm{x}})\text{ or }{\bm{H}}( f)({\bm{x}})$ & The Hessian matrix of $f$ at input point ${\bm{x}}$\\
+$\displaystyle \int f({\bm{x}}) d{\bm{x}} $ & Definite integral over the entire domain of ${\bm{x}}$ \\
+$\displaystyle \int_{\mathbb{S}} f({\bm{x}}) d{\bm{x}}$ & Definite integral with respect to ${\bm{x}}$ over the set ${\mathbb{S}}$ \\
+\end{tabular}
+\egroup
+\vspace{0.25cm}
+
+\centerline{\bf Probability and Information Theory}
+\bgroup
+\def1.5{1.5}
+\begin{tabular}{p{1.25in}p{3.25in}}
+$\displaystyle P({\textnormal{a}})$ & A probability distribution over a discrete variable\\
+$\displaystyle p({\textnormal{a}})$ & A probability distribution over a continuous variable, or over
+a variable whose type has not been specified\\
+$\displaystyle {\textnormal{a}} \sim P$ & Random variable ${\textnormal{a}}$ has distribution $P$\\% so thing on left of \sim should always be a random variable, with name beginning with \r
+$\displaystyle  \mathbb{E}_{{\textnormal{x}}\sim P} [ f(x) ]\text{ or } \mathbb{E} f(x)$ & Expectation of $f(x)$ with respect to $P({\textnormal{x}})$ \\
+$\displaystyle \mathrm{Var}(f(x)) $ &  Variance of $f(x)$ under $P({\textnormal{x}})$ \\
+$\displaystyle \mathrm{Cov}(f(x),g(x)) $ & Covariance of $f(x)$ and $g(x)$ under $P({\textnormal{x}})$\\
+$\displaystyle H({\textnormal{x}}) $ & Shannon entropy of the random variable ${\textnormal{x}}$\\
+$\displaystyle D_{\mathrm{KL}} ( P \Vert Q ) $ & Kullback-Leibler divergence of P and Q \\
+$\displaystyle \mathcal{N} ( {\bm{x}} ; {\bm{\mu}} , {\bm{\Sigma}})$ & Gaussian distribution %
+over ${\bm{x}}$ with mean ${\bm{\mu}}$ and covariance ${\bm{\Sigma}}$ \\
+\end{tabular}
+\egroup
+\vspace{0.25cm}
+
+\centerline{\bf Functions}
+\bgroup
+\def1.5{1.5}
+\begin{tabular}{p{1.25in}p{3.25in}}
+$\displaystyle f: {\mathbb{A}} \rightarrow {\mathbb{B}}$ & The function $f$ with domain ${\mathbb{A}}$ and range ${\mathbb{B}}$\\
+$\displaystyle f \circ g $ & Composition of the functions $f$ and $g$ \\
+  $\displaystyle f({\bm{x}} ; {\bm{\theta}}) $ & A function of ${\bm{x}}$ parametrized by ${\bm{\theta}}$.
+  (Sometimes we write $f({\bm{x}})$ and omit the argument ${\bm{\theta}}$ to lighten notation) \\
+$\displaystyle \log x$ & Natural logarithm of $x$ \\
+$\displaystyle \sigma(x)$ & Logistic sigmoid, $\displaystyle \frac{1} {1 + \exp(-x)}$ \\
+$\displaystyle \zeta(x)$ & Softplus, $\log(1 + \exp(x))$ \\
+$\displaystyle || {\bm{x}} ||_p $ & $L^p$ norm of ${\bm{x}}$ \\
+$\displaystyle || {\bm{x}} || $ & $L^2$ norm of ${\bm{x}}$ \\
+$\displaystyle x^+$ & Positive part of $x$, i.e., $\max(0,x)$\\
+$\displaystyle \bm{1}_\mathrm{condition}$ & is 1 if the condition is true, 0 otherwise\\
+\end{tabular}
+\egroup
+\vspace{0.25cm}
+
+
+
+\section{Final instructions}
+Do not change any aspects of the formatting parameters in the style files.
+In particular, do not modify the width or length of the rectangle the text
+should fit into, and do not change font sizes (except perhaps in the
+\textsc{References} section; see below). Please note that pages should be
+numbered.
+
+\section{Preparing PostScript or PDF files}
+
+Please prepare PostScript or PDF files with paper size ``US Letter'', and
+not, for example, ``A4''. The -t
+letter option on dvips will produce US Letter files.
+
+Consider directly generating PDF files using \verb+pdflatex+
+(especially if you are a MiKTeX user).
+PDF figures must be substituted for EPS figures, however.
+
+Otherwise, please generate your PostScript and PDF files with the following commands:
+\begin{verbatim}
+dvips mypaper.dvi -t letter -Ppdf -G0 -o mypaper.ps
+ps2pdf mypaper.ps mypaper.pdf
+\end{verbatim}
+
+\subsection{Margins in LaTeX}
+
+Most of the margin problems come from figures positioned by hand using
+\verb+\special+ or other commands. We suggest using the command
+\verb+\includegraphics+
+from the graphicx package. Always specify the figure width as a multiple of
+the line width as in the example below using .eps graphics
+\begin{verbatim}
+   \usepackage[dvips]{graphicx} ...
+   \includegraphics[width=0.8\linewidth]{myfile.eps}
+\end{verbatim}
+or
+\begin{verbatim}
+   \usepackage[pdftex]{graphicx} ...
+   \includegraphics[width=0.8\linewidth]{myfile.pdf}
+\end{verbatim}
+for .pdf graphics.
+See section~4.4 in the graphics bundle documentation (\url{http://www.ctan.org/tex-archive/macros/latex/required/graphics/grfguide.ps})
+
+A number of width problems arise when LaTeX cannot properly hyphenate a
+line. Please give LaTeX hyphenation hints using the \verb+\-+ command.
+
+\subsubsection*{Author Contributions}
+If you'd like to, you may include  a section for author contributions as is done
+in many journals. This is optional and at the discretion of the authors.
+
+\subsubsection*{Acknowledgments}
+Use unnumbered third level headings for the acknowledgments. All
+acknowledgments, including those to funding agencies, go at the end of the paper.
+
+

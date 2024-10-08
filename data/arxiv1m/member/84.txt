@@ -1,0 +1,779 @@
+\section{Introduction}
+\label{section:introduction}
+
+Theoretical performance guarantees and adaptability to real-world constraints determine the deployability, and hence the practical utility, of statistical methods and machine learning algorithms. For example, spectral clustering \citep{NgEtAl:2001:OnSpectralClustering,Luxburg:2007:ATutorialOnSpectralClustering}, one of the most sought after algorithms for clustering and community detection, has been studied under various constraints such as \textit{must-link} and \textit{cannot-link} constraints \citep{KamvarEtAl:2003:SpectralLearning, WangDavidson:2010:FlexibleConstrainedSpectralClustering}, size-balanced clusters \citep{BanerjeeGhosh:2006:ScalableClusteringAlgorithmsWithBalancingConstraints}, and statistical fairness \citep{KleindessnerEtAl:2019:GuaranteesForSpectralClusteringWithFairnessConstraints}. Commonly used constraints in practice can be categorized as \textit{population-level} (also known as statistical-level) or \textit{individual-level} constraints. However, the only known consistency guarantees for constrained spectral clustering were established in \citet{KleindessnerEtAl:2019:GuaranteesForSpectralClusteringWithFairnessConstraints} for the first case, where the goal is to find balanced clusters with respect to an auxiliary categorical attribute. In this paper, we study a problem setting where the auxiliary information is encoded in a graph $\mathcal{R}$, which we refer to as a \textit{representation graph}. We study spectral clustering in a given \textit{similarity graph} $\mathcal{G}$ under an individual-level balancing constraint that is specified using the representation graph $\mathcal{R}$. There are two-fold advantages of this setting: \textbf{(i)} our constraint selects clusters that are balanced from each individual's perspective, and \textbf{(ii)} it enables us to define a new variant of the stochastic block model (SBM) \citep{HollandEtAl:1983:StochasticBlockmodelsFirstSteps} that plants the properties of $\mathcal{R}$ into the sampled graphs, making this variant of SBM \textit{representation-aware} (aware of the representation graph $\mathcal{R}$). 
+
+
+\subsection{Problem setting and applications}
+\label{section:problem_setting_and_applications}
+
+Let $\mathcal{G}$ denote a similarity graph based on which clusters have to be discovered. We consider a setting where each node in $\mathcal{G}$ specifies a list of its representatives (other nodes in $\mathcal{G}$) using an auxiliary representation graph $\mathcal{R}$. The graph $\mathcal{R}$ is defined on the same set of nodes as $\mathcal{G}$ and its edges specify the ``is representative of'' relationship. For example, $\mathcal{R}$ may be a result of the interactions between individuals that result from values of certain latent node attributes like age and gender. This motivates a \textit{representation constraint} that requires the clusters in $\mathcal{G}$ to be such that each node has a sufficient number of representatives (as per $\mathcal{R}$) in all the clusters. Our goal is to develop and analyze variants of the spectral clustering algorithm with respect to this constraint. 
+
+We begin by briefly describing two applications that motivate the above discussed problem. The first application is concerned with the ``fairness'' of clusters. Informally, a node or individual finds the clusters fair if it has a sufficient representation in all the clusters.
+The work of 
+\citet{ChierichettiEtAl:2017:FairClusteringThroughFairlets} requires the clusters to be balanced with respect to various \textit{protected groups} (like gender or race). For example, if $50\%$ of the population is female then the same proportion should be respected in all clusters. This idea of proportional representation has been extended in various forms \citep{RosnerSchmidt:2018:PrivacyPreservingClusteringWithConstraints,BerceaEtAl:2019:OnTheCostOfEssentiallyFairClusterings,BeraEtAl:2019:FairAlgorithmsForClustering} and several efficient algorithms for discovering fair clusters under this notion have been proposed \citep{SchmidtEtAl:2018:FairCoresetsAndStreamingAlgorithmsForFairKMeansClustering,AhmadianEtAl:2019:ClusteringWithoutOverRepresentation,KleindessnerEtAl:2019:GuaranteesForSpectralClusteringWithFairnessConstraints}. While the fairness notion mentioned above is a \textit{statistical} fairness notion (i.e., constraints are applied on protected groups as a whole), \citet{ChenEtAl:2019:ProportionallyFairClustering} and \citet{MahabadiEtAl:2020:IndividualFairnessForKClustering} develop \textit{individual} fairness notions that require examples to be “sufficiently close" to their cluster centroids. \citet{AndersonEtAl:2020:DistributionalIndividualFairnessInClustering} pursue a different direction and adapt the fairness notion proposed by \citet{DworkEtAl:2012:FairnessThroughAwareness} to the problem of clustering. Only \citet{KleindessnerEtAl:2019:GuaranteesForSpectralClusteringWithFairnessConstraints} study spectral clustering in the context of (statistical) fairness. In contrast, we show in Section \ref{section:constraint} that our proposed constraint interpolates between statistical and individual fairness based on the structure of $\mathcal{R}$.
+
+\begin{figure}[t]
+    \centering
+    \subfloat[][Protected groups]{\includegraphics[width=0.3\textwidth]{Images/toy_example_protected}\label{fig:toy_example:protected_groups}}%
+    \hspace{5mm}\subfloat[][Statistically fair clusters]{\includegraphics[width=0.3\textwidth]{Images/toy_example_fairsc}\label{fig:toy_example:fairsc}}%
+    \hspace{5mm}\subfloat[][Individually fair clusters]{\includegraphics[width=0.3\textwidth]{Images/toy_example_repfairsc}\label{fig:toy_example:repfairsc}}
+    \caption{An example representation graph $\mathcal{R}$. Panel (a) shows the protected groups recovered from $\mathcal{R}$. Panel (b) shows the clusters recovered by a statistically fair clustering algorithm. Panel (c) shows the ideal individually fair clusters. (Best viewed in color)}
+    \label{fig:fairness:toy_example}
+\end{figure}
+
+\begin{example}
+    \label{example:statistical_vs_individual_fairness}
+    To understand the need for individual fairness notions, consider the representation graph $\mathcal{R}$ specified in Figure \ref{fig:toy_example:protected_groups}. All the nodes have a self-loop associated with them that has not been shown for clarity. In this example, $N = 24$, $K = 2$, and every node is connected to $d=6$ nodes (including the self-loop). To use a statistical fairness notion \citep{ChierichettiEtAl:2017:FairClusteringThroughFairlets}, one would begin by clustering the nodes in $\mathcal{R}$ to approximate the protected groups, as the members of these protected groups will be each other's representatives to the first order of approximation. A natural choice is to have two protected groups, as shown in Figure~\ref{fig:toy_example:protected_groups} using different colors. However, clustering nodes based on these protected groups can produce the green and yellow clusters shown in Figure~\ref{fig:toy_example:fairsc}. It is easy to verify that these clusters satisfy the statistical fairness criterion as they have an equal number of members from both protected groups. However, these clusters are very "unfair" from the perspective of each individual. For example, node $v_1$ does not have enough representation in the yellow cluster as only one of its six representatives are in this cluster, despite the equal size of both the clusters. A similar argument can be made for every other node in this graph. This example highlights an extreme case where a statistically fair clustering is highly unfair from the perspective of each individual. Figure~\ref{fig:toy_example:repfairsc} shows another clustering assignment, and it is easy to verify that each node in this assignment has the same representation in both red and blue clusters, making it individually fair with respect to $\mathcal{R}$. Our goal is to develop algorithms that prefer the clusters in Figure~\ref{fig:toy_example:repfairsc} over the clusters in Figure~\ref{fig:toy_example:fairsc}.
+\end{example}
+
+Another possible application could be in balancing the load on computing resources in a cloud platform. Here, nodes in $\mathcal{G}$ correspond to processes and edges encode similarity among these processes in terms of shareable resources such as a read-only file. The edges in $\mathcal{R}$ on the other hand connect processes that share resources that can only be accessed by one process at a time (say a network channel). The goal is to cluster similar processes in $\mathcal{G}$ while ensuring that neighbors in $\mathcal{R}$ are spread out across clusters to avoid a collision. 
+
+
+\subsection{Contributions and results}
+\label{section:contributions_and_results}
+
+Our primary goal is to establish the statistical consistency of constrained spectral clustering, where the constraints are specified from the perspective of each individual node in the graph. Towards this end, we make four contributions.
+
+First, in Section \ref{section:constraint}, we introduce the notion of balance from the perspective of each individual node in the graph and  formally specify our representation constraint as a simple linear expression. While we focus on spectral clustering in this paper, the proposed constraint may be of independent interest for other clustering techniques as well. 
+
+Second, in Sections~\ref{section:unnormalized_repsc} and \ref{section:normalized_repsc}, we develop \textit{representation-aware} variants of the unnormalized and normalized spectral clustering. The proposed algorithms incorporate our representation constraint as a linear constraint in spectral clustering's optimization objective. The resulting problem can be easily solved using eigen-decomposition and the returned clusters approximately satisfy the constraint. 
+
+Third, in Section~\ref{section:rsbm}, we propose a variant of SBM called \textit{representation-aware} stochastic block model ($\mathcal{R}$-SBM). $\mathcal{R}$-SBM encodes a probability distribution over similarity graphs $\mathcal{G}$ conditioned on a given representation graph $\mathcal{R}$. It can be viewed as a model that plants the properties of $\mathcal{R}$ into $\mathcal{G}$. We show that $\mathcal{R}$-SBM generates similarity graphs that present a ``hard'' problem instance to the spectral algorithms in a constrained setting. In Section~\ref{section:consistency_results}, we consider the class of $d$-regular representation graphs and establish the weak-consistency of our algorithms (Theorems \ref{theorem:consistency_result_unnormalized} and \ref{theorem:consistency_result_normalized}) for graphs sampled from $\mathcal{R}$-SBM. To the best of our knowledge, these are the first consistency results for constrained spectral clustering under individual-level constraints.
+
+Fourth, in Section~\ref{section:numerical_results}, we present empirical studies on both simulated and real-world data to verify our theoretical guarantees. A comparison between the performance of the proposed algorithms and their closest counterparts in the literature demonstrates their practical utility. In particular, our experiments show that the $d$-regularity assumption on the representation graph is not necessary in practice. 
+
+We conclude the paper in Section \ref{section:conclusion} with a few remarks on promising directions for future work. The proofs of all technical lemmas are presented in the supplementary material \citep{ThisPaperSupp}.
+
+
+\subsection{Related results}
+\label{section:related_results}
+Several algorithms for unconstrained clustering such as $k$-means \citep{HofmannBuhmann:1997:PairwiseDataClusteringByDeterministicAnnealing, WagstaffEtAl:2001:ConstrainedKMeansClusteringWithBackgroundKnowledge}, expectation-maximization based clustering \citep{ShentalEtAl:2003:ComputingGaussianMixtureModelsWithEMUsingEquivalenceConstraints}, and spectral clustering \citep{KamvarEtAl:2003:SpectralLearning} have been modified to satisfy the given \textit{must-link} (ML) and \textit{cannot-link} (CL) constraints \citep{BasuEtAl:2008:ConstrainedClustering} that specify pairs of nodes that should or should not belong to the same cluster. In this paper, we restrict our focus to spectral clustering as it provides a deterministic solution to the clustering problem in polynomial time and can detect arbitrarily shaped clusters \citep{Luxburg:2007:ATutorialOnSpectralClustering}. Existing approaches modify spectral clustering by preprocessing the input similarity graph \citep{KamvarEtAl:2003:SpectralLearning, LuCarreiraPerpinan:2008:ConstrainedSpectralClusteringThroughAffinityPropagation}, post-processing the eigenvectors of the Laplacian matrix \citep{LiEtAl:2009:ConstrainedClusteringViaSpectralRegularization}, or modifying the optimization problem solved by spectral clustering \citep{YuShi:2001:GroupingWithBias,YuShi:2004:SegmentationGivenPartialGroupingConstraints, BieEtAl:2004:LearningFromGeneralLabelConstraints, WangDavidson:2010:FlexibleConstrainedSpectralClustering,ErikssonEtAl:2011:NormalizedCutsRevisited, KawaleBoley:2013:ConstrainedSpectralClusteringUsingL1Regularization, WangEtAl:2014:OnConstrainedSpectralClusteringAndItsApplications}. Researchers have also studied spectral approaches that, for example, handle inconsistent \citep{ColemanEtAl:2008:SpectralClusteringWithInconsistentAdvice} or sparse \citep{ZhuEtAl:2013:ConstrainedClustering} constraints, actively solicit constraints \citep{WangDavidson:2010:ActiveSpectralClustering}, or modify variants of spectral clustering \citep{RangapuramHein:2012:Constrained1SpectralClustering, WangEtAl:2009:IntegratedKLClustering}, to name but a few. Other types of constraints such as those on cluster sizes \citep{BanerjeeGhosh:2006:ScalableClusteringAlgorithmsWithBalancingConstraints, DemirizEtAl:2008:UsingAssignmentConstraintsToAvoidEmptyClustersInKMeansClustering} and those that can be expressed as linear expressions \citep{XuEtAl:2009:FastNormalizedCutWithLinearConstraints} have also been explored. While this has been an active area of research, theoretical consistency guarantees on the performance of these constrained spectral clustering algorithms are largely missing from the literature.
+
+(Unconstrained) spectral clustering is backed by strong statistical guarantees that usually take the form ``the algorithm makes $o(N)$ mistakes with probability $1 - o(1)$.'' Here, $N$ is the number of nodes in the similarity graph. These results consider a random model that generates problem instances for the algorithm (similarity graph in this case) with known ground-truth clusters. The high probability bound is with respect to this random model and the mistakes are computed against the ground-truth clusters. An algorithm that satisfies the condition above is called \textit{weakly consistent} \citep{Abbe:2018:CommunityDetectionAndStochasticBlockModels}. A common choice for the random model is the Stochastic Block Model (SBM) \citep{HollandEtAl:1983:StochasticBlockmodelsFirstSteps}. In this model, nodes have predefined community memberships that are used to sample edges with different probabilities. \citet{RoheEtAl:2011:SpectralClusteringAndTheHighDimensionalSBM} established the weak consistency of spectral clustering under the SBM. \citet{LeiEtAl:2015:ConsistencyOfSpectralClusteringInSBM} instead used a variant of SBM to sample networks with a more realistic degree distribution \citep{KarrerNewman:2011:StochasticBlockmodelsAndCommunityStructureInNetworks}. Several other variants of SBM have also been used to provide appropriate problem instances such as graphs with overlapping clusters \citep{ZhangEtAl:2014:DetectingOverlappingCommunitiesInNetworksUsingSpectralMethods}, observable node covariates \citep{BinkiewiczEtAl:2017:CovariateAssistedSpectralClustering}, or two alternative set of clusters, one \textit{unfair} and one \textit{fair} \citep{KleindessnerEtAl:2019:GuaranteesForSpectralClusteringWithFairnessConstraints}. \citet{LuxburgEtAl:2008:ConsistencyOfSpectralClustering} use a different random model where the similarity graph encodes pairwise cosine similarity between input feature vectors that follow a particular probability distribution. \citet{TremblayEtAl:2016:CompressiveSpectralClustering} study a variant of spectral clustering that is faster than the traditional algorithm. \textit{Strong consistency} results are also known in some cases \citep{GaoEtAl:2017:AchievingOptimalMisclassificationProportionInStochasticBlockModels,LeiZhu:2017:AGenericSampleSplittingApproachForRefinedCommunityRecoveryInSBMs, VuEtAl:2018:ASimpleSVDAlgorithmForFindingHiddenPartitions}. Finally, \citet{GhoshdastidarDukkipati:2017:UniformHypergraphPartitioning, GhoshdastidarDukkipati:2017:ConsistencyOfSpectralHypergraphPartitioningUnderPlantedPartitionModel} propose a variant of SBM for hypergraphs and establish the weak consistency of spectral algorithms in this setting. 
+
+Theoretical results for constrained clustering are primarily concerned with the computational complexity of the problem. It is known that the problem is NP-hard if one hopes for an exact solution that satisfies all the CL constraints \citep{DavidsonRavi:2005:ClusteringWithConstraints} or the statistical fairness constraint \citep{ChierichettiEtAl:2017:FairClusteringThroughFairlets}. Hence, most existing methods only satisfy the constraints approximately \citep{CucuringuEtAl:2016:SimpleAndScalableConstrainedClustering}. Results related to the cluster quality in the constrained setting only consider the algorithm's convergence to the global optima of a relaxed optimization problem \citep{XuEtAl:2009:FastNormalizedCutWithLinearConstraints}. \citet{KleindessnerEtAl:2019:GuaranteesForSpectralClusteringWithFairnessConstraints} is a notable exception, however, even they consider constraints that apply at the level of protected groups as explained above, and not at the level of individuals. They follow a similar strategy as ours and modify spectral clustering to add a statistical fairness constraint. In Section~\ref{section:constraint}, we argue that a particular configuration of the representation graph $\mathcal{R}$ reduces our constraint to the statistical fairness criterion. Thus, the algorithms proposed in \citet{KleindessnerEtAl:2019:GuaranteesForSpectralClusteringWithFairnessConstraints} are strictly special cases of the algorithms presented in this paper. To the best of our knowledge, we are the first to establish statistical consistency results for constrained spectral clustering for individual-level constraints. A subset of results presented in this paper are available online as a preliminary draft \citep{ThisPaperArXiv}.
+
+
+\section{Notation and preliminaries}
+\label{section:notation_and_preliminaries}
+
+Let $\mathcal{G} = (\mathcal{V}, \mathcal{E})$ denote a similarity graph, where $\mathcal{V} = \{v_1, v_2, \dots, v_N\}$ is the set of $N$ nodes, and $\mathcal{E} \subseteq \mathcal{V} \times \mathcal{V}$ is the set of edges. The aim of clustering is to partition the nodes into $K \geq 2$ clusters $\mathcal{C}_1, \dots, \mathcal{C}_K \subseteq \mathcal{V}$ such that each node in $\mathcal{V}$ belongs to exactly one cluster, i.e., $\mathcal{C}_i \cap \mathcal{C}_j = \phi$ if $i \neq j$ and $\cup_{k=1}^K \mathcal{C}_k = \mathcal{V}$. We further assume the availability of a \textit{representation graph}, denoted by $\mathcal{R} = (\mathcal{V}, \hat{\mathcal{E}})$, that encodes auxiliary information. Notice that $\mathcal{R}$ is defined on the same set of vertices as the similarity graph $\mathcal{G}$, but has a different set of edges $\hat{\mathcal{E}} \subseteq \mathcal{V} \times \mathcal{V}$. The discovered clusters $\mathcal{C}_1, \dots, \mathcal{C}_K$ are required to satisfy the constraint encoded by $\mathcal{R}$, as described in Section \ref{section:constraint}. $\mathbf{A} \in \{0, 1\}^{N \times N}$ and $\mathbf{R} \in \{0, 1\}^{N \times N}$ denote the adjacency matrices of graphs $\mathcal{G}$ and $\mathcal{R}$, respectively. We assume that $\mathcal{G}$ and $\mathcal{R}$ are undirected. Further, $\mathcal{G}$ has no self-loops. Thus, $\mathbf{A}$ and $\mathbf{R}$ are symmetric and $A_{ii} = 0$ for all $i \in [N]$, where $[n] \coloneqq \{1, 2, \dots, n\}$ for any integer $n$.
+
+We propose modified variants of spectral clustering in Section \ref{section:algorithms}. Before describing the proposed algorithms, we begin with a brief review of the standard spectral clustering algorithm.
+
+
+\subsection{Unnormalized spectral clustering}
+\label{section:unnormalized_spectral_clustering}
+
+Given a similarity graph $\mathcal{G}$, unnormalized spectral clustering finds clusters by approximately optimizing a quality metric known as the ratio-cut defined as \citep{Luxburg:2007:ATutorialOnSpectralClustering}
+\begin{equation*}
+    \mathrm{RCut}(\mathcal{C}_1, \dots, \mathcal{C}_K) = \sum_{i = 1}^K \frac{\mathrm{Cut}(\mathcal{C}_i, \mathcal{V} \backslash \mathcal{C}_i)}{\abs{\mathcal{C}_i}}.
+\end{equation*}
+Here, $\mathcal{V} \backslash \mathcal{C}_i$ denotes the set difference between sets $\mathcal{V}$ and $\mathcal{C}_i$. For any two subsets $\mathcal{X}, \mathcal{Y} \subseteq \mathcal{V}$, $\mathrm{Cut}(\mathcal{X}, \mathcal{Y})$ is defined as
+$\mathrm{Cut}(\mathcal{X}, \mathcal{Y}) = \frac{1}{2} \sum_{v_i \in \mathcal{X}, v_j \in \mathcal{Y}} A_{ij}$. That is, $\mathrm{Cut}(\mathcal{X}, \mathcal{Y})$ counts the number of edges that have one endpoint in $\mathcal{X}$ and another endpoint in $\mathcal{Y}$. 
+The Laplacian matrix $\mathbf{L}$ of the similarity graph $\mathcal{G}$ is defined as 
+\begin{equation}
+    \label{eq:L_def}
+    \mathbf{L} = \mathbf{D} - \mathbf{A}.
+\end{equation}
+Here, $\mathbf{D} \in \mathbb{R}^{N \times N}$ is the degree matrix, which is a diagonal matrix such that $D_{ii} = \sum_{j = 1}^N A_{ij}$, for all $i \in [N]$. 
+Further, define $\mathbf{H} \in \mathbb{R}^{N \times K}$ as
+\begin{equation}
+    \label{eq:H_def}
+    H_{ij} = \begin{cases}
+        \frac{1}{\sqrt{\abs{\mathcal{C}_j}}} & \text{ if }v_i \in \mathcal{C}_j \\
+        0 & \text{ otherwise.}
+    \end{cases}
+\end{equation}
+One can easily verify that $\mathrm{RCut}(\mathcal{C}_1, \dots, \mathcal{C}_K) = \trace{\mathbf{H}^\intercal \mathbf{L} \mathbf{H}}$, where $\mathbf{H}$ corresponds to clusters $\mathcal{C}_1, \dots, \mathcal{C}_K$. Thus, to find good clusters, one can solve:
+\begin{equation*}
+    \min_{\mathbf{H} \in \mathbb{R}^{N \times K}}  \,\,\,\, \trace{\mathbf{H}^\intercal \mathbf{L} \mathbf{H}} \,\,\,\, \text{s.t.} \,\,\,\, \mathbf{H} \text{ is of the form \eqref{eq:H_def}.}
+\end{equation*}
+It is computationally hard to solve this optimization problem due to the combinatorial nature of the constraint \citep{WagnerWagner:1993:BetweenMinCutAndGraphBisection}. Unnormalized spectral clustering instead solves the following relaxed optimization problem:
+\begin{equation}
+    \label{eq:opt_problem_normal}
+    \min_{\mathbf{H} \in \mathbb{R}^{N \times K}}  \,\,\,\, \trace{\mathbf{H}^\intercal \mathbf{L} \mathbf{H}} \,\,\,\, \text{s.t.} \,\,\,\, \mathbf{H}^\intercal \mathbf{H} = \mathbf{I}.
+\end{equation}
+The above relaxation is often referred to as the spectral relaxation. 
+By Rayleigh-Ritz theorem \citep[Section 5.2.2]{Lutkepohl:1996:HandbookOfMatrices}, 
+the optimal matrix $\mathbf{H}^*$ is such that it has $\mathbf{u}_1, \mathbf{u}_2, \dots, \mathbf{u}_K \in \mathbb{R}^N$ as its columns, where $\mathbf{u}_i$ is the eigenvector corresponding to the $i^{th}$ smallest eigenvalue of $\mathbf{L}$ for all $i \in [K]$.
+The algorithm clusters the rows of $\mathbf{H}^*$ into $K$ clusters using $k$-means clustering \citep{Lloyd:1982:LeastSquaresQuantisationInPCM} to return $\hat{\mathcal{C}}_1, \dots, \hat{\mathcal{C}}_K$. Algorithm \ref{alg:unnormalized_spectral_clustering} summarizes this procedure.
+
+The Laplacian given in \eqref{eq:L_def} is more specifically known as unnormalized Laplacian. The next subsection describes a variant of spectral clustering, known as normalized spectral clustering \citep{ShiMalik:2000:NormalizedCutsAndImageSegmentation, NgEtAl:2001:OnSpectralClustering}, that uses the normalized Laplacian. Unless stated otherwise, we will use spectral clustering (without any qualification) to refer to unnormalized spectral clustering.
+
+\begin{algorithm}[t]
+    \begin{algorithmic}[1]
+        \State \textbf{Input:} Adjacency matrix $\mathbf{A}$, number of clusters $K \geq 2$
+        \State Compute the Laplacian matrix $\mathbf{L} = \mathbf{D} - \mathbf{A}$.
+        \State Compute the first $K$ eigenvectors $\mathbf{u}_1, \dots, \mathbf{u}_K$ of $\mathbf{L}$. Let $\mathbf{H}^* \in \mathbb{R}^{N \times K}$ be a matrix that has $\mathbf{u}_1, \dots, \mathbf{u}_K$ as its columns.
+        \State Let $\mathbf{h}^*_i$ denote the $i^{th}$ row of $\mathbf{H}^*$. Cluster $\mathbf{h}^*_1, \dots, \mathbf{h}^*_N$ into $K$ clusters using $k$-means clustering.
+        \State \textbf{Output:} Clusters $\hat{\mathcal{C}}_1, \dots, \hat{\mathcal{C}}_K$, \textrm{s.t.} $\hat{\mathcal{C}}_i = \{v_j \in \mathcal{V} : \mathbf{h}^*_j \text{ was assigned to the }i^{th} \text{ cluster}\}$.
+    \end{algorithmic}
+    \caption{Unnormalized spectral clustering}
+    \label{alg:unnormalized_spectral_clustering}
+\end{algorithm}
+
+
+\subsection{Normalized spectral clustering}
+\label{section:normalized_spectral_clustering}
+
+The ratio-cut objective divides $\mathrm{Cut}(\mathcal{C}_i, \mathcal{V} \backslash \mathcal{C}_i)$ by the number of nodes in $\mathcal{C}_i$ to balance the size of the clusters. The volume of a cluster $\mathcal{C} \subseteq \mathcal{V}$, defined as $\mathrm{Vol}(\mathcal{C}) = \sum_{v_i \in \mathcal{C}} D_{ii}$, is another popular notion of its size. The normalized cut or $\mathrm{NCut}$ objective divides $\mathrm{Cut}(\mathcal{C}_i, \mathcal{V} \backslash \mathcal{C}_i)$ by $\mathrm{Vol}(\mathcal{C}_i)$, and is defined as,
+\begin{equation*}
+    \mathrm{NCut}(\mathcal{C}_1, \dots, \mathcal{C}_K) = \sum_{i = 1}^K \frac{\mathrm{Cut}(\mathcal{C}_i, \mathcal{V} \backslash \mathcal{C}_i)}{\mathrm{Vol}(\mathcal{C}_i)}.
+\end{equation*}
+As before, one can show that $\mathrm{NCut}(\mathcal{C}_1, \dots, \mathcal{C}_K) = \trace{\mathbf{T}^\intercal \mathbf{L} \mathbf{T}}$ \citep{Luxburg:2007:ATutorialOnSpectralClustering}, where $\mathbf{T} \in \mathbb{R}^{N \times K}$ is specified below.
+\begin{equation}
+    \label{eq:T_def}
+    T_{ij} = \begin{cases}
+        \frac{1}{\sqrt{\mathrm{Vol}(\mathcal{C}_j)}} & \text{ if }v_i \in \mathcal{C}_j \\
+        0 & \text{ otherwise.}
+    \end{cases}
+\end{equation}
+Note that $\mathbf{T}^\intercal \mathbf{D} \mathbf{T} = \mathbf{I}$. Thus, the optimization problem for minimizing the NCut objective is
+\begin{equation}
+    \label{eq:normalized_ideal_opt_problem}
+    \min_{\mathbf{T} \in \mathbb{R}^{N \times K}}  \,\,\,\, \trace{\mathbf{T}^\intercal \mathbf{L} \mathbf{T}} \,\,\,\, \text{s.t.} \,\,\,\, \mathbf{T}^\intercal \mathbf{D} \mathbf{T} = \mathbf{I} \text{ and } \mathbf{T} \text{ is of the form \eqref{eq:T_def}.}
+\end{equation}
+As before, this optimization problem is hard to solve, and normalized spectral clustering solves a relaxed variant of this problem. Let $\mathbf{H} = \mathbf{D}^{1/2} \mathbf{T}$ and define the normalized graph Laplacian as $\mathbf{L}_{\mathrm{norm}} = \mathbf{I} - \mathbf{D}^{-1/2} \mathbf{A} \mathbf{D}^{-1/2}$. Normalized spectral clustering solves the following relaxed problem:
+\begin{equation}
+    \label{eq:opt_problem_normal_normalized}
+    \min_{\mathbf{H} \in \mathbb{R}^{N \times K}}  \,\,\,\, \trace{\mathbf{H}^\intercal \mathbf{L}_{\mathrm{norm}} \mathbf{H}} \,\,\,\, \text{s.t.} \,\,\,\, \mathbf{H}^\intercal \mathbf{H} = \mathbf{I}.
+\end{equation}
+Note that $\mathbf{H}^\intercal \mathbf{H} = \mathbf{I} \Leftrightarrow \mathbf{T}^\intercal \mathbf{D} \mathbf{T} = \mathbf{I}$. This is again the standard form of the trace minimization problem that can be solved using the Rayleigh-Ritz theorem. Algorithm \ref{alg:normalized_spectral_clustering} summarizes the normalized spectral clustering algorithm. 
+
+\begin{algorithm}[t]
+    \begin{algorithmic}[1]
+        \State \textbf{Input:} Adjacency matrix $\mathbf{A}$, number of clusters $K \geq 2$
+        \State Compute the normalized Laplacian matrix $\mathbf{L}_{\mathrm{norm}} = \mathbf{I} - \mathbf{D}^{-1/2}\mathbf{A} \mathbf{D}^{-1/2}$.
+        \State Compute the first $K$ eigenvectors $\mathbf{u}_1, \dots, \mathbf{u}_K$ of $\mathbf{L}_{\mathrm{norm}}$. Let $\mathbf{H}^* \in \mathbb{R}^{N \times K}$ be a matrix that has $\mathbf{u}_1, \dots, \mathbf{u}_K$ as its columns.
+        \State Let $\mathbf{h}^*_i$ denote the $i^{th}$ row of $\mathbf{H}^*$. Compute $\tilde{\mathbf{h}}^*_i = \frac{\mathbf{h}^*_i}{\norm{\mathbf{h}^*_i}[2]}$ for all $i = 1, 2, \dots, N$.
+        \State Cluster $\tilde{\mathbf{h}}^*_1, \dots, \tilde{\mathbf{h}}^*_N$ into $K$ clusters using $k$-means clustering.
+        \State \textbf{Output:} Clusters $\hat{\mathcal{C}}_1, \dots, \hat{\mathcal{C}}_K$, \textrm{s.t.} $\hat{\mathcal{C}}_i = \{v_j \in \mathcal{V} : \tilde{\mathbf{h}}^*_j \text{ was assigned to the }i^{th} \text{ cluster}\}$.
+    \end{algorithmic}
+    \caption{Normalized spectral clustering}
+    \label{alg:normalized_spectral_clustering}
+\end{algorithm}
+
+
+\section{Representation constraint and representation-aware spectral clustering}
+\label{section:algorithms}
+
+
+
+\subsection{Representation constraint}
+\label{section:constraint}
+
+Here, an individual-level constraint for clustering the graph $\mathcal{G} = (\mathcal{V}, \mathcal{E})$ is specified using a representation graph $\mathcal{R} = (\mathcal{V}, \hat{\mathcal{E}})$.
+One intuitive explanation for $\mathcal{R}$ is that nodes connected in this graph represent each other in some form (say based on opinions if nodes correspond to people). 
+Let $\mathcal{N}_{\mathcal{R}}(i) = \{v_j \; : \; R_{ij} = 1\}$ denote the set of neighbors of node $v_i$ in $\mathcal{R}$. The size of $\mathcal{N}_{\mathcal{R}}(i) \cap \mathcal{C}_k$ denotes node $v_i$'s representation in cluster $\mathcal{C}_k$. 
+The goal of this constraint is to ensure that each node has an adequate amount of representation in all clusters.
+
+
+
+\begin{definition}
+    \label{def:balance}
+    The balance of given clusters $\mathcal{C}_1, \dots, \mathcal{C}_K$ with respect to a node $v_i \in \mathcal{V}$ is defined as
+    \begin{equation}
+        \label{eq:balance}
+        \rho_i = \min_{k, \ell \in [K]} \;\; \frac{\abs{\mathcal{C}_k \cap \mathcal{N}_{\mathcal{R}}(i)}}{\abs{\mathcal{C}_\ell \cap \mathcal{N}_{\mathcal{R}}(i)}}.
+\end{equation}
+\end{definition}
+
+It is easy to see that $0 \leq \rho_i \leq 1$ and higher values of $\rho_i$ indicate that node $v_i$ has an adequate representation in all clusters. Thus, one objective could be to find clusters $\mathcal{C}_1, \dots, \mathcal{C}_K$ that solve the following constrained optimization problem.
+\begin{equation}
+    \label{eq:general_optimization_problem}
+    \min_{\mathcal{C}_1, \dots, \mathcal{C}_K} \;\; f(\mathcal{C}_1, \dots, \mathcal{C}_K) \;\;\;\; \text{s.t.} \;\;\;\; \rho_i \geq \alpha, \; \forall \; i \in [N].
+\end{equation}
+Here, $f(\cdot)$ is a function that is inversely proportional to the quality of clusters (such as $\mathrm{RCut}$ or $\mathrm{NCut}$), and $\alpha \in [0, 1]$ is a user specified threshold. However, it not clear as to how this approach can be combined with spectral clustering to develop a consistent algorithm. Therefore, we take a slightly different approach, as described below.
+
+First, note that $\rho_i \leq \min_{k, \ell \in [K]} \; \frac{\abs{\mathcal{C}_k}}{\abs{\mathcal{C}_\ell}}$ for all $i \in [N]$. Therefore, the balance $\rho_i$ is maximized when the representatives $\mathcal{N}_{\mathcal{R}}(i)$ of node $v_i$ are split across clusters $\mathcal{C}_1, \dots, \mathcal{C}_K$ in proportion of the sizes of these clusters. Our constraint, formally defined below, requires this proportionality condition to be satisfied for each node $v_i \in \mathcal{V}$.
+
+\begin{definition}[Representation constraint]
+    \label{def:representation_constraint}
+    Given a representation graph $\mathcal{R}$, clusters $\mathcal{C}_1, \dots, \mathcal{C}_K$ in $\mathcal{G}$ satisfy the representation constraint if $\abs{\mathcal{C}_k \cap \mathcal{N}_{\mathcal{R}}(i)} \propto \abs{\mathcal{C}_k}$, for all $i \in [N]$ and $k \in [K]$, or equivalently,
+    \begin{equation}
+        \label{eq:representation_constraint}
+        \frac{\abs{\mathcal{C}_k \cap \mathcal{N}_{\mathcal{R}}(i)}}{\abs{\mathcal{C}_k}} = \frac{\abs{\mathcal{N}_{\mathcal{R}}(i)}}{N}, \;\; \forall k \in [K], \; \forall i \in [N].
+    \end{equation}
+\end{definition}
+
+In other words, the representation constraint requires the representatives of any given node $v_i$ to have a proportional membership in all clusters. For example, if a node $v_i$ is connected to $30\%$ of all the nodes in $\mathcal{R}$, then the clusters discovered in $\mathcal{G}$ must be such that this node has $30\%$ representation in all clusters. We wish to re-emphasize that the representation constraint applies at the level of individual nodes unlike the constraint in \citep{ChierichettiEtAl:2017:FairClusteringThroughFairlets} that applies at the level of protected groups. In Sections \ref{section:unnormalized_repsc} and \ref{section:normalized_repsc}, we show that \eqref{eq:representation_constraint} can be integrated with the optimization problem solved by spectral clustering. 
+
+Appendix \ref{appendix:constraint} presents additional remarks about the properties of this constraint, in particular, its relation to the statistical-level constraint for categorical attributes \citep{ChierichettiEtAl:2017:FairClusteringThroughFairlets, KleindessnerEtAl:2019:GuaranteesForSpectralClusteringWithFairnessConstraints}. It shows that \eqref{eq:representation_constraint} recovers the statistical-level constraint for a particular configuration of the representation graph, and generalizes it to individual-level constraint for other configurations. Next, we turn to the feasibility of the constraint.
+
+\paragraph*{Feasibility} The optimization problem in \eqref{eq:general_optimization_problem} can always be solved for a small enough value of $\alpha$ (with the convention that $0/0 = 1$). On the other hand, the constraint in Definition \ref{def:representation_constraint} may not always be feasible. For example, if a node has only two representatives, i.e., $\abs{\mathcal{N}_{\mathcal{R}}(i)} = 2$, and there are $K > 2$ clusters, then \ref{eq:representation_constraint} can never be satisfied as there will always be at least one cluster $\mathcal{C}_k$ for which $\abs{\mathcal{C}_k \cap \mathcal{N}_{\mathcal{R}}(i)} = 0$. We argue in the subsequent subsections that spectral relaxation ensures the approximate satisfiability of the constraint when it is added to spectral clustering's optimization problem. We also describe a necessary assumption that is needed to ensure feasibility in practice and two additional assumptions that are required for our theoretical analysis. Thus, the way we use the proposed constraint makes it widely applicable, even though it is very strong. The general form of the constraint in \eqref{eq:general_optimization_problem} may be of independent interest in the context of other clustering algorithms, but we do not pursue this direction here.
+
+
+\subsection{Unnormalized representation-aware spectral clustering (\textsc{URepSC})}
+\label{section:unnormalized_repsc}
+
+Recall from Section \ref{section:unnormalized_spectral_clustering} that unnormalized spectral clustering approximately minimizes the ratio-cut objective by relaxing an NP-hard optimization problem to solve  \eqref{eq:opt_problem_normal}. The lemma below specifies a sufficient condition that implies the constraint in \eqref{eq:representation_constraint}. 
+
+\begin{lemma}
+    \label{lemma:constraint_matrix_unnorm}
+    Let $\mathbf{H} \in \mathbb{R}^{N \times K}$ have the form specified in \eqref{eq:H_def}. The condition 
+    \begin{equation}
+      \label{eq:matrix_fairness_criteria}
+      \mathbf{R} \left( \mathbf{I} - \frac{1}{N}\bm{1}\bmone^\intercal \right) \mathbf{H} = \mathbf{0}
+    \end{equation}
+    implies that the corresponding clusters $\mathcal{C}_1, \dots, \mathcal{C}_K$ satisfy the constraint in \eqref{eq:representation_constraint}. Here, $\mathbf{I}$ is the $N \times N$ identity matrix and $\bm{1}$ is a $N$-dimensional all-ones vector.
+\end{lemma}
+
+Ideally, we would like to solve the following optimization problem to get the clusters that satisfy the representation constraint,
+\begin{equation}
+    \label{eq:optimization_problem_ideal}
+    \min_{\mathbf{H}} \;\;\;\; \trace{\mathbf{H}^\intercal \mathbf{L} \mathbf{H}} \;\;\;\; \text{s.t.} \;\;\;\;\mathbf{H} \text{ is of the form \eqref{eq:H_def}} ; \;\;\;\;
+    \mathbf{R} \left( \mathbf{I} - \frac{1}{N}\bm{1}\bmone^\intercal \right) \mathbf{H} = \mathbf{0},
+\end{equation}
+where $\mathbf{L}$ is the unnormalized graph Laplacian defined in \eqref{eq:L_def}. However, as noted in Section \ref{section:unnormalized_spectral_clustering}, the first constraint on $\mathbf{H}$ makes this problem NP-hard. Thus, we solve the following relaxed problem,
+\begin{equation}
+    \label{eq:opt_problem_with_eq_constraint}
+    \min_{\mathbf{H}} \;\;\;\; \trace{\mathbf{H}^\intercal \mathbf{L} \mathbf{H}} \;\;\;\; \text{s.t.} \;\;\;\; \mathbf{H}^\intercal \mathbf{H} = \mathbf{I}; \;\;\;\; \mathbf{R} \left( \mathbf{I} - \frac{1}{N}\bm{1}\bmone^\intercal \right)\mathbf{H} = \mathbf{0}.
+\end{equation}
+Clearly, the columns of any feasible $\mathbf{H}$ must belong to the null space of $\mathbf{R}(\mathbf{I} - \bm{1}\bmone^\intercal / N)$. Thus, any feasible $\mathbf{H}$ can be expressed as $\mathbf{H} = \mathbf{Y} \mathbf{Z}$ for some matrix $\mathbf{Z} \in \mathbb{R}^{N - r \times K}$, where $\mathbf{Y} \in \mathbb{R}^{N \times N - r}$ is an orthonormal matrix containing the basis vectors of the null space of $\mathbf{R}(\mathbf{I} - \bm{1}\bmone^\intercal / N)$ as its columns. Here, $r$ is the rank of $\mathbf{R}(\mathbf{I} - \bm{1}\bmone^\intercal / N)$. Because $\mathbf{Y}^\intercal \mathbf{Y} = \mathbf{I}$, $\mathbf{H}^\intercal \mathbf{H} = \mathbf{Z}^\intercal \mathbf{Y}^\intercal \mathbf{Y} \mathbf{Z} = \mathbf{Z}^\intercal \mathbf{Z}$. Thus, $\mathbf{H}^\intercal \mathbf{H} = \mathbf{I} \Leftrightarrow \mathbf{Z}^\intercal \mathbf{Z} = \mathbf{I}$. The following optimization problem is equivalent to \eqref{eq:opt_problem_with_eq_constraint} by setting $\mathbf{H} = \mathbf{Y} \mathbf{Z}$.
+\begin{equation}
+    \label{eq:optimization_problem}
+    \min_{\mathbf{Z}} \;\;\;\; \trace{\mathbf{Z}^\intercal \mathbf{Y}^\intercal \mathbf{L} \mathbf{Y} \mathbf{Z}} \;\;\;\; \text{s.t.} \;\;\;\; \mathbf{Z}^\intercal \mathbf{Z} = \mathbf{I}.
+\end{equation}
+As in standard spectral clustering, the solution to \eqref{eq:optimization_problem} is given by the $K$ leading eigenvectors of $\mathbf{Y}^\intercal \mathbf{L} \mathbf{Y}$. Of course, for $K$ eigenvectors to exist, $N - r$ must be at least $K$, as $\mathbf{Y}^\intercal \mathbf{L} \mathbf{Y}$ has dimensions $N - r \times N - r$. The clusters can then be recovered by using $k$-means clustering to cluster the rows of $\mathbf{H} = \mathbf{Y} \mathbf{Z}$, as in Algorithm \ref{alg:unnormalized_spectral_clustering}. Algorithm \ref{alg:urepsc} summarizes this procedure. We refer to this algorithm as unnormalized representation-aware spectral clustering (\textsc{URepSC}).
+
+\begin{algorithm}[t]
+    \begin{algorithmic}[1]
+        \State \textbf{Input: }Adjacency matrix $\mathbf{A}$, representation graph $\mathbf{R}$, number of clusters $K \geq 2$
+        \State Compute $\mathbf{Y}$ containing orthonormal basis vectors of $\nullspace{\mathbf{R}(\mathbf{I} - \frac{1}{N}\bm{1}\bmone^\intercal)}$
+        \State Compute Laplacian $\mathbf{L} = \mathbf{D} - \mathbf{A}$
+        \State Compute leading $K$ eigenvectors of $\mathbf{Y}^\intercal \mathbf{L} \mathbf{Y}$. Let $\mathbf{Z}$ contain these vectors as its columns.
+        \State Apply $k$-means clustering to rows of $\mathbf{H} = \mathbf{Y} \mathbf{Z}$ to get clusters $\hat{\mathcal{C}}_1, \hat{\mathcal{C}}_2, \dots, \hat{\mathcal{C}}_K$
+        \State \textbf{Return:} Clusters $\hat{\mathcal{C}}_1, \hat{\mathcal{C}}_2, \dots, \hat{\mathcal{C}}_K$
+    \end{algorithmic}
+    \caption{\textsc{URepSC}}
+    \label{alg:urepsc}
+\end{algorithm}
+
+
+\subsection{Normalized representation-aware spectral clustering (\textsc{NRepSC})}
+\label{section:normalized_repsc}
+
+We use a similar strategy as the previous section to develop the normalized variant of \textsc{RepSC}. Recall from Section \ref{section:normalized_spectral_clustering} that normalized spectral clustering approximately minimizes the $\mathrm{NCut}$ objective. The lemma below is a counterpart of Lemma \ref{lemma:constraint_matrix_unnorm}. It formulates a sufficient condition that implies our constraint in \eqref{eq:representation_constraint}, but this time in terms of the matrix $\mathbf{T}$ defined in \eqref{eq:T_def}. 
+
+\begin{lemma}
+    \label{lemma:constraint_matrix_norm}
+    Let $\mathbf{T} \in \mathbb{R}^{N \times K}$ have the form specified in \eqref{eq:T_def}. The condition 
+    \begin{equation}
+      \label{eq:normalized_matrix_fairness_criteria}
+      \mathbf{R} \left( \mathbf{I} - \frac{1}{N}\bm{1}\bmone^\intercal \right) \mathbf{T} = \mathbf{0}
+    \end{equation}
+    implies that the corresponding clusters $\mathcal{C}_1, \dots, \mathcal{C}_K$ satisfy \eqref{eq:representation_constraint}. Here, $\mathbf{I}$ is the $N \times N$ identity matrix and $\bm{1}$ is a $N$ dimensional all-ones vector.
+\end{lemma}
+
+For \textsc{NRepSC}, we assume that the similarity graph $\mathcal{G}$ is connected so that the diagonal entries of $\mathbf{D}$ are strictly positive. We proceed as before to incorporate constraint \eqref{eq:normalized_matrix_fairness_criteria} in optimization problem \eqref{eq:normalized_ideal_opt_problem}. After applying the spectral relaxation, we get
+\begin{equation}
+    \label{eq:optimization_problem_normalized}
+    \min_{\mathbf{T}} \;\;\;\; \trace{\mathbf{T}^\intercal  \mathbf{L} \mathbf{T}} \;\;\;\; \text{s.t.} \;\;\;\; \mathbf{T}^\intercal \mathbf{D} \mathbf{T} = \mathbf{I}; \;\;\;\; \mathbf{R}(\mathbf{I} - \bm{1} \bm{1}^\intercal / N) \mathbf{T} = \mathbf{0}.
+\end{equation}
+As before, $\mathbf{T} = \mathbf{Y} \mathbf{Z}$ for some $\mathbf{Z} \in \mathbb{R}^{N - r \times K}$, where recall that columns of $\mathbf{Y}$ contain orthonormal basis for $\nullspace{\mathbf{R}(\mathbf{I} - \bm{1} \bm{1}^\intercal / N)}$. This reparameterization yields
+\begin{equation*}
+    \min_{\mathbf{Z}} \;\;\;\; \trace{\mathbf{Z}^\intercal \mathbf{Y}^\intercal  \mathbf{L} \mathbf{Y} \mathbf{Z}} \;\;\;\; \text{s.t.} \;\;\;\; \mathbf{Z}^\intercal \mathbf{Y}^\intercal \mathbf{D} \mathbf{Y} \mathbf{Z} = \mathbf{I}.
+\end{equation*}
+Define $\mathbf{Q} \in \mathbb{R}^{N - r \times N - r}$ such that $\mathbf{Q}^2 = \mathbf{Y}^\intercal \mathbf{D} \mathbf{Y}$. Note that $\mathbf{Q}$ exists as the entries of $\mathbf{D}$ are non-negative
+Let $\mathbf{V} = \mathbf{Q} \mathbf{Z}$. Then, $\mathbf{Z} = \mathbf{Q}^{-1} \mathbf{V}$ and $\mathbf{Z}^\intercal \mathbf{Q}^2 \mathbf{Z} = \mathbf{V}^\intercal \mathbf{V}$ as $\mathbf{Q}$ is symmetric. Reparameterizing again, we get:
+\begin{equation*}
+    \min_{\mathbf{V}} \;\;\;\; \trace{\mathbf{V}^\intercal \mathbf{Q}^{-1} \mathbf{Y}^\intercal  \mathbf{L} \mathbf{Y} \mathbf{Q}^{-1} \mathbf{V}} \;\;\;\; \text{s.t.} \;\;\;\; \mathbf{V}^\intercal \mathbf{V} = \mathbf{I}.
+\end{equation*}
+This again is the standard form of the trace minimization problem and the optimal solution is given by the leading $K$ eigenvectors of $\mathbf{Q}^{-1} \mathbf{Y}^\intercal  \mathbf{L} \mathbf{Y} \mathbf{Q}^{-1}$. Algorithm \ref{alg:nrepsc} summarizes the normalized representation-aware spectral clustering algorithm, which we denote by \textsc{NRepSC}. Note that the algorithm assumes that $\mathbf{Q}$ is invertible, which requires the absence of isolated nodes in the similarity graph $\mathcal{G}$. 
+
+\begin{algorithm}[t]
+    \begin{algorithmic}[1]
+        \State \textbf{Input: }Adjacency matrix $\mathbf{A}$, representation graph $\mathbf{R}$, number of clusters $K \geq 2$
+        \State Compute $\mathbf{Y}$ containing orthonormal basis vectors of $\nullspace{\mathbf{R}(\mathbf{I} - \frac{1}{N}\bm{1}\bmone^\intercal)}$
+        \State Compute Laplacian $\mathbf{L} = \mathbf{D} - \mathbf{A}$
+        \State Compute $\mathbf{Q} = \sqrt{\mathbf{Y}^\intercal \mathbf{D} \mathbf{Y}}$ using the matrix square root
+        \State Compute leading $K$ eigenvectors of $\mathbf{Q}^{-1} \mathbf{Y}^\intercal  \mathbf{L} \mathbf{Y} \mathbf{Q}^{-1}$. Set them as columns of $\mathbf{V} \in \mathbb{R}^{N-r \times K}$
+        \State Apply $k$-means clustering to the rows of $\mathbf{T} = \mathbf{Y} \mathbf{Q}^{-1} \mathbf{V}$ to get clusters $\hat{\mathcal{C}}_1, \hat{\mathcal{C}}_2, \dots, \hat{\mathcal{C}}_K$
+        \State \textbf{Return:} Clusters $\hat{\mathcal{C}}_1, \hat{\mathcal{C}}_2, \dots, \hat{\mathcal{C}}_K$
+    \end{algorithmic}
+    \caption{\textsc{NRepSC}}
+    \label{alg:nrepsc}
+\end{algorithm}
+
+
+\subsection{Comments on the proposed algorithms}
+\label{section:comments_on_the_proposed_algorithms}
+
+Before proceeding with the theoretical analysis in Section \ref{section:analysis}, we first make two remarks about the proposed algorithms.
+
+\paragraph*{Spectral relaxation} Note that the constraints $\mathbf{R}(\mathbf{I} - \bm{1}\bmone^\intercal / N) \mathbf{H} = \mathbf{0}$ and $\mathbf{R}(\mathbf{I} - \bm{1}\bmone^\intercal / N) \mathbf{T} = \mathbf{0}$ imply the satisfaction of our representation constraint only when $\mathbf{H}$ and $\mathbf{T}$ have the form given in \eqref{eq:H_def} and \eqref{eq:T_def}, respectively. Thus, a feasible solution to the relaxed optimization problem in~\eqref{eq:opt_problem_with_eq_constraint} or \eqref{eq:optimization_problem_normalized} may not necessarily result in \textit{representation-aware} clusters. In fact, even in the unconstrained case, there are no general guarantees that bound the difference between the optimal solution of~\eqref{eq:opt_problem_normal} or \eqref{eq:opt_problem_normal_normalized} and the respective optimal solutions of the original NP-hard ratio-cut/normalized-cut problems \citep{KleindessnerEtAl:2019:GuaranteesForSpectralClusteringWithFairnessConstraints}. Thus, the representation-aware nature of the clusters discovered by solving \eqref{eq:optimization_problem} or \eqref{eq:optimization_problem_normalized} cannot be guaranteed in the general case. Nonetheless, we show in Section~\ref{section:analysis} that the discovered clusters indeed satisfy the representation constraint under certain additional assumptions.
+
+\paragraph*{Computational complexity} Algorithms \ref{alg:urepsc} and \ref{alg:nrepsc} have a time complexity of $O(N^3)$ and space complexity of $O(N^2)$. Finding the null space of $\mathbf{R}(\mathbf{I} - \bm{1} \bm{1}^\intercal / N)$ to calculate $\mathbf{Y}$ and computing the eigenvectors of appropriate matrices are the computationally dominant steps in both cases. This matches the worst-case complexity of the standard spectral clustering algorithm. For small $K$, several approximations can reduce this complexity, but most such techniques require $K = 2$ \citep{YuShi:2004:SegmentationGivenPartialGroupingConstraints,XuEtAl:2009:FastNormalizedCutWithLinearConstraints}.
+
+
+\section{Analysis}
+\label{section:analysis}
+
+In this section, we show that Algorithms~\ref{alg:urepsc} and \ref{alg:nrepsc} recover the ground truth clusters with a high probability under certain assumptions on the representation graph. As we will see in Section \ref{section:consistency_results}, the ground truth clusters satisfy \eqref{eq:representation_constraint} by construction for similarity graphs $\mathcal{G}$ sampled from a modified variant of the Stochastic Block Model (SBM) \citep{HollandEtAl:1983:StochasticBlockmodelsFirstSteps}, described in Section \ref{section:rsbm}. Section \ref{section:consistency_results} presents our main results that establish a high probability upper bound on the number of mistakes made by the proposed algorithms. Corollaries \ref{corollary:weak_consistency_urepsc} and \ref{corollary:weak_consistency_nrepsc} then establish their weak-consistency.
+
+
+\subsection{$\mathcal{R}$-SBM}
+\label{section:rsbm}
+
+The well known Stochastic Block Model (SBM) \citep{HollandEtAl:1983:StochasticBlockmodelsFirstSteps} allows one to sample random graphs with known clusters. It takes a function $\pi: \mathcal{V} \rightarrow [K]$ as input. This function assigns each node $v_i \in \mathcal{V}$ to one of the $K$ clusters. Then, independently for all node pairs $(v_i, v_j)$ such that $i > j$, $\mathrm{P}(A_{ij} = 1) = B_{\pi(v_i) \pi(v_j)},$ where $\mathbf{B} \in [0, 1]^{K \times K}$ is a symmetric matrix. The $(k, \ell)^{th}$ entry of $\mathbf{B}$ specifies the probability of a connection between two nodes that belong to clusters $\mathcal{C}_k$ and $\mathcal{C}_\ell$, respectively. A commonly used variant of SBM assumes $B_{kk} = \alpha$ and $B_{k\ell} = \beta$ for all $k, \ell \in [K]$ such that $k \neq \ell$. We define a variant of SBM with respect to a representation graph $\mathcal{R}$ below and refer to it as Representation-Aware SBM or $\mathcal{R}$-SBM.
+
+\begin{definition}[$\mathcal{R}$-SBM]
+    \label{def:conditioned_sbm}
+    A $\mathcal{R}$-SBM is defined by the tuple $(\pi, \mathcal{R}, p, q, r, s)$, where $\pi: \mathcal{V} \rightarrow [K]$ maps nodes in $\mathcal{V}$ to clusters, $\mathcal{R}$ is a representation graph, and $1 \geq p \geq q \geq r \geq s \geq 0$ are probabilities used for sampling edges. Under this model, for all $i > j$,
+    \begin{equation}
+        \label{eq:sbm_specification}
+        \mathrm{P}(A_{ij} = 1) = \begin{cases}
+          p & \text{if } \pi(v_i) = \pi(v_j) \text{ and } R_{ij} = 1, \\
+          q & \text{if } \pi(v_i) \neq \pi(v_j) \text{ and } R_{ij} = 1, \\
+          r & \text{if } \pi(v_i) = \pi(v_j) \text{ and } R_{ij} = 0,  \\
+          s & \text{if } \pi(v_i) \neq \pi(v_j) \text{ and } R_{ij} = 0.
+        \end{cases}
+      \end{equation}
+\end{definition}
+
+The similarity graphs sampled from a $\mathcal{R}$-SBM have two interesting properties. First, everything else being equal, nodes have a higher tendency to connect with other nodes in the same cluster as $p \geq q$ and $r \geq s$. Thus, $\mathcal{R}$-SBM plants the clusters specified by $\pi$ in the sampled graph $\mathcal{G}$. Second, and more importantly, $\mathcal{R}$-SBM also plants the properties of the given representation graph $\mathcal{R}$ in the sampled graphs $\mathcal{G}$. To see this, note that nodes that are connected in $\mathcal{R}$ have a higher probability of being connected in $\mathcal{G}$ as well ($p \geq r$ and $q \geq s$).
+
+Recall that our algorithms must discover clusters in $\mathcal{G}$ in which the connected nodes in $\mathcal{R}$ are proportionally distributed. However, $\mathcal{R}$-SBM makes two nodes connected in $\mathcal{R}$ more likely to connect in $\mathcal{G}$, even if they do not belong to the same cluster ($q \geq r$). In this sense, graphs sampled from $\mathcal{R}$-SBM are ``hard'' instances from the perspective of our algorithms. When $\mathcal{R}$ itself has a community structure, there are two natural ways to cluster the nodes: \textbf{(i)} based on the ground-truth clusters $\mathcal{C}_1$, $\mathcal{C}_2$, \dots, $\mathcal{C}_K$ specified by $\pi$; and \textbf{(ii)} based on the communities in $\mathcal{R}$. The clusters based on communities in $\mathcal{R}$ are likely to not satisfy the representation constraint in Definition \ref{def:representation_constraint} as tightly connected nodes in $\mathcal{R}$ will be assigned to the same cluster in this case rather than being distributed across clusters. 
+
+We show in Section \ref{section:consistency_results} that, under certain assumptions on $\mathcal{R}$, the ground-truth clusters can be constructed so that they satisfy the representation constraint \eqref{eq:representation_constraint}. Assuming that the ground-truth clusters indeed satisfy \eqref{eq:representation_constraint}, the goal is to show that Algorithms \ref{alg:urepsc} and \ref{alg:nrepsc} recover the ground-truth clusters with high probability rather than returning any other natural but ``representation-unaware'' clusters.
+
+
+\subsection{Consistency results}
+\label{section:consistency_results}
+
+As noted in Section \ref{section:constraint}, some representation graphs lead to constraints that cannot be satisfied. For our theoretical analysis, we restrict our focus to cases where the constraint in \eqref{eq:representation_constraint} is feasible. Towards this end, an additional assumption on $\mathcal{R}$ is required.
+
+\begin{assumption}
+    \label{assumption:R_is_d_regular}
+    $\mathcal{R}$ is a $d$-regular graph for some $K \leq d \leq N$. Moreover, $R_{ii} = 1$ for all $i \in [N]$, and each node in $\mathcal{R}$ is connected to $d / K$ nodes from cluster $\mathcal{C}_i$, for all $i \in [K]$ (including the self-loop).
+\end{assumption}
+
+Assumption~\ref{assumption:R_is_d_regular} ensures the existence of a $\pi$ for which the corresponding ground-truth clusters satisfy the representation constraint in \eqref{eq:representation_constraint}. Namely, assuming equal-sized clusters, let $\pi(v_i) = k$, if $(k - 1) \frac{N}{K} \leq i \leq k \frac{N}{K}$ for all $i \in [N]$, and $k \in [K]$. It can be easily verified that the resulting clusters $\mathcal{C}_k = \{v_i : \pi(v_i) = k \}$, $k \in [K]$ satisfy \eqref{eq:representation_constraint}.
+
+Before presenting our main results, we need to set up additional notation. Let $\bm{\Theta} \in \{0, 1\}^{N \times K}$ indicate the ground-truth cluster memberships, i.e., $\Theta_{ij} = 1 \Leftrightarrow v_i \in \mathcal{C}_j$. Similarly, $\hat{\bm{\Theta}} \in \{0, 1\}^{N \times K}$ indicates the clusters returned by the algorithm, i.e., $\hat{\Theta}_{ij} = 1 \Leftrightarrow v_i \in \hat{\mathcal{C}}_j$. Further, let $\mathcal{J}$ be the set of all $K \times K$ permutation matrices. The fraction of misclustered nodes \citep{LeiEtAl:2015:ConsistencyOfSpectralClusteringInSBM} is defined as 
+\begin{equation*}
+    M(\bm{\Theta}, \hat{\bm{\Theta}}) = \min_{\mathbf{J} \in \mathcal{J}} \frac{1}{N} \norm{\bm{\Theta} - \hat{\bm{\Theta}} \mathbf{J}}[0].
+\end{equation*}
+As the ground truth clusters $\mathcal{C}_1, \dots, \mathcal{C}_K$ satisfy \eqref{eq:representation_constraint} by construction, a low $M(\bm{\Theta}, \hat{\bm{\Theta}})$ indicates that the clusters returned by the algorithm approximately satisfy \eqref{eq:representation_constraint}. Theorems \ref{theorem:consistency_result_unnormalized} and \ref{theorem:consistency_result_normalized} also use the eigenvalues of the Laplacian matrix in the expected case. We use $\mathcal{L}$ to denote this matrix, and define it as $\mathcal{L} = \mathcal{D} - \mathcal{A}$, where $\mathcal{A} = \mathrm{E}[\mathbf{A}]$ is the expected adjacency matrix of a graph sampled from $\mathcal{R}$-SBM and $\mathcal{D} \in \mathbb{R}^{N \times N}$ is a diagonal matrix such that $\mathcal{D}_{ii} = \sum_{j = 1}^N \mathcal{A}_{ij}$, for all $i \in [N]$. The next two results establish high-probability upper bounds on the fraction of misclustered nodes for \textsc{URepSC} and \textsc{NRepSC} for similarity graphs $\mathcal{G}$ sampled from $\mathcal{R}$-SBM.
+
+\begin{theorem}[Error bound for \textsc{URepSC}]
+    \label{theorem:consistency_result_unnormalized}
+    Let $\rank{\mathbf{R}} \leq N - K$ and assume that all clusters have equal sizes. Let $\mu_1 \leq \mu_2 \leq \dots \leq \mu_{N - r}$ denote the eigenvalues of $\mathbf{Y}^\intercal \mathcal{L} \mathbf{Y}$, where $\mathbf{Y}$ was defined in Section \ref{section:unnormalized_repsc}. Define $\gamma = \mu_{K + 1} - \mu_{K}$. Under Assumption \ref{assumption:R_is_d_regular}, there exists a universal constant $\mathrm{const}(C, \alpha)$, such that if $\gamma$ satisfies $$\gamma^2 \geq \mathrm{const}(C, \alpha) (2 + \epsilon) p N K \ln N,$$ and $p \geq C \ln N / N$ for some $C > 0$, then,
+    $$M(\bm{\Theta}, \hat{\bm{\Theta}}) \leq \mathrm{const}(C, \alpha) \frac{(2 + \epsilon)}{\gamma^2} p N \ln N,$$
+    for every $\epsilon > 0$ with probability at least $1 - 2 N^{-\alpha}$ when a $(1 + \epsilon)$-approximate algorithm for $k$-means clustering is used in Step 5 of Algorithm \ref{alg:urepsc}.
+\end{theorem}
+
+\begin{theorem}[Error bound for \textsc{NRepSC}]
+    \label{theorem:consistency_result_normalized}
+    Let $\rank{\mathbf{R}} \leq N - K$ and assume that all clusters have equal sizes. Let $\mu_1 \leq \mu_2 \leq \dots \leq \mu_{N - r}$ denote the eigenvalues of $\mathcal{Q}^{-1} \mathbf{Y}^\intercal \mathcal{L} \mathbf{Y} \mathcal{Q}^{-1}$, where $\mathcal{Q} = \sqrt{\mathbf{Y}^\intercal \mathcal{D} \mathbf{Y}}$ and $\mathbf{Y}$ was defined in Section \ref{section:unnormalized_repsc}. Define $\gamma = \mu_{K + 1} - \mu_{K}$ and $\lambda_1 = qd + s(N - d) + (p - q) \frac{d}{K} + (r - s) \frac{N - d}{K}$. Under Assumption \ref{assumption:R_is_d_regular}, there are universal constants $\mathrm{const}_1(C, \alpha)$, $\mathrm{const}_4(C, \alpha)$, and $\mathrm{const}_5(C, \alpha)$ such that if:
+    \begin{enumerate}
+        \item $\left(\frac{\sqrt{p N \ln N}}{\lambda_1 - p}\right) \left(\frac{\sqrt{p N \ln N}}{\lambda_1 - p} + \frac{1}{6\sqrt{C}}\right) \leq \frac{1}{16(\alpha + 1)}$,
+        \item $\frac{\sqrt{p N \ln N}}{\lambda_1 - p} \leq \mathrm{const}_4(C, \alpha)$, and
+        \item $16(2 + \epsilon)\left[ \frac{8 \mathrm{const}_5(C, \alpha) \sqrt{K}}{\gamma} + \mathrm{const}_1(C, \alpha)\right]^2 \frac{p N^2 \ln N}{(\lambda_1 - p)^2} < \frac{N}{K}$,
+    \end{enumerate}
+    and $p \geq C \ln N / N$ for some $C > 0$, then,
+    $$M(\bm{\Theta}, \hat{\bm{\Theta}}) \leq 32(2 + \epsilon)\left[ \frac{8 \mathrm{const}_5(C, \alpha) \sqrt{K}}{\gamma} + \mathrm{const}_1(C, \alpha)\right]^2 \frac{p N \ln N}{(\lambda_1 - p)^2},$$
+    for every $\epsilon > 0$ with probability at least $1 - 2 N^{-\alpha}$ when a $(1 + \epsilon)$-approximate algorithm for $k$-means clustering is used in Step 6 of Algorithm \ref{alg:nrepsc}.
+\end{theorem}
+
+Next, we discuss our assumptions and use the error bounds above to establish the weak consistency of our algorithms.
+
+\subsection{Discussion}
+\label{section:discussion}
+
+Note that $\mathbf{I} - \bm{1} \bm{1}^\intercal / N$ is a projection matrix and $\bm{1}$ is its eigenvector with eigenvalue $0$. Any vector orthogonal to $\bm{1}$ is also an eigenvector with eigenvalue $1$. Thus, $\rank{\mathbf{I} - \bm{1} \bm{1}^\intercal / N} = N - 1$. Because $\rank{\mathbf{R} (\mathbf{I} - \bm{1} \bm{1}^\intercal / N)} \leq \min(\rank{\mathbf{R}}, \rank{\mathbf{I} - \bm{1} \bm{1}^\intercal / N})$, requiring $\rank{\mathbf{R}} \leq N - K$ ensures that $\rank{\mathbf{R}(\mathbf{I} - \bm{1} \bm{1}^\intercal / N)} \leq N - K$, which is necessary for \eqref{eq:optimization_problem} and \eqref{eq:optimization_problem_normalized} to have a solution.
+
+The assumption on the size of the clusters, together with the $d$-regularity assumption on $\mathcal{R}$, allows us to compute the smallest $K$ eigenvalues of the Laplacian matrix in the expected case. This is a crucial step in the proof of our main consistency results. The additional assumptions in Theorem \ref{theorem:consistency_result_normalized} are easy to satisfy as $\lambda_1$ scales linearly with $N$ for appropriate values of $p, q, r,$ and $s$. Similar assumptions were also used in \citet{KleindessnerEtAl:2019:GuaranteesForSpectralClusteringWithFairnessConstraints}.
+
+\begin{remark}
+    In practice, Algorithms \ref{alg:urepsc} and \ref{alg:nrepsc} only require the rank assumption on $\mathbf{R}$ to ensure the existence of solutions to the corresponding optimization problems. The assumptions on the size of clusters and $d$-regularity of $\mathcal{R}$ are only needed for our theoretical analysis.
+\end{remark}
+
+The next two corollaries are direct consequences of Theorems \ref{theorem:consistency_result_unnormalized} and \ref{theorem:consistency_result_normalized}, respectively.
+
+\begin{corollary}[Weak consistency of \textsc{URepSC}]
+    \label{corollary:weak_consistency_urepsc}
+    Under the same setup as Theorem \ref{theorem:consistency_result_unnormalized}, for \textsc{URepSC}, $M(\bm{\Theta}, \hat{\bm{\Theta}}) = o(1)$ with probability $1 - o(1)$ if $\gamma = \omega(\sqrt{pN K \ln N})$.
+\end{corollary}
+
+\begin{corollary}[Weak consistency of \textsc{NRepSC}]
+    \label{corollary:weak_consistency_nrepsc}
+    Under the same setup as Theorem \ref{theorem:consistency_result_normalized}, for \textsc{NRepSC}, $M(\bm{\Theta}, \hat{\bm{\Theta}}) = o(1)$ with probability $1 - o(1)$ if $\gamma = \omega(\sqrt{pN K \ln N} / (\lambda_1 - p))$.
+\end{corollary}
+
+Thus, under the assumptions in the corollaries above, Algorithms \ref{alg:urepsc} and \ref{alg:nrepsc} are weakly consistent \citep{Abbe:2018:CommunityDetectionAndStochasticBlockModels}. The conditions on $\gamma$ are satisfied in many interesting cases. For example, when there are $P$ protected groups, as is the case for statistical-level constraints, the equivalent representation graph has $P$ cliques that are not connected to each other (see Appendix \ref{appendix:constraint}). \citet{KleindessnerEtAl:2019:GuaranteesForSpectralClusteringWithFairnessConstraints} show that $\gamma = \theta(N/K)$ in this case (for the unnormalized variant), which satisfies the criterion given above if $K$ is not too large.
+
+Finally, Theorems \ref{theorem:consistency_result_unnormalized} and \ref{theorem:consistency_result_normalized} require a $(1 + \epsilon)$-approximate solution to $k$-means clustering. Several efficient algorithms have been proposed in the literature for this task \citep{KumarEtAl:2004:ASimpleLinearTimeApproximateAlgorithmForKMeansClusteringInAnyDimension,ArthurVassilvitskii:2007:KMeansTheAdvantagesOfCarefulSeeding,AhmadianEtAl:2017:BetterGuaranteesForKMeansAndEuclideanKMedianByPrimalDualAlgorithms}. Such algorithms are also available in commonly used software packages like MATLAB and scikit-learn. The assumption that $p \geq C \ln N / N$ controls the sparsity of the graph, and is required in the the consistency proofs for standard spectral clustering as well \citep{LeiEtAl:2015:ConsistencyOfSpectralClusteringInSBM}.
+
+
+\subsection{Proof of Theorems \ref{theorem:consistency_result_unnormalized} and \ref{theorem:consistency_result_normalized}}
+\label{section:proof_of_theorems}
+
+The proof of Theorems \ref{theorem:consistency_result_unnormalized} and \ref{theorem:consistency_result_normalized} follow the commonly used template for such results \citep{RoheEtAl:2011:SpectralClusteringAndTheHighDimensionalSBM, LeiEtAl:2015:ConsistencyOfSpectralClusteringInSBM}. In the context of \textsc{URepSC} (similar arguments work for \textsc{NRepSC} as well), we
+\begin{enumerate}
+    \item Compute the expected Laplacian matrix $\mathcal{L}$ under $\mathcal{R}$-SBM and show that its top $K$ eigenvectors can be used to recover the ground-truth clusters (Lemmas \ref{lemma:introducing_uks}--\ref{lemma:orthonormal_eigenvectors_y2_yK}).
+    \item Show that these top $K$ eigenvectors lie in the null space of $\mathbf{R}(\mathbf{I} - \bm{1} \bm{1}^\intercal / N)$, and hence are also the top $K$ eigenvectors of $\mathbf{Y}^\intercal \mathcal{L} \mathbf{Y}$ (Lemma \ref{lemma:first_K_eigenvectors_of_L}). This implies that Algorithm \ref{alg:urepsc} returns the ground truth clusters in the expected case.
+    \item Use matrix perturbation arguments to establish a high probability mistake bound in the general case when the graph $\mathcal{G}$ is sampled from a $\mathcal{R}$-SBM (Lemmas \ref{lemma:bound_on_D-calD}--\ref{lemma:k_means_error}).
+\end{enumerate}
+
+We begin with a series of lemmas that highlight certain useful properties of eigenvalues and eigenvectors of the expected Laplacian $\mathcal{L}$. These lemmas will be used in Sections \ref{section:proof_consistency_unnormalized} and \ref{section:proof_consistency_normalized} to prove Theorem \ref{theorem:consistency_result_unnormalized} and \ref{theorem:consistency_result_normalized}, respectively. See the supplementary material \citep{ThisPaperSupp} for the proofs of all technical lemmas. For the remainder of this section, we assume that all appropriate assumptions made in Theorems \ref{theorem:consistency_result_unnormalized} and \ref{theorem:consistency_result_normalized} are satisfied.
+
+The first lemma shows that certain vectors that can be used to recover the ground-truth clusters indeed satisfy the representation constraint in \eqref{eq:matrix_fairness_criteria} and \eqref{eq:normalized_matrix_fairness_criteria}.
+
+\begin{lemma}
+\label{lemma:introducing_uks}
+The $N$-dimensional vector of all ones, denoted by $\bm{1}$, is an eigenvector of $\mathbf{R}$ with eigenvalue $d$. Define $\mathbf{u}_k \in \mathbb{R}^N$ for $k \in [K - 1]$ as,
+\begin{equation*}
+    u_{ki} = \begin{cases}
+    1 & \text{ if }v_i \in \mathcal{C}_k \\
+    -\frac{1}{K - 1} & \text{ otherwise,}
+    \end{cases}
+\end{equation*}
+where $u_{ki}$ is the $i^{th}$ element of $\mathbf{u}_k$. Then, $\bm{1}, \mathbf{u}_1, \dots, \mathbf{u}_{K - 1} \in \nullspace{\mathbf{R}(\mathbf{I} - \frac{1}{N}\bm{1}\bmone^\intercal)}$. Moreover, $\bm{1}, \mathbf{u}_1, \dots, \mathbf{u}_{K - 1}$ are linearly independent.
+\end{lemma}
+
+Recall that we use $\mathcal{A} \in \mathbb{R}^{N \times N}$ to denote the expected adjacency matrix of the similarity graph $\mathcal{G}$. Clearly, $\mathcal{A} = \tilde{\mathcal{A}} - p \mathbf{I}$, where $\tilde{\mathcal{A}}$ is such that $\tilde{\mathcal{A}}_{ij} = P(A_{ij} = 1)$ if $i \neq j$ (see \eqref{eq:sbm_specification}) and $\tilde{\mathcal{A}}_{ii} = p$ otherwise. Note that 
+\begin{equation}
+    \label{eq:eigenvector_A_tildeA}
+    \tilde{\mathcal{A}} \mathbf{x} = \lambda \mathbf{x} \,\,\,\, \Leftrightarrow \,\,\,\, \mathcal{A} \mathbf{x} = (\lambda - p) \mathbf{x}.
+\end{equation}
+Simple algebra shows that $\tilde{\mathcal{A}}$ can be written as
+\begin{equation}
+    \label{eq:tilde_cal_A_def}
+    \tilde{\mathcal{A}} = q \mathbf{R} + s (\bm{1} \bm{1}^\intercal - \mathbf{R}) + (p - q)\sum_{k = 1}^K \mathbf{G}_k \mathbf{R} \mathbf{G}_k + (r - s) \sum_{k = 1}^K \mathbf{G}_k (\bm{1} \bm{1}^\intercal - \mathbf{R}) \mathbf{G}_k,
+\end{equation}
+where, for all $k \in [K]$, $\mathbf{G}_k \in \mathbb{R}^{N \times N}$ is a diagonal matrix such that $(\mathbf{G}_k)_{ii} = 1$ if $v_i \in \mathcal{C}_k$ and $0$ otherwise. The next lemma shows that $\bm{1}, \mathbf{u}_1, \dots, \mathbf{u}_{K - 1}$ defined in Lemma \ref{lemma:introducing_uks} are eigenvectors of $\tilde{\mathcal{A}}$.
+
+\begin{lemma}
+    \label{lemma:uk_eigenvector_of_tildeA}
+    Let $\bm{1}, \mathbf{u}_1, \dots, \mathbf{u}_{K - 1}$ be as defined in Lemma \ref{lemma:introducing_uks}. Then,
+    \begin{eqnarray*}
+        \tilde{\mathcal{A}} \bm{1} &=& \lambda_1 \bm{1} \text{ where } \lambda_1 = qd + s(N - d) + (p - q) \frac{d}{K} + (r - s) \frac{N - d}{K}, \text{ and } \\
+        \tilde{\mathcal{A}} \mathbf{u}_k &=& \lambda_{1 + k} \mathbf{u}_k \text{ where } \lambda_{1 + k} = (p - q) \frac{d}{K} + (r - s) \frac{N - d}{K}.
+    \end{eqnarray*}
+\end{lemma}
+
+Let $\mathcal{L} = \mathcal{D} - \mathcal{A}$ be the expected Laplacian matrix, where $\mathcal{D}$ is a diagonal matrix with $\mathcal{D}_{ii} = \sum_{j=1}^N \mathcal{A}_{ij}$ for all $i \in [N]$. It is easy to see that $\mathcal{D}_{ii} = \lambda_1 - p$ for all $i \in [N]$ as $\mathcal{A} \bm{1} = (\lambda_1 - p) \bm{1}$ by \eqref{eq:eigenvector_A_tildeA} and Lemma \ref{lemma:uk_eigenvector_of_tildeA}. Thus, $\mathcal{D} = (\lambda_1 - p) \mathbf{I}$ and hence any eigenvector of $\tilde{\mathcal{A}}$ with eigenvalue $\lambda$ is also an eigenvector of $\mathcal{L}$ with eigenvalue $\lambda_1 - \lambda$. That is, if $\tilde{\mathcal{A}} \mathbf{x} = \lambda \mathbf{x}$,
+\begin{equation}
+    \label{eq:eigenvectors_of_L}
+    \mathcal{L} \mathbf{x} = (\mathcal{D} - \mathcal{A})\mathbf{x} = ((\lambda_1 - p) \mathbf{I} - (\tilde{\mathcal{A}} - p \mathbf{I})) \mathbf{x} = (\lambda_1 - \lambda) \mathbf{x}.
+\end{equation}
+Hence, the eigenvectors of $\mathcal{L}$ corresponding to the $K$ smallest eigenvalues are the same as the eigenvectors of $\tilde{\mathcal{A}}$ corresponding to the $K$ largest eigenvalues.
+
+Recall that the columns of the matrix $\mathbf{Y}$ used in Algorithms \ref{alg:urepsc} and \ref{alg:nrepsc} contain the orthonormal basis for the null space of $\mathbf{R}(\mathbf{I} - \bm{1} \bm{1}^\intercal/N)$. To solve \eqref{eq:optimization_problem} and \eqref{eq:optimization_problem_normalized}, we only need to optimize over vectors that belong to this null space. By Lemma \ref{lemma:introducing_uks}, $\bm{1}, \mathbf{u}_1, \dots, \mathbf{u}_{K - 1} \in \nullspace{\mathbf{R}(\mathbf{I} - \bm{1} \bm{1}^\intercal/N)}$ and these vectors are linearly independent. However, we need an orthonormal basis to compute $\mathbf{Y}$. Let $\mathbf{y}_1 = \bm{1} / \sqrt{N}$ and $\mathbf{y}_2, \dots, \mathbf{y}_K$ be orthonormal vectors that span the same space as $\mathbf{u}_1, \dots, \mathbf{u}_{K - 1}$. The next lemma computes such $\mathbf{y}_2, \dots, \mathbf{y}_K$. The matrix $\mathbf{Y} \in \mathbb{R}^{N \times N - r}$ contains these vectors $\mathbf{y}_1, \dots, \mathbf{y}_K$ as its first $K$ columns.
+
+\begin{lemma}
+\label{lemma:orthonormal_eigenvectors_y2_yK}
+Define $\mathbf{y}_{1 + k} \in \mathbb{R}^N$ for $k \in [K - 1]$ as
+\begin{equation*}
+    y_{1 + k, i} = \begin{cases}
+    0 & \text{ if } v_i \in \mathcal{C}_{k{'}} \text{ s.t. } k{'} < k \\
+    \frac{K - k}{\sqrt{\frac{N}{K}(K - k)(K - k + 1)}} & \text{ if } v_i \in \mathcal{C}_k \\
+    -\frac{1}{\sqrt{\frac{N}{K}(K - k)(K - k + 1)}} & \text{ otherwise.}
+    \end{cases}
+\end{equation*}
+Then, for all $k \in [K - 1]$, $\mathbf{y}_{1 + k}$ are orthonormal vectors that span the same space as $\mathbf{u}_1, \mathbf{u}_2, \dots, \mathbf{u}_{K - 1}$ and $\mathbf{y}_1^\intercal \mathbf{y}_{1 + k} = 0$. As before, $y_{1 + k, i}$ refers to the $i^{th}$ element of $\mathbf{y}_{1 + k}$.
+\end{lemma}
+
+Let $\mathbf{X} \in \mathbb{R}^{N \times K}$ be such that it has $\mathbf{y}_1, \dots, \mathbf{y}_{K}$ as its columns. If two nodes belong to the same cluster, the rows corresponding to these nodes in $\mathbf{X} \mathbf{U}$ will be identical for any $\mathbf{U} \in \mathbb{R}^{K \times K}$ such that $\mathbf{U}^\intercal \mathbf{U} = \mathbf{U} \mathbf{U}^\intercal = \mathbf{I}$. Thus, any $K$ orthonormal vectors belonging to the span of $\mathbf{y}_1, \dots, \mathbf{y}_K$ can be used to recover the ground truth clusters.  With the general properties of the eigenvectors and eigenvalues established in the lemmas above, we next move on to the proof of Theorem \ref{theorem:consistency_result_unnormalized} in the next section and Theorem \ref{theorem:consistency_result_normalized} in Section \ref{section:proof_consistency_normalized}.
+
+
+\subsubsection{Proof of Theorem \ref{theorem:consistency_result_unnormalized}}
+\label{section:proof_consistency_unnormalized}
+
+Let $\mathcal{Z} \in \mathbb{R}^{N - r \times K}$ be a solution to the optimization problem \eqref{eq:optimization_problem} in the expected case with $\mathcal{A}$ as input. The next lemma shows that columns of $\mathbf{Y} \mathcal{Z}$ indeed lie in the span of $\mathbf{y}_1, \dots, \mathbf{y}_K$. Thus, the $k$-means clustering step in Algorithm \ref{alg:urepsc} will return the correct ground truth clusters when $\mathcal{A}$ is passed as input.
+
+\begin{lemma}
+    \label{lemma:first_K_eigenvectors_of_L}
+    Let $\mathbf{y}_1 = \bm{1} / \sqrt{N}$ and $\mathbf{y}_{1 + k}$ be as defined in Lemma \ref{lemma:orthonormal_eigenvectors_y2_yK} for all $k \in [K - 1]$. Further, let $\mathcal{Z}$ be the optimal solution of the optimization problem in \eqref{eq:optimization_problem} with $\mathbf{L}$ set to $\mathcal{L}$. Then, the columns of $\mathbf{Y} \mathcal{Z}$ lie in the span of $\mathbf{y}_1, \mathbf{y}_2, \dots, \mathbf{y}_K$.
+\end{lemma}
+
+Next, we use arguments from matrix perturbation theory to show a high-probability bound on the number of mistakes made by the algorithm. In particular, we need an upper bound on $\norm{\mathbf{Y}^\intercal \mathbf{L} \mathbf{Y} - \mathbf{Y}^\intercal \mathcal{L} \mathbf{Y}}$, where $\mathbf{L}$ is the Laplacian matrix for a graph randomly sampled from $\mathcal{R}$-SBM and $\norm{\mathbf{P}} = \sqrt{\lambdamax{\mathbf{P}^\intercal \mathbf{P}}}$ for any matrix $\mathbf{P}$. Note that  $\norm{\mathbf{Y}} = \norm{\mathbf{Y}^\intercal} = 1$ as $\mathbf{Y}^\intercal \mathbf{Y} = \mathbf{I}$. Thus, 
+\begin{equation}
+    \label{eq:reducing_YLY_to_L}
+    \norm{\mathbf{Y}^\intercal \mathbf{L} \mathbf{Y} - \mathbf{Y}^\intercal \mathcal{L} \mathbf{Y}} \leq \norm{\mathbf{Y}^\intercal} \,\, \norm{\mathbf{L} - \mathcal{L}} \,\, \norm{\mathbf{Y}} = \norm{\mathbf{L} - \mathcal{L}}.
+\end{equation}
+Moreover, $$\norm{\mathbf{L} - \mathcal{L}} = \norm{\mathbf{D} - \mathbf{A} - (\mathcal{D} - \mathcal{A})} \leq \norm{\mathbf{D} - \mathcal{D}} + \norm{\mathbf{A} - \mathcal{A}}.$$ The next two lemmas bound the two terms on the right hand side of the inequality above, thus providing an upper bound on $\norm{\mathbf{L} - \mathcal{L}}$, and hence on $\norm{\mathbf{Y}^\intercal \mathbf{L} \mathbf{Y} - \mathbf{Y}^\intercal \mathcal{L} \mathbf{Y}}$ by \eqref{eq:reducing_YLY_to_L}.
+
+\begin{lemma}
+    \label{lemma:bound_on_D-calD}
+    Assume that $p \geq C \frac{\ln N}{N}$ for some constant $C > 0$. Then, for every $\alpha > 0$, there exists a constant $\mathrm{const}_1(C, \alpha)$ that only depends on $C$ and $\alpha$ such that $$\norm{\mathbf{D} - \mathcal{D}} \leq \mathrm{const}_1(C, \alpha) \sqrt{p N \ln N}$$ with probability at-least $1 - N^{-\alpha}$.
+\end{lemma}
+
+\begin{lemma}
+    \label{lemma:bound_on_A-calA}
+    Assume that $p \geq C \frac{\ln N}{N}$ for some constant $C > 0$. Then, for every $\alpha > 0$, there exists a constant $\mathrm{const}_2(C, \alpha)$ that only depends on $C$ and $\alpha$ such that $$\norm{\mathbf{A} - \mathcal{A}} \leq \mathrm{const}_2(C, \alpha) \sqrt{p N}$$ with probability at-least $1 - N^{-\alpha}$.
+\end{lemma}
+
+From Lemmas \ref{lemma:bound_on_D-calD} and \ref{lemma:bound_on_A-calA}, we conclude that there is always a constant $\mathrm{const}_3(C, \alpha) = \max\{\mathrm{const}_1(C, \alpha), \mathrm{const}_2(C, \alpha)\}$ such that, for any $\alpha > 0$, with probability at least $1 - 2N^{-\alpha}$, 
+\begin{equation}
+    \label{eq:L-calL_bound}
+    \norm{\mathbf{Y}^\intercal \mathbf{L} \mathbf{Y} - \mathbf{Y}^\intercal \mathcal{L} \mathbf{Y}} \leq \norm{\mathbf{L} - \mathcal{L}} \leq \mathrm{const}_3(C, \alpha) \sqrt{p N \ln N}. 
+\end{equation}
+
+Let $\mathcal{Z}$ and $\mathbf{Z}$ denote the optimal solution of \eqref{eq:optimization_problem} in the expected ($\mathbf{L}$ replaced with $\mathcal{L}$) and observed case.
+We use \eqref{eq:L-calL_bound} to show a bound on $\norm{\mathbf{Y} \mathcal{Z} - \mathbf{Y} Z}[F]$ in Lemma \ref{lemma:bound_on_eigenvector_diff} and then use this bound to argue that Algorithm \ref{alg:urepsc} makes a small number of mistakes when the graph is sampled from $\mathcal{R}$-SBM.
+
+\begin{lemma}
+\label{lemma:bound_on_eigenvector_diff}
+    Let $\mu_1 \leq \mu_2 \leq \dots \leq \mu_{N - r}$ be eigenvalues of $\mathbf{Y}^\intercal \mathcal{L} \mathbf{Y}$. Further, let the columns of $\mathcal{Z} \in \mathbb{R}^{N - r \times K}$ and $\mathbf{Z} \in \mathbb{R}^{N - r \times K}$ correspond to the leading $K$ eigenvectors of $\mathbf{Y}^\intercal \mathcal{L} \mathbf{Y}$ and $\mathbf{Y}^\intercal \mathbf{L} \mathbf{Y}$, respectively. Define $\gamma = \mu_{K + 1} - \mu_{K}$. Then, with probability at least $1 - 2N^{-\alpha}$, $$\inf_{\mathbf{U} \in \mathbb{R}^{K \times K} : \mathbf{U}\bfU^\intercal = \mathbf{U}^\intercal \mathbf{U} = \mathbf{I}} \norm{\mathbf{Y} \mathcal{Z} - \mathbf{Y} \mathbf{Z} \mathbf{U}}[F] \leq \mathrm{const}_3(C, \alpha) \frac{4\sqrt{2K}}{\gamma} \sqrt{p N \ln N},$$ where $\mathrm{const}_3(C, \alpha)$ is from \eqref{eq:L-calL_bound}.
+\end{lemma}
+
+Recall that $\mathbf{X} \in \mathbb{R}^{N \times K}$ is a matrix that contains $\mathbf{y}_1, \dots, \mathbf{y}_K$ as its columns. Let $\mathbf{x}_i$ denote the $i^{th}$ row of $\mathbf{X}$. Simple calculation using Lemma \ref{lemma:orthonormal_eigenvectors_y2_yK} shows that,
+\begin{equation*}
+    \norm{\mathbf{x}_i - \mathbf{x}_j}[2] = \begin{cases}
+        0 & \text{ if }v_i \text{ and }v_j \text{ belong to the same cluster} \\
+        \sqrt{\frac{2K}{N}} & \text{ otherwise.}
+\end{cases}
+\end{equation*}
+By Lemma \ref{lemma:first_K_eigenvectors_of_L}, $\mathcal{Z}$ can be chosen such that $\mathbf{Y} \mathcal{Z} = \mathbf{X}$. Let $\mathbf{U}$ be the matrix that solves $\inf_{\mathbf{U} \in \mathbb{R}^{K \times K} : \mathbf{U}\bfU^\intercal = \mathbf{U}^\intercal \mathbf{U} = \mathbf{I}} \norm{\mathbf{Y} \mathcal{Z} - \mathbf{Y} \mathbf{Z} \mathbf{U}}[F]$. As $\mathbf{U}$ is orthogonal, $\norm{\mathbf{x}_i^\intercal \mathbf{U} - \mathbf{x}_j^\intercal \mathbf{U}}[2] = \norm{\mathbf{x}_i - \mathbf{x}_j}[2]$. The following lemma is a direct consequence of Lemma 5.3 in \citep{LeiEtAl:2015:ConsistencyOfSpectralClusteringInSBM}.
+
+\begin{lemma}
+    \label{lemma:k_means_error}
+    Let $\mathbf{X}$ and $\mathbf{U}$ be as defined above. For any $\epsilon > 0$, let $\hat{\bm{\Theta}} \in \mathbb{R}^{N \times K}$ be the assignment matrix returned by a $(1 + \epsilon)$-approximate solution to the $k$-means clustering problem when rows of $\mathbf{Y} \mathbf{Z}$ are provided as input features. Further, let $\hat{\bm{\mu}}_1$, $\hat{\bm{\mu}}_2$, \dots, $\hat{\bm{\mu}}_K \in \mathbb{R}^{K}$ be the estimated cluster centroids. Define $\hat{\mathbf{X}} = \hat{\bm{\Theta}} \hat{\bm{\mu}}$ where $\hat{\bm{\mu}} \in \mathbb{R}^{K \times K}$ contains $\hat{\bm{\mu}}_1, \dots, \hat{\bm{\mu}}_K$ as its rows. Further, define $\delta = \sqrt{\frac{2K}{N}}$, and $S_k = \{v_i \in \mathcal{C}_k : \norm{\hat{\mathbf{x}}_i - \mathbf{x}_i} \geq \delta/2\}$. Then,
+    \begin{equation}
+        \label{eq:num_mistakes_bound}
+        \delta^2 \sum_{k = 1}^K \abs{S_k} \leq 8(2 + \epsilon) \norm{\mathbf{X} \mathbf{U}^\intercal - \mathbf{Y} \mathbf{Z}}[F][2].
+    \end{equation}
+    Moreover, if $\gamma$ from Lemma \ref{lemma:bound_on_eigenvector_diff} satisfies $\gamma^2 > \mathrm{const}(C, \alpha) (2 + \epsilon) p NK \ln N$ for a universal constant $\mathrm{const}(C, \alpha)$, there exists a permutation matrix  $\mathbf{J} \in \mathbb{R}^{K \times K}$ such that 
+    \begin{equation}
+        \label{eq:correct_solution_on_non-mistakes}
+        \hat{\bm{\theta}}_i^\intercal \mathbf{J} = \bm{\theta}_i^\intercal, \,\,\,\, \forall \,\, i \in [N] \backslash (\cup_{k=1}^K S_k).    
+    \end{equation}
+    Here, $\hat{\bm{\theta}}_i \mathbf{J}$ and $\bm{\theta}_i$ represent the $i^{th}$ row of matrix $\hat{\bm{\Theta}}\mathbf{J}$ and $\bm{\Theta}$ respectively.
+\end{lemma}
+    
+By the definition of $M(\bm{\Theta}, \hat{\bm{\Theta}})$, for the matrix $\mathbf{J}$ used in Lemma \ref{lemma:k_means_error}, $M(\bm{\Theta}, \hat{\bm{\Theta}}) \leq \frac{1}{N} \norm{\bm{\Theta} - \hat{\bm{\Theta}} \mathbf{J}}[0]$. But, according to Lemma \ref{lemma:k_means_error},
+$\norm{\bm{\Theta} - \hat{\bm{\Theta}} \mathbf{J}}[0] \leq 2 \sum_{k = 1}^K \abs{S_k}$. Using Lemma \ref{lemma:bound_on_eigenvector_diff} and \ref{lemma:k_means_error}, we get:
+\begin{eqnarray*}
+    M(\bm{\Theta}, \hat{\bm{\Theta}}) \leq \frac{1}{N} \norm{\bm{\Theta} - \hat{\bm{\Theta}} \mathbf{J}}[0] \leq \frac{2}{N} \sum_{k = 1}^K \abs{S_k}
+    &\leq& \frac{16(2 + \epsilon)}{N \delta^2} \norm{\mathbf{X} \mathbf{U}^\intercal - \mathbf{Y} \mathbf{Z}}[F][2] \\
+    &\leq& \mathrm{const}_3(C, \alpha)^2 \frac{512(2 + \epsilon)}{N \delta^2 \gamma^2} p N K \ln N.
+\end{eqnarray*}
+Noting that $\delta = \sqrt{\frac{2K}{N}}$ and setting $\mathrm{const}(C, \alpha) = 256 \times \mathrm{const}_3(C, \alpha)^2$ finishes the proof.
+
+
+\subsubsection{Proof of Theorem \ref{theorem:consistency_result_normalized}}
+\label{section:proof_consistency_normalized}
+
+Recall that $\mathbf{Q} = \sqrt{\mathbf{Y}^\intercal \mathbf{D} \mathbf{Y}}$ and analogously define $\mathcal{Q} = \sqrt{\mathbf{Y}^\intercal \mathcal{D} \mathbf{Y}}$, where $\mathcal{D}$ is the expected degree matrix. It was shown after Lemma \ref{lemma:uk_eigenvector_of_tildeA} that $\mathcal{D} = (\lambda_1 - p) \mathbf{I}$. Thus, $\mathcal{Q} = \sqrt{\lambda_1 - p} \;\mathbf{I}$ as $\mathbf{Y}^\intercal \mathbf{Y} = \mathbf{I}$. Hence $\mathcal{Q}^{-1} \mathbf{Y}^\intercal \mathcal{L} \mathbf{Y} \mathcal{Q}^{-1} = \frac{1}{\lambda_1 - p} \mathbf{Y}^\intercal \mathcal{L} \mathbf{Y}$. Therefore, $\mathcal{Q}^{-1} \mathbf{Y}^\intercal \mathcal{L} \mathbf{Y} \mathcal{Q}^{-1} \mathbf{x} = \frac{\lambda}{\lambda_1 - p} \mathbf{x} \; \Longleftrightarrow \;  \mathbf{Y}^\intercal \mathcal{L} \mathbf{Y} \mathbf{x} = \lambda \mathbf{x}$. Let $\mathcal{Z} \in \mathbb{R}^{N - r \times K}$ contain the leading $K$ eigenvectors of $\mathcal{Q}^{-1} \mathbf{Y}^\intercal \mathcal{L} \mathbf{Y} \mathcal{Q}^{-1}$ as its columns. Algorithm \ref{alg:nrepsc} will cluster the rows of $\mathbf{Y} \mathcal{Q}^{-1} \mathcal{Z}$ to recover the clusters in the expected case. As $\mathcal{Q}^{-1} =\frac{1}{\sqrt{\lambda_1 - p}} \mathbf{I}$, we have $\mathbf{Y} \mathcal{Q}^{-1} \mathcal{Z} = \frac{1}{\sqrt{\lambda_1 - p}} \mathbf{Y} \mathcal{Z}$. By Lemma \ref{lemma:first_K_eigenvectors_of_L}, $\mathcal{Z}$ can always be chosen such that $\mathbf{Y} \mathcal{Z} = \mathbf{X}$, where recall that $\mathbf{X} \in \mathbb{R}^{N \times K}$ has $\mathbf{y}_1, \dots, \mathbf{y}_K$ as its columns. Because the rows of $\mathbf{X}$ are identical for nodes that belong to the same cluster, Algorithm \ref{alg:nrepsc} returns the correct ground truth clusters in the expected case. 
+
+To bound the number of mistakes made by Algorithm \ref{alg:nrepsc}, we show that $\mathbf{Y} \mathbf{Q}^{-1} \mathbf{Z}$ is close to $\mathbf{Y} \mathcal{Q}^{-1} \mathcal{Z}$. Here, $\mathbf{Z} \in \mathbb{R}^{N - r \times K}$ contains the top $K$ eigenvectors of $\mathbf{Q}^{-1} \mathbf{Y}^\intercal \mathbf{L} \mathbf{Y} \mathbf{Q}^{-1}$. As in the proof of Lemma \ref{lemma:bound_on_eigenvector_diff}, we use Davis-Kahan theorem to bound this difference. This requires us to compute $\norm{\mathcal{Q}^{-1} \mathbf{Y}^\intercal \mathcal{L} \mathbf{Y} \mathcal{Q}^{-1} - \mathbf{Q}^{-1} \mathbf{Y}^\intercal \mathbf{L} \mathbf{Y} \mathbf{Q}^{-1}}$. Note that:
+\begin{align*}
+    \norm{\mathcal{Q}^{-1} \mathbf{Y}^\intercal \mathcal{L} \mathbf{Y} \mathcal{Q}^{-1} - \mathbf{Q}^{-1} \mathbf{Y}^\intercal \mathbf{L} \mathbf{Y} \mathbf{Q}^{-1}} = &\norm{\mathcal{Q}^{-1} - \mathbf{Q}^{-1}} \cdot \norm{\mathbf{Y}^\intercal \mathcal{L} \mathbf{Y}} \cdot \norm{\mathcal{Q}^{-1}} + \\
+    &\norm{\mathbf{Q}^{-1}} \cdot \norm{\mathbf{Y}^\intercal \mathcal{L} \mathbf{Y} - \mathbf{Y}^\intercal \mathbf{L} \mathbf{Y}} \cdot \norm{\mathcal{Q}^{-1}} + \\
+    &\norm{\mathbf{Q}^{-1}} \cdot \norm{\mathbf{Y}^\intercal \mathbf{L} \mathbf{Y}} \cdot \norm{\mathcal{Q}^{-1} - \mathbf{Q}^{-1}}.
+\end{align*}
+We already have a bound on $\norm{\mathbf{Y}^\intercal \mathcal{L} \mathbf{Y} - \mathbf{Y}^\intercal \mathbf{L} \mathbf{Y}}$ in \eqref{eq:L-calL_bound}. Also, note that $\norm{\mathcal{Q}^{-1}} = \frac{1}{\sqrt{\lambda_1 - p}}$ as $\mathcal{Q}^{-1} = \frac{1}{\sqrt{\lambda_1 - p}} \mathbf{I}$. Similarly, as $\mathbf{Y}^\intercal \mathbf{Y} = \mathbf{I}$, $\norm{\mathbf{Y}^\intercal \mathcal{L} \mathbf{Y}} \leq \norm{\mathcal{L}} = \lambda_1 - \bar{\lambda}$, where $\bar{\lambda} = \lambdamin{\tilde{\mathcal{A}}}$. Finally,
+\begin{align*}
+    \norm{\mathbf{Q}^{-1}} &\leq \norm{\mathcal{Q}^{-1} - \mathbf{Q}^{-1}} + \norm{\mathcal{Q}^{-1}} = \norm{\mathcal{Q}^{-1} - \mathbf{Q}^{-1}} + \frac{1}{\sqrt{\lambda_1 - p}} \text{, and} \\
+    \norm{\mathbf{Y}^\intercal \mathbf{L} \mathbf{Y}} &\leq \norm{\mathbf{Y}^\intercal \mathcal{L} \mathbf{Y} - \mathbf{Y}^\intercal \mathbf{L} \mathbf{Y}} + \norm{\mathbf{Y}^\intercal \mathcal{L} \mathbf{Y}} = \norm{\mathbf{Y}^\intercal \mathcal{L} \mathbf{Y} - \mathbf{Y}^\intercal \mathbf{L} \mathbf{Y}} + \lambda_1 - \bar{\lambda}.
+\end{align*}
+Thus, to compute a bound on $\norm{\mathcal{Q}^{-1} \mathbf{Y}^\intercal \mathcal{L} \mathbf{Y} \mathcal{Q}^{-1} - \mathbf{Q}^{-1} \mathbf{Y}^\intercal \mathbf{L} \mathbf{Y} \mathbf{Q}^{-1}}$, we only need a bound on $\norm{\mathcal{Q}^{-1} - \mathbf{Q}^{-1}}$. The next lemma provides this bound.
+
+\begin{lemma}
+    \label{lemma:calQ-Q_bound}
+    Let $\mathcal{Q} = \sqrt{\mathbf{Y}^\intercal \mathcal{D} \mathbf{Y}}$, $\mathbf{Q} = \sqrt{\mathbf{Y}^\intercal \mathbf{D} \mathbf{Y}}$, and assume that
+    $$\left(\frac{\sqrt{pN \ln N}}{\lambda_1 - p}\right)\left(\frac{\sqrt{pN \ln N}}{\lambda_1 - p} + \frac{1}{6\sqrt{C}} \right) \leq \frac{1}{16(\alpha + 1)},$$
+    where $C$ and $\alpha$ are used in $\mathrm{const}_1(C, \alpha)$ defined in Lemma \ref{lemma:bound_on_D-calD}. Then,
+    $$\norm{\mathcal{Q}^{-1} - \mathbf{Q}^{-1}} \leq \sqrt{\frac{2}{(\lambda_1 - p)^3}} \norm{\mathbf{D} - \mathcal{D}}.$$
+\end{lemma}
+
+\noindent
+Using the lemma above with \eqref{eq:L-calL_bound}, we get
+{
+\small
+\begin{align}
+    \label{eq:calQYcalLYcalQ-QYLYQ_bound}
+    \begin{aligned}
+    \norm{\mathcal{Q}^{-1} \mathbf{Y}^\intercal \mathcal{L} \mathbf{Y} \mathcal{Q}^{-1} - \mathbf{Q}^{-1} \mathbf{Y}^\intercal \mathbf{L} &\mathbf{Y} \mathbf{Q}^{-1}} \leq \frac{2(\lambda_1 - \bar{\lambda})}{(\lambda_1 - p)^2} \left[ \sqrt{2} + \frac{\norm{\mathbf{D} - \mathcal{D}}}{\lambda_1 - p}\right] \norm{\mathbf{D} - \mathcal{D}} + \\
+    & \frac{\mathrm{const}_3(C, \alpha)}{\lambda_1 - p} \left[\frac{2\sqrt{2} \norm{\mathbf{D} - \mathcal{D}}}{\lambda_1 - p} + \frac{2 \norm{\mathbf{D} - \mathcal{D}}[][2]}{(\lambda_1 - p)^2} + 1  \right] \sqrt{p N \ln N}.
+    \end{aligned}
+\end{align}
+}
+
+\noindent
+The next lemma uses the bound above to show that $\mathbf{Y} \mathbf{Q}^{-1} \mathbf{Z}$ is close to $\mathbf{Y} \mathcal{Q}^{-1} \mathcal{Z}$.
+
+\begin{lemma}
+    \label{lemma:eigenvector_diff_bound_normalized}
+    Let $\mu_1 \leq \mu_2 \leq \dots \leq \mu_{N - r}$ be eigenvalues of $\mathcal{Q}^{-1} \mathbf{Y}^\intercal \mathcal{L} \mathbf{Y} \mathcal{Q}^{-1}$. Further, let the columns of $\mathcal{Z} \in \mathbb{R}^{N - r \times K}$ and $\mathbf{Z} \in \mathbb{R}^{N - r \times K}$ correspond to the leading $K$ eigenvectors of $\mathcal{Q}^{-1} \mathbf{Y}^\intercal \mathcal{L} \mathbf{Y} \mathcal{Q}^{-1}$ and $\mathbf{Q}^{-1} \mathbf{Y}^\intercal \mathbf{L} \mathbf{Y} \mathbf{Q}^{-1}$, respectively. Define $\gamma = \mu_{K + 1} - \mu_{K}$ and let there be a constant $\mathrm{const}_4(C, \alpha)$ such that 
+    $\frac{\sqrt{p N \ln N}}{\lambda_1 - p} \leq \mathrm{const}_4(C, \alpha)$. Then, with probability at least $1 - 2N^{-\alpha}$, there exists a constant $\mathrm{const}_5(C, \alpha)$ such that
+    \begin{align*}
+        \inf_{\mathbf{U} : \mathbf{U}^\intercal \mathbf{U} = \mathbf{U}\bfU^\intercal = \mathbf{I}} \norm{\mathbf{Y} \mathcal{Q}^{-1} \mathcal{Z} - &\mathbf{Y} \mathbf{Q}^{-1} \mathbf{Z} \mathbf{U}}[F] \leq \\
+        &\left[\frac{16 K \mathrm{const}_5(C, \alpha)}{\gamma (\lambda_1 - p)^{3/2}} + \frac{2 \mathrm{const}_1(C, \alpha) \sqrt{K}}{(\lambda_1 - p)^{3/2}} \right] \sqrt{p N \ln N},
+    \end{align*}
+    where $\mathrm{const}_1(C, \alpha)$ is defined in Lemma \ref{lemma:bound_on_D-calD}.
+\end{lemma}
+
+Recall that, by Lemma \ref{lemma:first_K_eigenvectors_of_L}, $\mathcal{Z}$ can always be chosen such that $\mathbf{Y} \mathcal{Z} = \mathbf{X}$, where $\mathbf{X}$ contains $\mathbf{y}_1, \dots, \mathbf{y}_K$ as its columns. As $\mathcal{Q}^{-1} = \frac{1}{\sqrt{\lambda_1 - p}} \mathbf{I}$, one can show that:
+\begin{equation*}
+    \norm{(\mathcal{Q}^{-1} \mathbf{X})_i - (\mathcal{Q}^{-1} \mathbf{X})_j}[2] = \begin{cases}
+        0 & \text{ if } v_i \text{ and } v_j \text{ belong to the same cluster} \\
+        \sqrt{\frac{2K}{N(\lambda_1 - p)}} & \text{ otherwise.}
+    \end{cases}
+\end{equation*}
+Here, $(\mathcal{Q}^{-1} \mathbf{X})_i$ denotes the $i^{th}$ row of the matrix $\mathbf{Y} \mathcal{Q}^{-1} \mathcal{Z}$. Let $\mathbf{U}$ be the matrix that solves $\inf_{\mathbf{U} \in \mathbb{R}^{K \times K} : \mathbf{U}\bfU^\intercal = \mathbf{U}^\intercal \mathbf{U} = \mathbf{I}} \norm{\mathbf{Y} \mathcal{Q}^{-1} \mathcal{Z} - \mathbf{Y} \mathbf{Q}^{-1} \mathbf{Z} \mathbf{U}}[F]$. As $\mathbf{U}$ is orthogonal, $\norm{(\mathcal{Q}^{-1} \mathbf{X})_i^\intercal \mathbf{U} - (\mathcal{Q}^{-1} \mathbf{X})_j^\intercal \mathbf{U}}[2] = \norm{(\mathcal{Q}^{-1} \mathbf{X})_i - (\mathcal{Q}^{-1} \mathbf{X})_j}[2]$. As in the previous case, the following lemma is a direct consequence of Lemma 5.3 in \citep{LeiEtAl:2015:ConsistencyOfSpectralClusteringInSBM}.
+
+\begin{lemma}
+    \label{lemma:k_means_error_normalized}
+    Let $\mathbf{X}$ and $\mathbf{U}$ be as defined above. For any $\epsilon > 0$, let $\hat{\bm{\Theta}} \in \mathbb{R}^{N \times K}$ be the assignment matrix returned by a $(1 + \epsilon)$-approximate solution to the $k$-means clustering problem when rows of $\mathbf{Y} \mathbf{Q}^{-1} \mathbf{Z}$ are provided as input features. Further, let $\hat{\bm{\mu}}_1$, $\hat{\bm{\mu}}_2$, \dots, $\hat{\bm{\mu}}_K \in \mathbb{R}^{K}$ be the estimated cluster centroids. Define $\hat{\mathbf{X}} = \hat{\bm{\Theta}} \hat{\bm{\mu}}$ where $\hat{\bm{\mu}} \in \mathbb{R}^{K \times K}$ contains $\hat{\bm{\mu}}_1, \dots, \hat{\bm{\mu}}_K$ as its rows. Further, define $\delta = \sqrt{\frac{2K}{N(\lambda_1 - p)}}$, and $S_k = \{v_i \in \mathcal{C}_k : \norm{\hat{\mathbf{x}}_i - \mathbf{x}_i} \geq \delta/2\}$. Then,
+    \begin{equation*}
+        \delta^2 \sum_{k = 1}^K \abs{S_k} \leq 8(2 + \epsilon) \norm{\mathbf{X} \mathbf{U}^\intercal - \mathbf{Y} \mathbf{Q}^{-1} \mathbf{Z}}[F][2].
+    \end{equation*}
+    Moreover, if $\gamma$ from Lemma \ref{lemma:eigenvector_diff_bound_normalized} satisfies $$16(2 + \epsilon)\left[ \frac{8 \mathrm{const}_5(C, \alpha) \sqrt{K}}{\gamma} + \mathrm{const}_1(C, \alpha)\right]^2 \frac{p N^2 \ln N}{(\lambda_1 - p)^2} < \frac{N}{K},$$ then, there exists a permutation matrix  $\mathbf{J} \in \mathbb{R}^{K \times K}$ such that 
+    \begin{equation*}
+        \hat{\bm{\theta}}_i^\intercal \mathbf{J} = \bm{\theta}_i^\intercal, \,\,\,\, \forall \,\, i \in [N] \backslash (\cup_{k=1}^K S_k).    
+    \end{equation*}
+    Here, $\hat{\bm{\theta}}_i \mathbf{J}$ and $\bm{\theta}_i$ represent the $i^{th}$ row of matrix $\hat{\bm{\Theta}}\mathbf{J}$ and $\bm{\Theta}$ respectively.
+\end{lemma}
+
+The proof of Lemma \ref{lemma:k_means_error_normalized} is similar to that of Lemma \ref{lemma:k_means_error}, and has been omitted. The result follows by using a similar calculation as was done after Lemma \ref{lemma:k_means_error} in Section \ref{section:proof_consistency_unnormalized}.
+
+
+\section{Numerical Results}
+\label{section:numerical_results}
+
+We perform three types of experiments. In the first two cases, we use synthetically generated data to validate our theoretical results using $d$-regular representation graphs (Section \ref{chapter:fairness:section:d_reg_experiments}) and non-$d$-regular representation graphs (Section \ref{chapter:fairness:section:sbm_experiments}). In the third case, we demonstrate the effectiveness of the proposed algorithms on
+a real-world dataset (Section~\ref{chapter:fairness:section:trade_experiments}). Notably, our experiments in Sections \ref{chapter:fairness:section:sbm_experiments} and \ref{chapter:fairness:section:trade_experiments} demonstrate that the $d$-regularity assumption on $\mathcal{R}$ is not needed in practice. Before proceeding further, we mention two important details below: \textbf{(i)} How do we compare with the algorithms presented in \cite{KleindessnerEtAl:2019:GuaranteesForSpectralClusteringWithFairnessConstraints}? and \textbf{(ii)} What do we do when the rank assumption on $\mathcal{R}$ is not satisfied?
+
+\begin{figure}[t]
+    \centering
+    \subfloat[][Accuracy vs no. of nodes]{\includegraphics[width=0.33\textwidth]{Images/U_d_reg_vs_N.pdf}\label{fig:d_reg_unnorm:vs_N}}%
+    \subfloat[][Accuracy vs no. of clusters]{\includegraphics[width=0.33\textwidth]{Images/U_d_reg_vs_K.pdf}\label{fig:d_reg_unnorm:vs_K}}%
+    \subfloat[][Accuracy vs degree of $\mathcal{R}$]{\includegraphics[width=0.33\textwidth]{Images/U_d_reg_vs_d.pdf}\label{fig:d_reg_unnorm:vs_d}}
+    \caption{Comparing \textsc{URepSC} with other ``unnormalized'' algorithms using synthetically generated $d$-regular representation graphs.}
+    \label{fig:d_reg_unnorm}
+\end{figure}
+
+\begin{figure}[t]
+    \centering
+    \subfloat[][Accuracy vs no. of nodes]{\includegraphics[width=0.33\textwidth]{Images/N_d_reg_vs_N.pdf}\label{fig:d_reg_norm:vs_N}}%
+    \subfloat[][Accuracy vs no. of clusters]{\includegraphics[width=0.33\textwidth]{Images/N_d_reg_vs_K.pdf}\label{fig:d_reg_norm:vs_K}}%
+    \subfloat[][Accuracy vs degree of $\mathcal{R}$]{\includegraphics[width=0.33\textwidth]{Images/N_d_reg_vs_d.pdf}\label{fig:d_reg_norm:vs_d}}
+    \caption{Comparing \textsc{NRepSC} with other ``normalized'' algorithms using synthetically generated $d$-regular representation graphs.}
+    \label{fig:d_reg_norm}
+\end{figure}
+
+\paragraph*{Comparison with \citet{KleindessnerEtAl:2019:GuaranteesForSpectralClusteringWithFairnessConstraints}} We refer to the algorithms proposed in \citet{KleindessnerEtAl:2019:GuaranteesForSpectralClusteringWithFairnessConstraints} as \textsc{UFairSC} and \textsc{NFairSC}, corresponding to the unnormalized and normalized fair spectral clustering, respectively. These algorithms assume that each node belongs to one of the $P$ protected groups $\mathcal{P}_1, \dots, \mathcal{P}_P \subseteq \mathcal{V}$ that are observed by the learner. Recall that these algorithms are special cases of our algorithms when $\mathcal{R}$ is block diagonal (Section \ref{section:constraint}). To demonstrate the generality of our algorithms, we only experiment with representation graphs that are not of the form specified above. Naturally, \textsc{UFairSC} and \textsc{NFairSC} are not directly applicable in this setting. Nonetheless, to compare with these algorithms, we approximate the protected groups by clustering the nodes in $\mathcal{R}$ using standard spectral clustering. Each discovered cluster is then treated as a protected group.
+
+\paragraph*{Approximate \textsc{URepSC} and \textsc{NRepSC}} Recall that the rank assumption on $\mathcal{R}$ requires $\rank{\mathbf{R}} \leq N - K$. It is not possible to find $K$ orthonormal eigenvectors in Algorithms \ref{alg:urepsc} and \ref{alg:nrepsc} if $\mathbf{R}$ violates this assumption. Unlike other assumptions in our theoretical analysis, this assumption is necessary in practice. If a graph $\mathcal{R}$ violates the rank assumption, we instead use the best rank $R$ approximation of its adjacency matrix $\mathbf{R}$ ($R \leq N - K$). This approximation does not have binary elements, but it works well in practice. Whenever this approximation is used, we refer to \textsc{URepSC} and \textsc{NRepSC} as \textsc{URepSC (approx.)} and \textsc{NRepSC (approx.)}, respectively.
+
+
+\begin{figure}[t]
+    \centering
+    \subfloat[][Unnormalized case]{\includegraphics[width=0.4\textwidth]{Images/U_d_reg_vs_rank_groups.pdf}\label{fig:d_reg_unnorm:rank_groups}}%
+    \hspace{1cm}\subfloat[][Normalized case]{\includegraphics[width=0.4\textwidth]{Images/N_d_reg_vs_rank_groups.pdf}\label{fig:d_reg_norm:rank_groups}}%
+    \caption{Accuracy vs the values of $P$ and $R$ used by \textsc{U/NFairSC} and \textsc{U/NRepSC}, respectively, for $d$-regular representation graphs.}
+\end{figure}
+
+\subsection{Experiments with $d$-regular representation graphs}
+\label{chapter:fairness:section:d_reg_experiments}
+
+For these experiments, we sampled $d$-regular representation graphs using $p=0.4$, $q=0.3$, $r=0.2$, and $s=0.1$, for various values of $d$, $N$, and $K$. We ensured that the sampled $\mathcal{R}$ satisfies Assumption \ref{assumption:R_is_d_regular} and $\rank{\mathbf{R}} \leq N - k$. Further, the ground-truth clusters have equal size and are representation-aware by construction as described in Section \ref{section:consistency_results}. Figure \ref{fig:d_reg_unnorm} compares the performance of \textsc{URepSC} with unnormalized spectral clustering (\textsc{USC}) (Algorithm \ref{alg:unnormalized_spectral_clustering}) and \textsc{UFairSC}. Figure \ref{fig:d_reg_unnorm:vs_N} shows the effect of varying $N$ for a fixed $d = 40$ and $K=5$. Figure \ref{fig:d_reg_unnorm:vs_K} varies $K$ and keeps $N = 1200$ and $d = 40$ fixed. Similarly, Figure \ref{fig:d_reg_unnorm:vs_d} keeps $N = 1200$ and $K = 5$ fixed and varies $d$. In all cases, we use $R = P = N/10$, where recall that $R$ is the rank used for approximation in \textsc{URepSC (approx.)} and $P$ is the number of protected groups discovered in $\mathcal{R}$ for running \textsc{UFairSC}. The figures plot the accuracy on $y$-axis and report the mean and standard deviation across $10$ independent executions of the algorithms in each case. 
+
+As the ground truth clusters satisfy Definition \ref{def:representation_constraint} by construction, a high accuracy of cluster recovery implies that the algorithm returns representation-aware clusters. Figure \ref{fig:d_reg_norm} shows the corresponding results for \textsc{NRepSC}, where we compare it with the normalized variants of other algorithms. In Figures \ref{fig:d_reg_unnorm:vs_N} and \ref{fig:d_reg_norm:vs_N}, it appears that even the standard spectral clustering algorithm will return representation-aware clusters for a large enough graph. However, Figures \ref{fig:d_reg_unnorm:vs_K} and \ref{fig:d_reg_norm:vs_K} show that this is not true if the number of clusters also increases with $N$, as is more common in practice.
+
+It may also be tempting to think that \textsc{UFairSC} and \textsc{NFairSC} may perform well with a more carefully chosen value of $P$, the number of protected groups. However, Figures \ref{fig:d_reg_unnorm:rank_groups} and \ref{fig:d_reg_norm:rank_groups} show that this is not true. These figures plot the performance of \textsc{UFairSC} and \textsc{NFairSC} as a function of the number of protected groups $P$. Also shown in these plots is the performance of the approximate variants of our algorithms for various values of rank $R$. As expected, the accuracy increases with $R$ as the approximation of $\mathbf{R}$ becomes better.
+
+
+\begin{figure}[t]
+    \centering
+    \subfloat[][$N = 1000$, $K = 4$]{\includegraphics[width=0.48\textwidth]{Images/U_AccVsGroupRankSBM_1000_4.pdf}}%
+    \hspace{0.5cm}\subfloat[][$N = 3000$, $K = 4$]{\includegraphics[width=0.48\textwidth]{Images/U_AccVsGroupRankSBM_3000_4}}
+
+    \subfloat[][$N = 1000$, $K = 8$]{\includegraphics[width=0.48\textwidth]{Images/U_AccVsGroupRankSBM_1000_8}}%
+    \hspace{0.5cm}\subfloat[][$N = 3000$, $K = 8$]{\includegraphics[width=0.48\textwidth]{Images/U_AccVsGroupRankSBM_3000_8}}
+    \caption{Comparing \textsc{URepSC (approx.)} with \textsc{UFairSC} using synthetically generated representation graphs sampled from an SBM.}
+    \label{fig:sbm_comparison_unnorm}
+\end{figure}
+
+\begin{figure}[t]
+    \centering
+    \subfloat[][$N = 1000$, $K = 4$]{\includegraphics[width=0.48\textwidth]{Images/N_AccVsGroupRankSBM_1000_4.pdf}}%
+    \hspace{0.5cm}\subfloat[][$N = 3000$, $K = 4$]{\includegraphics[width=0.48\textwidth]{Images/N_AccVsGroupRankSBM_3000_4}}
+
+    \subfloat[][$N = 1000$, $K = 8$]{\includegraphics[width=0.48\textwidth]{Images/N_AccVsGroupRankSBM_1000_8}}%
+    \hspace{0.5cm}\subfloat[][$N = 3000$, $K = 8$]{\includegraphics[width=0.48\textwidth]{Images/N_AccVsGroupRankSBM_3000_8}}
+    \caption{Comparing \textsc{NRepSC (approx.)} with \textsc{NFairSC} using synthetically generated representation graphs sampled from an SBM.}
+    \label{fig:sbm_comparison_norm}
+\end{figure}
+
+\subsection{Experiments with representation graphs sampled from SBM}
+\label{chapter:fairness:section:sbm_experiments}
+
+In this case, we divide the nodes into $P = 5$ protected groups and sample a representation graph $\mathcal{R}$ using a Stochastic Block Model. Nodes in $\mathcal{R}$ are connected with probability $p_{\mathrm{in}} = 0.8$ (resp. $p_{\mathrm{out}} = 0.2$) if they belong to the same (resp. different) protected group(s). Conditioned on $\mathcal{R}$, we then sample an adjacency matrix from $\mathcal{R}$-SBM as before. As an $\mathcal{R}$ generated this way may violate the rank assumption, we only experiment with the approximate variants of \textsc{URepSC} and \textsc{NRepSC} in this case. Moreover, as such an $\mathcal{R}$ may not be $d$-regular, the notion of accuracy no longer conveys information about the representation awareness of an algorithm. Thus, we instead compute the individual balance $\rho_i$ with respect to each node, as defined in \eqref{eq:balance}.
+Recall that $0 \leq \rho_i \leq 1$ and higher values indicate that the representatives of node $v_i$ are well spread out across clusters $\hat{\mathcal{C}}_1$, \dots, $\hat{\mathcal{C}}_K$. We use average balance $\bar{\rho} = \frac{1}{N} \sum_{i = 1}^N \rho_i$ to measure the representation-awareness of the clusters.
+
+While average balance measures the representation awareness of the clusters, we also need to ensure that they have a high quality. Thus, we compute the ratio of the average balance to the ratio-cut objective. A high value indicates balanced clusters with a high quality (low ratio-cut score). Figure \ref{fig:sbm_comparison_unnorm} fixes the value of $P = 5$ and shows the variation of the metric described above on $y$-axis as a function of the number of protected groups used by \textsc{UFairSC} and rank $R$ used by \textsc{URepSC (approx.)}, for various values of $N$ and $K$. We used the same values of parameters $p$, $q$, $r$, and $s$, as in Section \ref{chapter:fairness:section:d_reg_experiments}. The plots in Figure \ref{fig:sbm_comparison_unnorm} show a trade-off between clustering accuracy and representation awareness. One can choose an appropriate value of $R$ and use \textsc{URepSC (approx.)} to get good quality clusters with a high balance. Figure \ref{fig:sbm_comparison_norm} presents analogous results for \textsc{NRepSC (approx.)}.
+
+
+\begin{figure}[t]
+    \centering
+    \subfloat[][$K = 2$]{\includegraphics[width=0.48\textwidth]{Images/U_Trade_2}}%
+    \hspace{0.5cm}\subfloat[][$K = 4$]{\includegraphics[width=0.48\textwidth]{Images/U_Trade_4}}
+
+    \subfloat[][$K = 6$]{\includegraphics[width=0.48\textwidth]{Images/U_Trade_6}}%
+    \hspace{0.5cm}\subfloat[][$K = 8$]{\includegraphics[width=0.48\textwidth]{Images/U_Trade_8}}
+    \caption{Comparing \textsc{URepSC (approx.)} with \textsc{UFairSC} on FAO trade network.}
+    \label{fig:real_data_comparison_unnorm}
+\end{figure}
+
+\begin{figure}[t]
+    \centering
+    \subfloat[][$K = 2$]{\includegraphics[width=0.48\textwidth]{Images/N_Trade_2}}%
+    \hspace{0.5cm}\subfloat[][$K = 4$]{\includegraphics[width=0.48\textwidth]{Images/N_Trade_4}}
+
+    \subfloat[][$K = 6$]{\includegraphics[width=0.48\textwidth]{Images/N_Trade_6}}%
+    \hspace{0.5cm}\subfloat[][$K = 8$]{\includegraphics[width=0.48\textwidth]{Images/N_Trade_8}}
+    \caption{Comparing \textsc{NRepSC (approx.)} with \textsc{NFairSC} on FAO trade network.}
+    \label{fig:real_data_comparison_norm}
+\end{figure}
+
+\subsection{Experiments with a real-world network}
+\label{chapter:fairness:section:trade_experiments}
+
+For the final set of experiments, we use the FAO trade network \citep{DomenicoEtAl:2015:StructuralReducibilityOfMultilayerNetworks}, which is a multiplex network based on the data made available by the Food and Agriculture Organization (FAO) of the United Nations. It has $214$ nodes representing countries and $364$ layers corresponding to commodities like coffee, banana, barley, etc. An edge between two countries in a layer indicates the volume of the corresponding commodity traded between these countries. We convert the weighted graph in each layer to an unweighted graph by connecting every node with its five nearest neighbors. We then make all the edges undirected and use the first $182$ layers to construct the representation graph $\mathcal{R}$. Nodes in $\mathcal{R}$ are connected if they are linked in either of these layers. Similarly, the next $182$ layers are used to construct the similarity graph $\mathcal{G}$. Note that $\mathcal{R}$ constructed this way is not $d$-regular. The goal is to find clusters in $\mathcal{G}$ that satisfy Definition \ref{def:representation_constraint} with respect to $\mathcal{R}$.
+
+To motivate this further, note that clusters based only on $\mathcal{G}$ only consider the trade of commodities $183$--$364$. However, countries also have other trade relations in $\mathcal{R}$, leading to shared economic interests. Assume that the members of each cluster would jointly formulate the economic policies for that cluster. However, the policies made in one cluster affect everyone, even if they are not part of the cluster, as they all share a global market. This incentivizes the countries to influence the economic policies of all the clusters. Being representation aware with respect to $\mathcal{R}$ entails that each country has members in other clusters with shared interests. This enables a country to indirectly shape the policies of other clusters.
+
+As before, we use the low-rank approximation for the representation graph in \textsc{URepSC (approx.)} and \textsc{NRepSC (approx.)}. Figure \ref{fig:real_data_comparison_unnorm} compares \textsc{URepSC (approx.)} with \textsc{UFairSC}, and has the same semantics as Figure \ref{fig:sbm_comparison_unnorm}. Different plots in Figure \ref{fig:real_data_comparison_unnorm} correspond to different choices of $K$. \textsc{URepSC (approx.)} achieves a higher ratio of average balance to ratio-cut. In practice, a user would choose $R$ by assessing the relative importance of a quality metric like ratio-cut and representation metric like average balance. Figure \ref{fig:real_data_comparison_norm} presents analogous results for \textsc{NRepSC (approx.)}.
+
+
+\section{Conclusion}
+\label{section:conclusion}
+
+The primary focus of this work has been on studying the consistency of constrained spectral clustering under an individual-level representation constraint. The proposed representation constraint naturally generalizes similar population-level constraints \citep{ChierichettiEtAl:2017:FairClusteringThroughFairlets} by using auxiliary information encoded in a representation graph $\mathcal{R}$. We showed that the constraint can be expressed as a linear expression that when added to the optimization problem solved by spectral clustering results in the representation-aware variants of the algorithm. An interesting consequence of this problem is a variant of the stochastic block model that plants the properties of $\mathcal{R}$ in a similarity graph in addition to the given clusters to provide a hard problem instance to our algorithms. Under this model, we derive a high-probability upper bound on the number of mistakes made by the algorithms and establish conditions under which they are weakly consistent. To the best of our knowledge, these are the first consistency results for constrained spectral clustering under individual-level constraints. Next, we make a few additional remarks.
+
+\paragraph*{The $d$-regularity assumption} The $d$-regularity assumption on $\mathcal{R}$ ensures the representation-awareness of the ground-truth clusters in our analysis. Note that the representation graph that recovers the statistical-level constraint is also $d$-regular (see Appendix \ref{appendix:constraint}), hence our analysis strictly generalizes the previously known results. It would be interesting to study the performance of our algorithms under weaker assumptions on $\mathcal{R}$. One can also use a similar strategy as ours to modify more expressive variants of the stochastic block model, like the degree-corrected SBM \citep{KarrerNewman:2011:StochasticBlockmodelsAndCommunityStructureInNetworks}, to establish the consistency of the algorithms on more realistic similarity graphs.
+
+\paragraph*{Computational complexity} Our current approach involves finding the null space of a $N \times N$ matrix. This operation has $O(N^3)$ complexity. Existing methods for speeding up the standard spectral clustering algorithm focus on making the eigen-decomposition and/or the $k$-means step faster (see \citet{TremblayEtAl:2016:CompressiveSpectralClustering} and the references within). However, even with these modifications, the null space computation would still be the computationally dominant step. \citet{XuEtAl:2009:FastNormalizedCutWithLinearConstraints} proposed an efficient algorithm for solving the normalized cut problem under a linear constraint. However, their algorithm assumes that $K = 2$. Developing similar algorithms for general values of $K$ and exploring their theoretical guarantees will enable the application domains that involve very large graphs to utilise our ideas.
+
+
+Other possible extensions of our work include similar algorithms for weighted similarity graphs, overlapping clusters, and other types of graphs such as hypergraphs. This paper provides the first step towards consistency analysis of spectral clustering under individual-level constraints.
+
+\begin{appendix}
+
+\section{Representation constraint: Additional details}
+\label{appendix:constraint}
+
+
+
+
+In this section, we make two additional remarks about the properties of the proposed constraint, both in the context of fairness.
+
+\paragraph*{Statistical fairness as a special case} Recall that our constraint specifies an individual fairness notion. Contrast this with several existing approaches that assign each node to one of the $P$ \textit{protected groups} $\mathcal{P}_1, \dots, \mathcal{P}_P \subseteq \mathcal{V}$ \citep{ChierichettiEtAl:2017:FairClusteringThroughFairlets}, and require these protected groups to have a proportional representation in all clusters, i.e., 
+\begin{equation*}
+    \frac{\abs{\mathcal{P}_i \cap \mathcal{C}_j}}{\abs{\mathcal{C}_j}} = \frac{\abs{\mathcal{P}_i}}{N}, \,\, \forall i \in [P],\,\, j \in [K].
+\end{equation*}
+This is an example of \textit{statistical fairness}. In Example \ref{example:statistical_vs_individual_fairness}, we argued that statistical fairness may not be enough in some cases. We now show that the constraint in Definition \ref{def:representation_constraint} is equivalent to a statistical fairness notion for an appropriately constructed representation graph $\mathcal{R}$ from the given protected groups $\mathcal{P}_1, \dots, \mathcal{P}_P$. Namely, let $\mathcal{R}$ be such that $R_{ij} = 1$ if and only if $v_i$ and $v_j$ belong to the same protected group. In this case, it is easy to verify that the constraint in Definition \ref{def:representation_constraint} reduces to the statistical fairness criterion given above. In general, for other configurations of the representation graph, we strictly generalize the statistical fairness notion. We also strictly generalize the approach presented in \citet{KleindessnerEtAl:2019:GuaranteesForSpectralClusteringWithFairnessConstraints}, where the authors use spectral clustering to produce statistically fair clusters. Also noteworthy is the assumption made by statistical fairness, namely that every pair of vertices in a protected group can represent each others' interests ($R_{ij} = 1 \Leftrightarrow v_i$ and $v_j$ are in the same protected group), or they are very similar with respect to some sensitive attributes. This assumption becomes unreasonable as protected groups grow in size.
+
+\paragraph*{Sensitive attributes and protected groups} Viewed as a fairness notion, the proposed constraint only requires a representation graph $\mathcal{R}$. It has two advantages over existing fairness criteria: \textbf{(i)} it does not require observable sensitive attributes (such as age, gender, and sexual orientation), and \textbf{(ii)} even if sensitive attributes are provided, one need not specify the number of protected groups or explicitly compute them. This ensures data privacy and helps against individual profiling. Our constraint only requires access to the representation graph $\mathcal{R}$. This graph can either be directly elicited from the individuals or derived as a function of several sensitive attributes. In either case, once $\mathcal{R}$ is available, we no longer need to expose any sensitive attributes to the clustering algorithm. For example, individuals in $\mathcal{R}$ may be connected if their age difference is less than five years and if they went to the same school. Crucially, the sensitive attributes used to construct $\mathcal{R}$ may be numerical, binary, categorical, etc.
+
+\end{appendix}
+
+
+\bibliographystyle{plainnat}
+

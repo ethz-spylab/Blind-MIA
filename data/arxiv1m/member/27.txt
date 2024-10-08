@@ -1,0 +1,1118 @@
+\section{Introduction}
+\label{sxn:intro}
+
+Graphs, long popular in computer science and discrete mathematics, have received renewed interest recently in statistics, machine learning, data analysis, and related areas because they provide a useful way to model many types of relational data. 
+In this way, graphs can be used to extract insight from data arising in many application domains. In biology, e.g., graphs are routinely used to generate hypotheses for experimental validation~\cite{Tuncbag-2016-glioblastoma}; and in neurscience, they are used to study the networks and circuits in the brain~\cite{Bassett-2006-small-world,Sporns-2002-network-analysis}.
+
+Given their ubiquity, graphs and graph-based data have been approached from several different perspectives.
+In computer science, it is common to develop algorithms, e.g., for connected component, minimum spanning tree, and maximum flow problems, to run on data that are modeled as a precisely-specified input graph. 
+These algorithms are then characterized by the number of operations they use for the worst-possible input at any size. 
+In statistics and machine learning, on the other hand, it is common to use graphs as models to perform inference about unseen data. In this case, one often hypothesizes an unseen graph with a particular structure, such as block structure, hierarchical structure, low-rank structure in the adjacency matrix, etc. Then one runs algorithms on the observed data in order to impute entries in the unobserved hypothesized graph. 
+These methods may be characterized in terms of running time, but they are also characterized in terms of the amount of data needed to recover the hidden hypothesized structure.
+
+In many application areas where the end goal is to obtain some sort of domain-specific insight, e.g., such as in social network analysis, neuroscience, medical imaging, etc., one constructs graphs from primary data, and then one runs a computational procedure that does \emph{not} come with either of these traditional types of theoretical guarantees. 
+As an example, consider the GeneRank method~\cite{morrison2005-generank}, where we have a set of genes related to an experimental condition in a microarray study. 
+This set of genes is ``refined'' via a locally-biased graph algorithm closely related to those we will discuss.  
+Importantly, this operational refinement procedure does \emph{not} come with the sort of theory traditional in statistics, machine learning, or computer science.
+As anther example, e.g., in social network applications, one might run a random walk process for a few steps from a starting node of interest, and if the walk ``gets stuck'' then one might interpret this as evidence that that region of the graph is meaningful in the application domain~\cite{EH09_TR}. 
+These are examples of the types of heuristics commonly-used in applications. 
+By heuristic, we mean an algorithm in the sense that it performs a sequence of well-defined steps, but one where precise theory is lacking (although usually heuristics come with strong intuitive motivation and are justified in terms of some downstream application). 
+In particular, typically heuristics do not explicitly optimize a well-defined objective function and typically they do not come with well-defined inferential guarantees. 
+
+
+Note that, in both of these examples, the goal is to find ``local'' or ``small scale'' structure in the data graph. 
+Both examples also correspond to what practitioners interested in downstream applications actually do. 
+Existing algorithmic and statistical theory, however, has challenges with these local or small-scale structures. 
+For instance, a very ``good'' algorithmic runtime on a graph is traditionally one that is \emph{linear} in the number of vertices and edges.
+If the output of interest is only a vanishingly small fraction of a large graph, however, then this theory may not provide strong qualitative guidance on how these locally-biased methods behave in practice. 
+Likewise, inferential methods often assume that the structures inferred constitute a substantial fraction of the graph, and many statistical techniques have challenges differentiating very small structure from random noise. 
+
+In this overview, we describe a class of graph algorithms that has proven to be very useful for identifying and interpreting small-scale local structure in large-scale data. 
+For this class of algorithms, however, strong algorithmic and statistical theory has been developed. 
+In particular, these graph algorithms are \emph{locally-biased} in one of several precisely-quantified senses. 
+We will describe what we mean by this in more detail below, but, informally, this means that the algorithms are most interested in only a small part of a large graph. 
+As opposed to heuristic operational procedures, however, many of these algorithms do come with strong worst-case algorithmic guarantees, and many of these algorithms also do come with statistical guarantees that prove they have \emph{implicit} regularization properties. 
+This complementary algorithmic-statistical theory helps explain their improved performance in many practical applications.
+
+While the approach of locally-biased graph algorithms is very general, it has been developed most extensively for the fundamental problem of finding locally-biased graph partitions, i.e., clusters or communities, and so we will focus on locally-biased approaches for the graph clustering problem.
+Of course, this partitioning question is of interest in many more application-driven areas, where one is interested in finding useful or meaningful clusters as part of a data analysis pipeline.
+
+\subsection{The rationale for local analysis in real-world data}
+
+
+
+As a quick example of why local graph analysis is frequently used in data and data science applications, we present in Figure~\ref{fig:small-cluster} the results of finding the best partition of both a random geometric graph and a more typical data graph. 
+Standard graph partitioning algorithms must operate on, or ``touch'', each vertex and edge of the graph to identify these partitions. 
+The best partition of the geometric graph is around half the data, where it is reasonable to run an algorithm that touches all the data.  
+On the other hand, the best partition of the data graph is very small, and in this case touching the entire graph to find it can be too costly in terms of computation time. 
+The local graph clustering techniques discussed in this paper can find this cluster touching only edges and nodes in the output cluster, greatly reducing the computation~time.  
+
+Far from being a pathology or a peculiarity, the finding that optimal partitions of real-world networks are often extremely imbalanced, thus leading to very small optimal clusters, is endemic to many of the graphs arising in large-scale data analysis~\cite{LLDM08_communities_CONF,LLDM09_communities_IM,LLM10_communities_CONF,Jeub15}.\footnote{An important applied question has to do with the meaningfulness, usefulness, etc., of such small clusters.  We do not consider those questions here, and instead we refer the interested reader to prior work~\cite{LLDM08_communities_CONF,LLDM09_communities_IM,LLM10_communities_CONF,Jeub15}.  Here, we instead focus on the algorithmic and statistical properties of these locally-biased algorithms.} 
+
+
+
+Let us now explain in more detail Figure~\ref{fig:small-cluster}.
+Figure~\ref{fig:small-cluster-a} shows a graph with 3000 nodes that is typical of many graphs that possess a strong underlying \emph{geometry}, e.g., those used in computer graphics, computer vision, logistics planning, road network analysis, and so on. 
+This particular graph is produced by generating 3000 random points in the plane and connecting all points within a small radius, such that the final graph is connected. 
+The geometric graph can be nearly bisected by optimizing a measure known as conductance (we shall define this shortly), which is designed to balance partition size and quality. 
+In Figure~\ref{fig:small-cluster-b}, we show a more typical data graph of around 10680 nodes~\cite{Moguna-2004-models}, where this particular data graph is based on the trust relationships in a PGP (Pretty Good Privacy) key-chain. 
+Optimizing the same conductance objective function results in a tiny set, Figure \ref{fig:small-cluster-d}, and not the near-bisection as in the geometric case, Figure \ref{fig:small-cluster-c}. 
+(We were able to use integer optimization techniques to directly solve the NP-hard problems at the cost of months of computation.)  
+Many other examples of this general phenomenon can be found in prior work~\cite{LLDM08_communities_CONF,LLDM09_communities_IM,LLM10_communities_CONF,Jeub15}.
+
+\begin{figure}[t]
+	\subfigure[A random geometric graph\label{fig:small-cluster-a}]{\includegraphics[width=0.5\linewidth]{U3A-full}}%
+	\subfigure[A typical data graph\label{fig:small-cluster-b}]{\includegraphics[width=0.5\linewidth]{pgp-full}}
+	\subfigure[The optimal conductance solution for the geometric graph bisects the graph into two large well-balanced pieces\label{fig:small-cluster-c}]{\includegraphics[scale=0.32]{U3A-bestset}}
+		\subfigure[The optimal conductance solution for a typical data graph. (Inset. A zoomed view of the subgraph where the two unfilled notes are the border with the rest of the graph.)\label{fig:small-cluster-d}]{\raisebox{0cm}{\includegraphics[width=0.5\linewidth]{pgp-bestset}}\llap{\colorbox{white}{\includegraphics[scale=0.32]{pgp-bestset-zoom}}}}
+	\caption{At left, a geometric graph has a pleasing and intuitive layout in the two-dimensional plane. At right, a more typical data graph has a classic \emph{hairball} layout that shows little high level structure. Due to the evident lack of global structure in the data graph, locally-biased graph algorithms are often used in these contexts. 
+	The solution of the Minimum-Conductance problem in the geometric graph is a large set of nodes, and it has conductance value $0.00464$.  The solution of the Minimum-Conductance problem in the more typical data graph is a small set of nodes, and it has conductance value $0.00589$. 
+	The inset figure shows that this small graph is very dense and has only 3 edges leaving the set.}
+	\label{fig:small-cluster}
+\end{figure}
+
+\subsection{Partitioning as a model problem}
+The problem of finding good partitions or clusters is ubiquitous.  Representative examples 
+include biomedical applications \cite{ICOYHS01,GN02}, internet and world-wide-web \cite{FFF99,AJB99,KKRRT99}, social graphs \cite{LLDM08_communities_CONF,scott,Traud11,UKBM11},
+human communication graphs \cite{OSHSLKKB07}, human mobility graphs \cite{EEBL10},
+voting graphs in political science \cite{PMNW05,multiplex_Mucha,MMP12,TKMP11,GHKV07}, protein interaction graphs \cite{JPD10}, material science \cite{BODP12,RCHSSKMN11}, neuroscience 
+\cite{BWPMCG11,WBMPG12,BWRPMG13}, collaboration graphs \cite{ELP11}.
+
+All of the features of locally-biased computations are present in this model partitioning problem. 
+For example, while some of these algorithms read the entire graph as input but are engineered to return answers that are biased toward and meaningful for a smaller part of the input graph~\cite{MOV12_JMLR,andersen08soda,ZBLWS04,pan2004-cross-modal-discovery}, other algorithms can take as input a small ``seed set'' of nodes as well as an oracle with which to access neighbors of a node, and they return meaningful answers without even touching the entire graph~\cite{FCSRM16_TR,ACL06,KG14,ST13}.
+Similarly, while these algorithms are often formulated in the language of theoretical computer science as approximation algorithms, i.e., they come with running time guarantees and can be shown to \emph{approximate} to within some quality-of-approximation factor some objective function of interest, e.g., conductance, in other cases one can prove statistical results such as that they \emph{exactly} solve a regularized version of that objective~\cite{GM14_ICML,Veldt-preprint-simple-local-flow,MO11-implementing,FCSRM16_TR}. 
+
+Importantly, this statistical regularization is implicit rather than explicit. Typically, regularization is explicitly used in statistics, when fitting models with a large number of parameters, in order to avoid overfitting to the given data. It is also used to select answers biased towards specific sets---for example, sparse solution sets by using the Lasso~\cite{T96}. In the case of locally-biased graph algorithms, one simply runs a \emph{faster} algorithm for a problem. In some cases, the nature of the approximation that this fast algorithm makes can be related back to a regularized variant of the objective function. 
+
+
+
+
+
+
+\subsection{Overview}
+In this paper, we will consider partitioning from the perspective of conductance, and we will survey a recent class of results about a common localizing construction. 
+These methods will let us find the optimal sets in Figure~\ref{fig:small-cluster} without resorting to integer optimization (but also losing the proof of optimality). 
+Depending on the exact construction, they will also come with a variety of helpful statistical properties. 
+We'll conclude with a variety of different perspectives on these problems and some open questions. 
+
+In Section \ref{sec:prelim} we describe assumptions, notation and preliminary results which we will use in this paper. In Section \ref{sec:global_cond_spcut} we discuss two global graph partitioning problems and their spectral relaxation. In Section \ref{sec:localgraphpart} we describe the local graph clustering application. In Section \ref{sec:empirical} we provide empirical evaluations for the global and local graph clustering algorithms which are described in this paper. Finally, in Section \ref{sec:disc_conclusion} we give our conclusions.
+
+
+\section{Text that has been cut}
+
+
+\section{Intro}
+
+Motivated by these very large-scale data analysis applications where only small meaningful clusters exist and where the graphs are so large that iterating over all edges and nodes is measured in minutes or hours, recent work has focused on \emph{locally-biased graph algorithms}.
+This refers to a broad class of algorithms that are designed to take as input a large graph, e.g., a billion node social or information network, and to solve problems that are in some sense ``nearby'' an exogenously-specified ``seed set'' of nodes.
+While these algorithms are often very useful in practice, and while many of them have connections with heuristic procedures that practitioners often apply to their data, a distinguishing feature of them is their non-trivial algorithmic and/or statistical theory.
+
+
+
+
+
+
+
+
+
+
+In this overview paper, we will cover recent work of global and local graph algorithms, touching on each of these topics, reviewing complementary aspects, and focusing on optimization questions.
+We split this paper into three parts, optimization objectives, global and local algorithms. 
+First we will present optimization objectives which by consensus quantify the notion of a cluster in a graph. The optimization problems that we present are NP-hard, thus cannot be optimized in polynomial time.   
+Then we discuss state-of-the-art polynomial time relaxations that result in spectral or max-flow problems. Second, we present an overview of locally-biased graph partitioning methods in terms of \emph{flow-based methods} and \emph{spectral-based methods}. 
+Finally, we illustrate their performance in practice and comment on the implicit or explicit regularization that is applied by each algorithm. 
+
+
+\section{Regularization, Beyond $\ell_1$ and $\ell_2$}
+
+
+It is easy to see that the above problem is a continuous representation of $s$-$t$ Min-Cut problem.
+The constraints $x_s=1$ and $x_t=0$ represent regularization such that the trivial solution of a constant
+vector $x$ is obtained. At the same time these two constraints affect the separation of the graph in two parts
+such that the nodes $v_s$ and $v_t$ are in different parts of the partition.
+
+The approximation is based on the distortion error of embedding the semi-metric to
+the so called $\ell_1$-metrics set, see \cite{} (\textcolor{red}{Leighton Rao}) for details.
+
+\paragraph{Theoretical issues: combining spectral and flow.}
+\textcolor{red}{The material below is also covered in the SDP section, we need to combine them.}
+
+
+Although it isn't our main focus, we comment briefly on one set of well-known results and how it fits in with our discussion.
+A natural question in the above is whether one can combine the complementary ideas from spectral and flow to obtain improved results.
+The answer is yes, and this is the ARV algorithm.
+It (1) can be written as a tighter relaxation of the expansion/conductance problem, (2) can be written as an SDP, (3) provides improvement over spectral as well as LR, (4) leads to related optimization-based methods/approaches such as KRF and MWUM that lead to similar improvements.
+XXX.  GIVE THE OBJECTIVE AND RELAXATION AND RESULTS AND LEAVE IT AT THAT.
+BTW, also, LMO showed that the practice follows the theory for graphs up to thousands to tens of thousands of nodes~\cite{LMO09}, but, aside from this, these methods haven't really been implemented.
+XXX.  WE'LL PROBABLY SAY IN THE CONCLUSION THAT LOCAL ARV METHODS ARE OPEN.
+
+\subsection{Embedding aspects}\label{subsection:embeddings}
+\textcolor{red}{I have to embed ( :-) ) this section in previous sections since most of the material below is already mentioned above.}
+
+
+These two approaches have an interpretation in terms of embeddings (which is of theoretical interest, but which also can be seen empirically), and this provides a way to think of the two together as complementary (in the global case, but we will do the local case below).
+
+To start, return to min-cut, and note that that objective, while tractable, often leads to trivial solutions, in that it cuts on a very small number of nodes, e.g., one or two.
+Thus, it is common to normalize by the volume.
+(Alternatively, one could have a balance constraint or use methods that explicitly or implicitly provide a bias toward large sets of nodes.)
+In this case, one can define the expansion of a set of nodes to be the usual expansion-SA-to-Volume measure.
+XXX.  DEFINE.
+If the graph is weighted or has variable degrees, then one could define the conductance to be the usual conductance-SA-to-Vol measure.
+(They are the same for unweighted/degree-regular graphs, but not otherwise and the differences are important in theory/practice.)  
+Note that the input to these objectives is just a graph $G=(V,E,W)$.
+
+These objectives are intractable, but they capture the qualitative idea of what most people think of by clusters---relatively large, relatively a lot of stuff inside, relatively less interaction between the cluster and its complement.
+The point is that spectral and flow both give approximation algorithms for expansion/conductance.
+Spectral relaxes one way, i.e., the $\{-1,1\}$ constraint to being $\pm1$ on average, and this can be solved by computing eigenvectors or diffusions
+Flow relaxes another way, i.e, the $\{0,1\}$ constraint to be a metric, and this can be written as the solution of an LP, which can then be solved with flow methods like Dinic or related methods.
+
+From this embedding perspective, it is clear that spectral embeds the graph not just on a like, and it then does a sweep cut, but it also embeds the graph in a complete graph, i.e., the Laplacian of a complete graph, and it is here that the duality is the tightest.
+It is here that the quadratic approximation result of Cheeger arises.
+And note that for spectral methods random walks mix quickly on constant-degree expanders and slowly on line graphs, and this can be sued to construct the Guattery-Miller cockroach graphs.
+XXX.  SOMETHING ABOUT CONNECTIONS WITH L2.
+Similarly, flow methods embed you in an $\ell_1$ space, and Bourgain's embedding lemma says that an $O(\log n)$ distortion can be expected, and this happens on constant degree expanders.
+
+We have gone through this in some detail since many of the ideas are essential for constructing local versions of these methods.
+Many of these results are ``obvious'' to certain research areas and not even thought about by other research areas, so we went through them in the more well-developed global partitioning area, so we can draw similarities with local methods.
+
+\subsection{Some additional observations}
+
+There is, of course, the usual theory-practice gap.
+Theoretical work typically considers the problem of two clusters, and applied work is often more interested in more than two clusters.
+The latter, while also using a lot of algorithm engineering, often uses ideas that boil down to the former.
+Here, we mention a few things.
+
+\paragraph{Practical issues: going beyond spectral and flow.}
+
+Global graph partitioning methods basically boil down to some combination of spectral and flow, also couples with ideas like multi-resolution.
+The canonical example of this is METIS~\cite{karypis98_metis,karypis98metis}.
+This, coupled with doing things ``right,'' e.g., doing the sweep cut right with spectral of doing something analogous like Goldberg does with flow algorithms, can have a big effect on the quality of the result.
+We won't go into a lot of detail about this, but we expect that a lot of these ideas can also lead to improved local and
+
+
+\section{Spectral methods}
+
+The material in this section is based on \cite{S11}. 
+Then 
+$$
+vol(E(S,S^c)) = \frac{x^T L x}{(c_1-c_2)^2}
+$$
+and
+$$
+x^TDx = c_1^2 vol(S) + c_2^2 vol(S^c).
+$$
+Depending on how we define $c_1$ and $c_2$ we obtain different problems. For example, if 
+$$
+c_1= \sqrt{\frac{vol(S^c)}{vol(S)}}, \ c_2= -\sqrt{\frac{vol(S)}{vol(S^c)}}
+$$
+then the following problem
+\begin{align}\label{spcutLD}
+\mbox{minimize}   & \quad \frac{x^TLx}{x^TDx} \\\nonumber
+\mbox{subject to} &\quad x\in\{c_1,c_2\}^{|\mathcal{V}|}
+\end{align}
+is equivalent to the Sparsest-Cut problem \eqref{spcut}.
+If $c_1=1$ and $c_2=0$ then \eqref{spcutLD} is equivalent to the Minimum-Isoperimetry problem \eqref{isop}. It is clear that for different values of $c_1$ and $c_2$ we impose different 
+regularization on the optimal partition of the graph. However for any values of $c_1$ and $c_2$ problem \eqref{spcutLD} is still NP-hard.
+A possible way to overcome this difficulty is to relax the solution set to $\{u\in\mathbb{R}^{|\mathcal{V}|} \ | 1_{|\mathcal{V}|}^T D u = 0\}$, where $1_{|\mathcal{V}|}$ is a column vector of ones of length $|\mathcal{V}|$.
+This relaxation is equivalent to finding the second largest eigenvalue of the normalized graph Laplacian $\mathcal{L}$, which justifies the name spectral relaxation.
+The relaxed problem is 
+\begin{align}\label{spcutLD}
+\mbox{minimize}   & \quad \frac{x^TLx}{x^TDx} \\\nonumber
+\mbox{subject to} &\quad x\in\{u\in\mathbb{R}^{|\mathcal{V}|} \ | \ 1_{|\mathcal{V}|}^T D u = 0\},
+\end{align}
+which is a non-convex problem, but all local solutions are of the same importance since all have the same objective value.
+The local solutions differ only by a positive constant factor and a sign change. The reason for imposing the orthogonality constraint $1_{|\mathcal{V}|}^T D x = 0$
+is because otherwise \eqref{spcutLD} has a trivial solution, the eigevector $D^{1/2} 1_{|\mathcal{V}|}$ (any other constant vector can be used instead of $1_{|\mathcal{V}|}$)
+of the zero (the smallest) eigevalue of $\mathcal{L}$. 
+
+Let us define $\delta_S(v_i,v_j) = |x_i - x_j|^2$.\ Using $\delta_S$ we can rewrite the numerator in the objective function as
+$$
+x^T L x = \sum_{i=1}^{|\mathcal{V}|}\sum_{j=1}^{|\mathcal{V}|} C_{ij}\delta_S(v_i,v_j).
+$$
+Another way of viewing the spectral relaxation is by noticing that if instead of defining $x : \mathcal{V} \to \{c_1,c_2\}$ to be an indicator function, we allow it to be any
+arbitrary function $x: \mathcal{V} \to \mathbb{R}$, then we relax the cut-metric $\delta_S$ to be the Euclidean square distance. 
+
+
+
+\section{Local methods}
+
+\subsection{The Local-Isoperimetry Problem}
+
+Recall that we introduced the Sparsest-Cut and Minimum-Isoperimetry problems as regularizations of the Min-Cut problem that were designed to achieve some control over the size of the set identified. The Local-Isoperimetry problem is an integer problem that adds more regularization (or a constraint) to achieve a local solution~\cite{MOV12_JMLR}. The problem depends on a graph $G$ and a reference set $R$ that must be contained within the solution. We also make the size of the final set a parameter $k$. The new program is 
+\begin{align}
+\hat{\phi}(\mathcal{G};R,k) \quad := \quad 
+\mbox{minimize}   & \;   \tilde{\phi}(S)= \frac{vol(E(S,S^c))}{vol(S)} \\\nonumber
+\mbox{subject to} & \;  S\subset \mathcal{V},\ vol(S) \le k \\ \label{eq:localiso}
+& \; R \subseteq S. \nonumber
+\end{align}
+It differs from the Minimum-Isoperimetry problem because we have replaced the volume bound with a constant $k$ and require that the solution set $S$ contain the reference set $R$. The idea with this problem is that we wish to localize the solution to the Minimum-Isoperimetry problem around a subset of nodes $R$. We'll often take $R$ to be a single node. 
+
+Note that if $k = vol(G)$ then this problem may be solved as a parametric flow problem using techniques akin to those in~\cite{HochbaumNcutprime}. If $k = vol(G)/2$, then we are able to use $|V|$ runs of this algorithm to solve the Minimum-Isoperimetry problem by setting $R$ to be each vertex. So solving this is NP-hard in general.
+
+We illustrate one counter-intuitive feature of this problem in Figure~\ref{fig:local-iso}. First, let us note that one of the global solutions of the Minimum-Isoperimetry problem must be a connected subgraph. However, the solution set of the Local-Isoperimetry problem may be a disconnected graph. This occurs if there is another set in the graph with a sufficiently small isoperimetry value such that it is better to pay the price for disconnecting the reference graph $R$ and returning the union of the two. 
+
+\begin{figure}[t]
+	\subfigure[The Local-Isometry solution may be disconnected. The singleton node is the set $R$.]{\includegraphics[scale=0.33]{U3A-local-iso-1-500}}\hspace{0.01\linewidth}%
+	\subfigure[Increasing $k$ results in a connected set for this problem.]{\includegraphics[scale=0.33]{U3A-local-iso-1-5000}}
+	\caption{The singleton node in (a) is not a bug. The single disconnected node was the set $R$.  \textfinish{Add more discussion.} \textfinish{add PGP figures}}
+	\label{fig:local-iso}
+\end{figure}	
+
+\section{Discussion and conclusion}
+\label{sec:disc_conclusion}
+
+Although the optimization approach we have adopted is designed to highlight similarities between different variants of locally-biased graph algorithms, it is also worth emphasizing that there are a number of quite different and complementary perspectives people in different research communities have adopted thus far on these methods. For example: 
+
+
+	
+	\textbf{Theoretical and empirical.}
+	The theoretical implications of these locally-biased algorithms are often used to improve the performance of long-standing problems in theoretical computer science by improving runtimes, improving approximation constants, and handling special cases. Empirically, these algorithms are used to \emph{study} real-world data and to accelerate and improve performance on discovery and prediction tasks. Due to the strong locality, the fast runtimes for theory often manifest as extremely fast algorithms in practice. Well-implemented strongly-local algorithms often have runtimes in milliseconds even on billion-edge graphs~\cite{KG14,FCSRM16_TR}.
+	
+	\textbf{Algorithmic and statistical.}
+	Some of the work is motivated by having better algorithmic results, e.g., being fast and/or being a rigorous approximation algorithm, i.e., worst-case guarantees in terms of approximating the optimal solution of a combinatorial problem, while other work has provided an interpretation in terms of statistical properties, e.g., explicitly optimizing a regularized objective \cite{WSST14} or implicitly having output that are nice in some sense, i.e., well-connected output cluster \cite{ZLM13}. Often, locally-biased algorithms alone suffice as the result is an improvement to some downstream activity that will necessarily look at all the data anyway. 
+
+	
+	\textbf{Optimization and operational.}
+	The locally-biased methods tend to result from stating an optimization problem and solving it with some sort of black box or white box. Strongly-local algorithms often arise by studying a specific procedure on a graph and showing that it satisfies some condition, e.g., that it terminates so quickly that it cannot explore the entire graph, that it leads to a solution with certain quality-of-approximation guarantees, etc. See, for instance, the spectral algorithms \cite{ACL06,AL08,AP09,C09,ST13,CS14,KG14} 
+and the flow-based algorithms \cite{KKOV07_TR,OSVV08,OZ14}.
+
+
+In light of these complementary approaches as well as the ubiquity with which graphs are used to model data, we expect that locally-biased graph algorithms and our optimization perspective on locally-biased graph algorithms will find increasing usefulness in many application areas. 
+
+
+\section{Empirical Evaluation}
+\label{sec:empirical}
+
+In this section, we illustrate differences among global, weakly local, and strongly local solutions to the problems discussed in Section~\ref{sec:localgraphpart}. Additionally, we discuss differences between spectral and flow methods (which is equivalently  $\ell_2$ vs. $\ell_1$
+metrics for node distances). 
+
+To do so, we make use of the following real-world undirected and unweighted networks.
+\begin{compactitem}
+\item \textbf{US-Senate}. Each node in this network is a Senator that served in a single term (two years) of Congress. Our data cover the period from year $1789$ to $2008$. 
+Senators appear as multiple nodes if they served in multiple terms. Edges are based on the similarity of voting records between Senators and thresholded at the maximum similarity such that the graph remains connected. Edge-weights are discarded. For a detailed discussion of this data-set we refer the reader to \cite{multiplex_Mucha}.
+This graph has $8974$ nodes and $153804$ edges. This graph has two large clusters with small conductance ratio, i.e., downward-slopping network community profile; see Figure $6$ in \cite{Jeub15} for details.
+The first cluster consists of all the nodes before the year $1913$ and the second cluster consists of nodes after that year. 
+\item \textbf{CA-GrQc}. The data for this graph is a general relativity and quantum cosmology collaboration network. Details can be found in the Stanford Network Analysis Project.\footnote{\url{http://snap.stanford.edu/data}}
+This graph has $4158$ nodes and $13422$ edges. This graph has many clusters of small size with small conductance ratio, while large clusters have large conductance ratio, 
+i.e., upward-slopping network community profile; see Figure $6$ in \cite{Jeub15} for details.
+\item \textbf{FB-Johns55}. 
+This graph is a Facebook anonymized data-set on a particular day in September $2005$ for a student social network at John Hopkins university. The graph is unweighted and it represents ``friendship" ties.
+The data form a subset of the Facebook100 data-set from \cite{TKMP11,TMP12}.
+This graph has $5157$ nodes and $186572$ edges. This is an expander-like graph, all small and large clusters have about the same conductance ratio, i.e., flat network community profile; 
+see Figure $6$ in \cite{Jeub15} for details.
+\item \textbf{US-Roads}. The data for this graph is from the National Highway Planning Network \cite{LLDM08_communities_CONF}. Each node in this network is an intersection between two highways and the edges represent segments of the highways themselves.
+\end{compactitem}
+Note that the small-scale vs. large-scale clustering properties of the first three networks have been characterized previously~\cite{Jeub15}.
+In addition, it is known that US-Roads has a downward-sloping network community profile.
+
+\paragraph{Global, weakly local, and strongly local solutions}
+We first demonstrate differences among global, weakly local, and strongly local algorithms.
+Let us start with a comparison among spectral algorithms. By comparing algorithms that 
+use that same metric, i.e., $\ell_2$, to measure distances among nodes we minimize factors 
+that can affect the solution, and we focus on weak vs. strong locality. In all figures we show the solution obtained by an algorithm 
+without applying any rounding procedure. We illustrate the importance of the nodes by colouring and size; details 
+are explained in the captions of the figures and in the text.
+The layout for all graphs has been obtained using the force-directed algorithm \cite{H05}, which is available from the graph-tool project.\footnote{\url{https://graph-tool.skewed.de}}
+
+For US-Senate, the comparison is shown in Figure \ref{Fig_senate_spectral}.
+Figures \ref{Fig_senate_spectral_1} and \ref{Fig_senate_spectral_2} show the solutions of global algorithms, Spectral relaxation 
+and MOV global ($z=1_{|\mathcal{V}|}$ and then we orthogonalize $z$ with respect to $D1_{|\mathcal{V}|}$), respectively. 
+As expected, the US-Senate graph has two large clusters, i.e., before the year $1913$ and after that year, that partition along the one-dimensional time axis. 
+This global structure is nicely captured by Spectral relaxation and MOV global in Figures \ref{Fig_senate_spectral_1} and \ref{Fig_senate_spectral_2}, respectively.
+
+Given an input seed set, Figures \ref{Fig_senate_spectral_3} and \ref{Fig_senate_spectral_4} illustrate the weakly 
+and strongly local solutions by MOV and $\ell_1$-regularized Page-Rank, respectively. 
+For MOV in Figures \ref{Fig_senate_spectral_3} we set 
+$z_i = 1$ for all $i$ in the input seed set and $z_i=0$ for all $i$ outside the input seed set. Then we orthogonalize $z$ with respect to $D\cdot1_{|\mathcal{V}|}$.
+For $\ell_1$-regularized Page-Rank, we only give a single node as an input seed set, i.e., $h_i=1$ where $i$ is the input node and $h_i=0$ for all other nodes.
+Moreover, we set the locality parameter $\epsilon$ large enough such that the solution is very sparse, i.e., strongly local.
+In Figures \ref{Fig_senate_spectral_3} and \ref{Fig_senate_spectral_4}, we demonstrate the input seed sets by nodes with a blue halo around them. 
+In Figure \ref{Fig_senate_spectral_3}, the cluster which is found by MOV consists of the nodes which have large mass concentration around the input seed set, i.e.,
+the nodes around the input seed set that have large size and are coloured with a bright red shade.
+MOV recovers this cluster by examining the whole graph; each node has a weight assigned to it in Figure \ref{Fig_senate_spectral_3}. 
+On the other hand, a similar cluster is found in Figure \ref{Fig_senate_spectral_4} by using $\ell_1$-regularized Page-Rank without examining 
+the whole graph. This is possible because nodes of the graph have zero weight assigned and need not be considered. \emph{This speed and data advantage, along with the sparsity-based implicit regularization~\cite{GM14_ICML}, are some of the reasons that strongly-local algorithms, such as $\ell_1$-PageRank, are used so often in practice~\cite{LLDM09_communities_IM,Jeub15}.}
+
+\begin{figure*}
+\centering
+	\subfigure[Global spectral relaxation]{\label{Fig_senate_spectral_1}\includegraphics[scale=0.22]{senate_eig2} 
+	\put(-220,0){ 
+	\begin{tikzpicture}
+	\draw (0,0) -- (7.0,0);
+	\foreach \x in {0,2.5,3.1,7.0}
+	\draw (\x cm,3pt) -- (\x cm,-3pt);
+	\draw (0.1,0) node[below=3pt] (a) {\tiny $1789$} node[above=3pt] {};
+	\draw (2.5,0)  node[below=3pt]  {\tiny $1860$} node[above=3pt] (c) {};
+	\draw (3.1,0) node[below=3pt](d) {} node[above=3pt] {\tiny $1913$};
+	\draw (6.9,0) node[above=3pt] (f) {\tiny $2008$} node[below=3pt] {};
+	\end{tikzpicture}
+	}
+	}
+	\subfigure[MOV with global seed]{\label{Fig_senate_spectral_2}
+	\includegraphics[scale=0.22]{senate_mov}
+	}\\
+	\subfigure[MOV with local seed]{\label{Fig_senate_spectral_3}
+	\includegraphics[scale=0.22]{senate_mov_local}
+	}
+	\subfigure[ACL $\ell_1$-regularized Page-Rank]{\label{Fig_senate_spectral_4}\includegraphics[scale=0.22]{senate_l1pr}}
+	\caption{US-Senate.\ This figure shows the solutions of (a) Spectral relaxation, (b) MOV with global bias, (c) MOV with local bias
+	and (d) strongly-local $\ell_1$-regularized Page-Rank.
+	We use a heat map to represent the weights of the nodes.
+	For Spectral relaxation and MOV bright yellow means large positive and bright red means large negative. For $\ell_1$-regularized Page-Rank bright yellow means large positive and bright red means small positive.
+	The blue halo around a node in Figures \ref{Fig_senate_spectral_3} and \ref{Fig_senate_spectral_4} means that this node is included in the seed set.
+	The size of the nodes shows the weights of the solution in absolute value. 
+	If a weight is nearly zero then the corresponding node is barely~visible. 
+
+
+	}	
+	\label{Fig_senate_spectral}	
+\end{figure*} 
+
+In Figure \ref{Fig_grqc_spectral}, we present global, weakly local, and strongly local solutions for the less well-partitionable and thus less easily-visualizable CA-GrQc graph. 
+As already mentioned in the description of this data-set, this graph has many small clusters with small conductance ratio and large clusters have large ratio.
+This is also justified in our experiment by the fact that global methods, such as the Spectral relaxation and MOV global in Figures \ref{Fig_grqc_spectral_1} and \ref{Fig_grqc_spectral_2}, respectively, 
+recover small clusters.
+The two global procedures find small clusters which are presented in Figures \ref{Fig_grqc_spectral_1} and \ref{Fig_grqc_spectral_2} with red, orange and yellow colours. However, since there are many small clusters
+of small conductance ratio, 
+one might want to find different clusters than the ones obtained by Spectral relaxation and MOV global. This is possible using localized procedures such as MOV and $\ell_1$-regularized Page-Rank. Given two different seed sets we demonstrate  
+in Figures \ref{Fig_grqc_spectral_3} and \ref{Fig_grqc_spectral_4} that MOV successfully finds other clusters than the ones obtained by the global methods. The same is shown in Figures \ref{Fig_grqc_spectral_5}
+and \ref{Fig_grqc_spectral_6} for $\ell_1$-regularized Page-Rank. Notice that MOV assigns weights (perhaps small) to all the nodes of the graph; on the other hand, $\ell_1$-regularized Page-Rank, as a strongly local procedure,
+assigns weights only to a small number of nodes, without examining all of the graph. 
+
+\begin{figure}
+\centering
+	\subfigure[Spectral relaxation]{\label{Fig_grqc_spectral_1}\includegraphics[scale=0.111]{CA-GrQc-cc_eig2}}
+	\subfigure[MOV global]{\label{Fig_grqc_spectral_2}\includegraphics[scale=0.111]{CA-GrQc-cc_mov}} \\
+	\subfigure[MOV local, seed $1$]{
+  	\begin{tikzpicture}[every node/.style={anchor=center}]
+   	 \node(a) at (8,4){\label{Fig_grqc_spectral_3}\includegraphics[scale=0.095]{CA-GrQc-cc_mov_local}};
+    	\node(b) at (7.5,3.3){\frame{\colorbox{white}{\includegraphics[scale=0.04]{CA-GrQc-cc_mov_local_zoom}}}};
+    	\draw[black] (9.0,4.05)rectangle (9.6,3.76);
+    	\draw[black,->](8.33,3.3)--(9,3.75);
+  	\end{tikzpicture}
+	}
+	\subfigure[MOV local, seed $2$]{
+  	\begin{tikzpicture}[every node/.style={anchor=center}]
+   	 \node(a) at (8,4){\label{Fig_grqc_spectral_4}\includegraphics[scale=0.095]{CA-GrQc-cc_mov_local_diff_seed}};
+    	\node(b) at (7.5,3.3){\frame{\colorbox{white}{\includegraphics[scale=0.04]{CA-GrQc-cc_mov_local_diff_seed_zoom}}}};
+    	\draw[black] (8.8,4.53)rectangle (9.2,4.28);
+    	\draw[black,->](8.33,3.3)--(8.8,4.28);
+  	\end{tikzpicture}
+	}
+	\\
+	\subfigure[$\ell_1$-regularized Page-Rank, seed $1$]{
+  	\begin{tikzpicture}[every node/.style={anchor=center}]
+   	 \node(a) at (8,4){\label{Fig_grqc_spectral_5}\includegraphics[scale=0.095]{CA-GrQc-cc_l1pr}};
+    	\node(b) at (7.5,3.3){\frame{\colorbox{white}{\includegraphics[scale=0.04]{CA-GrQc-cc_l1pr_zoom}}}};
+    	\draw[black] (9.0,4.05)rectangle (9.6,3.76);
+    	\draw[black,->](8.33,3.3)--(9,3.75);
+  	\end{tikzpicture}
+	}
+	\subfigure[$\ell_1$-regularized Page-Rank, seed $2$]{
+  	\begin{tikzpicture}[every node/.style={anchor=center}]
+   	 \node(a) at (8,4){\label{Fig_grqc_spectral_6}\includegraphics[scale=0.095]{CA-GrQc-cc_l1pr_diff_seed}};
+    	\node(b) at (7.5,3.3){\frame{\colorbox{white}{\includegraphics[scale=0.04]{CA-GrQc-cc_l1pr_diff_seed_zoom}}}};
+    	\draw[black] (8.8,4.53)rectangle (9.2,4.28);
+    	\draw[black,->](8.33,3.3)--(8.8,4.28);
+  	\end{tikzpicture}
+	}
+	\caption{CA-GrQc.\ This figure shows the solutions of Spectral relaxation, MOV with global input, MOV with local input
+	and $\ell_1$-regularized Page-Rank.
+	The meaning of the colours of the nodes and its sizes is the same as in Figure \ref{Fig_senate_spectral}.}
+	\label{Fig_grqc_spectral}		
+\end{figure} 
+
+We now use the FB-Johns55 graph which has an expander-like behaviour at all size scales, i.e., all small and large clusters have large conductance ratio.  See Figure $6$ in \cite{Jeub15} for details.
+We present the results of this experiment in Figure \ref{Fig_fb_spectral}. Notice that in Figures \ref{Fig_fb_spectral_1} and \ref{Fig_fb_spectral_2} the global methods identify 
+three main clusters, one small (red nodes), one medium size (orange nodes) and one large (yellow nodes). All these clusters have similar conductance ratio. 
+In Figures \ref{Fig_fb_spectral_3} and \ref{Fig_fb_spectral_4} we show that MOV can recover 
+the medium or the small size clusters, respectively, by giving a localized seed set. 
+In Figures \ref{Fig_fb_spectral_5} and \ref{Fig_fb_spectral_6} we illustrate that using $\ell_1$-regularized Page-Rank one can find very similar clusters while exploiting the strongly local
+running time of the method.
+
+\begin{figure}
+\centering
+	\subfigure[Spectral relaxation]{\label{Fig_fb_spectral_1}\includegraphics[scale=0.11]{Johns-Hopkins55-cc_eig2}}
+	\subfigure[MOV global]{\label{Fig_fb_spectral_2}\includegraphics[scale=0.11]{Johns-Hopkins55-cc_mov}} \\
+	\subfigure[MOV local]{\label{Fig_fb_spectral_3} \includegraphics[scale=0.11]{Johns-Hopkins55-cc_mov_local}}
+	\subfigure[MOV local, seed $2$]{\label{Fig_fb_spectral_4}\includegraphics[scale=0.11]{Johns-Hopkins55-cc_mov_local_diff_seed}} \\
+	\subfigure[$\ell_1$-regularized Page-Rank]{\label{Fig_fb_spectral_5}\includegraphics[scale=0.11]{Johns-Hopkins55-cc_l1pr}}
+	\subfigure[$\ell_1$-regularized Page-Rank, seed $2$]{\label{Fig_fb_spectral_6}\includegraphics[scale=0.11]{Johns-Hopkins55-cc_l1pr_diff_seed}}
+	\caption{FB-Johns55.\ 
+	This figure shows the solutions of Spectral relaxation, MOV with global input, MOV with local input
+	and $\ell_1$-regularized Page-Rank. The meaning of the colours of the nodes and its sizes is the same as in Figure \ref{Fig_senate_spectral}.}
+	\label{Fig_fb_spectral}		
+\end{figure} 
+
+Let us now present the performance of flow-based algorithms on the same graphs. We begin with US-Senate in Figure \ref{Fig_senate_flow}.
+In this figure, the red nodes are part of the solution of Flow Improve or Local Flow Improve, depending on the experiment; the yellow nodes are part of the seed set only; and 
+the orange nodes are in both the solution of the flow algorithm and the input seed set. In Figure \ref{Fig_senate_flow_1}, we used as an input seed set to Flow Improve the 
+cluster obtained by applying sweep cut with respect to the conductance ratio on the Spectral relaxation solution. 
+Figures \ref{Fig_senate_flow_2} and \ref{Fig_senate_flow_3} present a clear distinction between 
+Flow Improve and Local Flow Improve, weakly and strongly local algorithms, respectively. For both figures, the input seed set is located at about the middle of the graph. Flow Improve 
+as a weakly local algorithm examines the whole graph and returns a cluster which includes the period before $1913$. Also, it includes big part of the input seed set in the cluster
+due to the overlapping regularization term in the denominator of its objective function. See the definition of the objective function $\phi_R$ for Flow Improve in Section \ref{sec:localgraphpart}.
+On the other hand, in Figure \ref{Fig_senate_flow_3} Local Flow Improve as a strongly local algorithm does not examine the whole graph and its solution is concentrated only around the input seed set.
+\begin{figure*}
+\centering
+	\subfigure[Local Flow Improve, seed: Spectral relaxation + sweep cut]{\label{Fig_senate_flow_1}\includegraphics[scale=0.15]{senate_flowI_s_local_seed1}
+	\hspace{-5.5cm}
+	\begin{tikzpicture}
+	\draw (0,0) -- (4.8,0);
+	\foreach \x in {0,1,1.5,4.8}
+	\draw (\x cm,3pt) -- (\x cm,-3pt);
+	\draw (0.1,0) node[below=3pt] (a) {\tiny $1789$} node[above=3pt] {};
+	\draw (1,0)  node[below=3pt]  {\tiny $1860$} node[above=3pt] (c) {};
+	\draw (1.5,0) node[below=3pt](d) {} node[above=3pt] {\tiny $1913$};
+	\draw (4.7,0) node[above=3pt] (f) {\tiny $2008$} node[below=3pt] {};
+	\end{tikzpicture}
+	}	
+	\subfigure[Flow Improve, local seed set]{\label{Fig_senate_flow_2}\includegraphics[scale=0.15]{senate_flowI_w_local_seed2}}
+	\subfigure[Local Flow Improve, local seed set]{\label{Fig_senate_flow_3}\includegraphics[scale=0.15]{senate_flowI_s_local_seed2}}
+	\caption{US-Senate.\ This figure shows the solutions of Flow Improve and Local Flow Improve for various input seed sets. 
+	Red nodes are only Flow Improve or Local Flow Improve, depending on the experiment; yellow nodes are only seed set; and orange nodes are both part of the flow algorithm and the seed set.}		
+	\label{Fig_senate_flow}
+\end{figure*} 
+
+The distinction that we discussed in the previous paragraph between Flow Improve and Local Flow Improve is easy to visualize in the relatively well-structured US-Senate, but it is not so clear in all graphs. 
+For example, in Figure \ref{Fig_cagrqc_flow} we present the performance of these two algorithms for the CA-GrQc graph. Since this graph has only small
+clusters of small conductance ratio, Flow Improve and Local Flow Improve find the same clusters. This is clearly shown by comparing 
+Figures \ref{Fig_cagrqc_flow_1} and \ref{Fig_cagrqc_flow_2} and Figures \ref{Fig_cagrqc_flow_3} and \ref{Fig_cagrqc_flow_4}.
+A similar performance is observed for the FB-Johns55 graph in Figure \ref{Fig_fb_flow}, except that  the solution of Flow Improve
+and Local Flow Improve are not exactly the same but only very similar.
+
+\begin{figure}
+\centering
+\subfigure[Flow Improve, seed $1$]{\label{Fig_cagrqc_flow_1}
+  \begin{tikzpicture}[every node/.style={anchor=center}]
+    \node(a) at (8,4){\includegraphics[scale=0.095]{CA-GrQc-cc_flowI_w_local_seed1}};
+    \node(b) at (7.5,3.3){\frame{\colorbox{white}{\includegraphics[scale=0.04]{CA-GrQc-cc_flowI_w_local_seed1_zoom}}}};
+    	\draw[black] (9.0,4.05)rectangle (9.6,3.76);
+    	\draw[black,->](8.33,3.3)--(9,3.75);
+  \end{tikzpicture}
+}
+\subfigure[Local Flow Improve, seed $1$]{\label{Fig_cagrqc_flow_2}
+  \begin{tikzpicture}[every node/.style={anchor=center}]
+    \node(a) at (8,4){\includegraphics[scale=0.095]{CA-GrQc-cc_flowI_s_local_seed1}};
+    \node(b) at (7.5,3.3){\frame{\colorbox{white}{\includegraphics[scale=0.04]{CA-GrQc-cc_flowI_s_local_seed1_zoom}}}};
+    	\draw[black] (9.0,4.05)rectangle (9.6,3.76);
+    	\draw[black,->](8.33,3.3)--(9,3.75);
+  \end{tikzpicture}
+}\\
+\subfigure[Flow Improve, local seed $2$]{\label{Fig_cagrqc_flow_3}
+  \begin{tikzpicture}[every node/.style={anchor=center}]
+    \node(a) at (8,4){\includegraphics[scale=0.095]{CA-GrQc-cc_flowI_w_local_seed2}};
+    \node(b) at (7.5,3.3){\frame{\colorbox{white}{\includegraphics[scale=0.04]{CA-GrQc-cc_flowI_w_local_seed2_zoom}}}};
+    	\draw[black] (8.8,4.53)rectangle (9.2,4.28);
+    	\draw[black,->](8.33,3.3)--(8.8,4.28);
+  \end{tikzpicture}
+}
+\subfigure[Local Flow Improve, seed $2$]{\label{Fig_cagrqc_flow_4}
+  \begin{tikzpicture}[every node/.style={anchor=center}]
+    \node(a) at (8,4){\includegraphics[scale=0.095]{CA-GrQc-cc_flowI_s_local_seed2}};
+    \node(b) at (7.5,3.3){\frame{\colorbox{white}{\includegraphics[scale=0.04]{CA-GrQc-cc_flowI_s_local_seed2_zoom}}}};
+    	\draw[black] (8.8,4.53)rectangle (9.2,4.28);
+    	\draw[black,->](8.33,3.3)--(8.8,4.28);
+  \end{tikzpicture}
+}
+\caption{CA-GrQc.\ This figure shows the solutions of Flow Improve and Local Flow Improve for various input seed sets.
+Red nodes are only Flow Improve or Local Flow Improve, depending on the experiment; yellow nodes are only seed set; and orange nodes are both part of the flow algorithm and the seed set.}
+\label{Fig_cagrqc_flow}	
+\end{figure} 
+
+\begin{figure}
+\centering
+	\subfigure[Flow Improve, seed $1$]{\label{Fig_fb_flow_1}\includegraphics[scale=0.11]{Johns-Hopkins55-cc_flowI_w_local_seed1}} 
+	\subfigure[Local Flow Improve, seed $1$]{\label{Fig_fb_flow_2}\includegraphics[scale=0.11]{Johns-Hopkins55-cc_flowI_s_local_seed1}}\\
+	\subfigure[Flow Improve, seed $2$]{\label{Fig_fb_flow_3}\includegraphics[scale=0.11]{Johns-Hopkins55-cc_flowI_w_local_seed2}}
+	\subfigure[Local Flow Improve, seed $2$]{\label{Fig_fb_flow_4}\includegraphics[scale=0.11]{Johns-Hopkins55-cc_flowI_s_local_seed2}}
+\caption{FB-Johns55. This figure shows the solutions of Flow Improve and Local Flow Improve for various input seed sets. 
+Red nodes are only Flow Improve or Local Flow Improve, depending on the experiment; yellow nodes are only seed set; and orange nodes are both part of the flow algorithm and the seed set.}
+\label{Fig_fb_flow}
+\end{figure} 
+
+\paragraph{Flow vs. spectral, or $\ell_1$ vs. $\ell_2$}
+Spectral algorithms measure distances of the nodes based on the $\ell_2$ norm. Generally this means that the nodes of the graph are embedded on the real line.
+On the other hand, flow algorithms measure distances of the nodes based on the $\ell_1$ norm. The solution to flow-based algorithms that we discussed is binary,
+either a node is added in the solution with weight $1$ or it is not and it has weight $0$. 
+In this case, the objective function $\|Bx\|_{1,C}$ of the flow algorithms 
+is a locally-biased variation on $\cut(S)$, where $S$ is constructed based on the binary $x$.\ Therefore, the flow algorithms aim to find a balance between finding good cuts and identifying the input seed set. This implies that the flow algorithms
+try to minimize the absolute number of edges that cross the partition, but at the same time they try to take into account the volume regularization effect of the denominator in the objective function.
+
+In this section, we will try to isolate the effect of $\ell_1$ and $\ell_2$ metrics in the output solution. We do this by employing MQI and spectral MQI, 
+which are flow (i.e., $\ell_1$) and spectral (i.e., $\ell_2$) problems, respectively. The first set of results is shown in Figure \ref{Fig_senate_l1vl2}. Notice in Figure
+\ref{Fig_senate_l1vl2_1} and \ref{Fig_senate_l1vl2_2} that MQI and spectral MQI + sweep cut recover the large clusters, i.e., before and after the year $1913$.
+There are only minor differences between the two solutions. Moreover, observe that Spectral MQI returns a solution which is not binary. This is illustrated in Figure \ref{Fig_senate_l1vl2_3},
+where the weights of the nodes are real numbers. Then sweep cut is applied on the solution of spectral MQI to obtain a binary solution with small conductance ratio, i.e., Figure \ref{Fig_senate_l1vl2_2}.
+
+The previous example did not reveal any difference between MQI and spectral MQI other than the fact that spectral MQI has to be combined with the sweep cut rounding 
+procedure to obtain a binary solution. In Figure \ref{Fig_usroads_l1vl2}, we present a result showing where the solutions have substantial differences. The graph that we used for this
+is the US-Roads, and the input seed set consists of nodes near Minneapolis together with some suburban areas around the city.
+Notice in Figures \ref{Fig_usroads_l1vl2_1} that MQI, i.e., $\ell_1$ metric, shrinks the boundaries of the input seed set. However, 
+MQI does not accurately recover Minneapolis. The reason is the volume regularization which is imposed by the denominator of the objective function of MQI. 
+This regularization forces the solution to have large volume.
+On the other hand, spectral MQI + sweep cut in Figure \ref{Fig_usroads_l1vl2_2} recovers Minneapolis. The reason is that 
+for spectral MQI the regularization effect of the denominator is unimportant since the objective function is invariant to scalar multiplications of the solution vector.
+It's the solution of spectral MQI, i.e., the eigenvector of smallest eigenvalue, which is presented in Figure \ref{Fig_usroads_l1vl2_3}, that is concentrated closely around Minneapolis.
+Due to this concentration of the eigenvector around Minneapolis, the sweep is successful. Briefly, spectral MQI, which is a continuous relaxation of MQI, implicitly offers an additional
+level of volume regularization, which turns out to be useful in this example.
+
+Finally, we present another set of results using the FB-Johns55 graph in Figure \ref{Fig_fb_l1vl2}. As we saw before, notice that for this less well-structured graph
+the solutions of MQI and spectral MQI + sweep cut are nearly the same. This happens because the regularization effect of 
+the denominator of MQI and the regularization imposed by spectral MQI have nearly the same effect on this graph. This is also justified by the fact that MQI in Figure \ref{Fig_fb_l1vl2_1}
+and spectral MQI without sweep cut in Figure \ref{Fig_fb_l1vl2_3} recover nearly the same cluster.
+
+\begin{figure*}
+\centering
+	\subfigure[MQI, seed: Spectral relaxation + sweep cut]{\label{Fig_senate_l1vl2_1}\includegraphics[scale=0.15]{senate_mqi}
+	\hspace{-5.5cm}
+	\begin{tikzpicture}
+	\draw (0,0) -- (4.8,0);
+	\foreach \x in {0,1,1.5,4.8}
+	\draw (\x cm,3pt) -- (\x cm,-3pt);
+	\draw (0.1,0) node[below=3pt] (a) {\tiny $1789$} node[above=3pt] {};
+	\draw (1,0)  node[below=3pt]  {\tiny $1860$} node[above=3pt] (c) {};
+	\draw (1.5,0) node[below=3pt](d) {} node[above=3pt] {\tiny $1913$};
+	\draw (4.7,0) node[above=3pt] (f) {\tiny $2008$} node[below=3pt] {};
+	\end{tikzpicture}
+	}	
+	\subfigure[Spectral MQI + sweep cut, seed: Spectral relaxation + sweep cut]{\label{Fig_senate_l1vl2_2}\includegraphics[scale=0.15]{senate_smqi_sweep}}
+	\subfigure[Spectral MQI, seed: Spectral relaxation + sweep cut]{\label{Fig_senate_l1vl2_3}\includegraphics[scale=0.15]{senate_smqi}}
+	\caption{US-Senate.\ This figure shows the solutions of MQI, spectral MQI, spectral MQI + sweep cut given the solution of Spectral relaxation + sweep cut as an input seed set. 
+	For Figures \ref{Fig_senate_l1vl2_1} and \ref{Fig_senate_l1vl2_2} the red nodes are only MQI or spectral MQI + sweep cut depending on the experiment; yellow nodes are only seed set; and orange nodes are both part of the flow or spectral algorithm and the seed set. Figure \ref{Fig_senate_l1vl2_3} shows the solution 
+	of spectral MQI without sweep cut. For Figure \ref{Fig_senate_l1vl2_3} we use a heat map to represent the weights of the nodes.
+         Bright yellow means large positive and bright red means small positive. The size of the nodes shows the weights of the solution in absolute value. 
+	}		
+	\label{Fig_senate_l1vl2}
+\end{figure*} 
+
+\begin{figure*}
+\centering
+	\subfigure[MQI, seed: Minneapolis and suburban areas]{
+  	\begin{tikzpicture}[every node/.style={anchor=center}]
+   	 \node(a) at (8,4){\label{Fig_usroads_l1vl2_1}\includegraphics[scale=0.133]{usroads_mqi}};
+    	\node(b) at (7.5,3.3){\frame{\colorbox{white}{\includegraphics[scale=0.056]{usroads_mqi_zoom}}}};
+    	\draw[black] (8,4.75)rectangle (8.35,4.5);
+    	\draw[black,->](7.5,4.0)--(8,4.5);
+  	\end{tikzpicture}
+	}
+	\subfigure[Spectral MQI + sweep cut, seed: Minneapolis and suburban areas]{
+  	\begin{tikzpicture}[every node/.style={anchor=center}]
+   	 \node(a) at (8,4){\label{Fig_usroads_l1vl2_2}\includegraphics[scale=0.133]{usroads_smqi_sweep}};
+    	\node(b) at (7.5,3.3){\frame{\colorbox{white}{\includegraphics[scale=0.056]{usroads_smqi_sweep_zoom}}}};
+    	\draw[black] (8,4.75)rectangle (8.35,4.5);
+    	\draw[black,->](7.5,4.0)--(8,4.5);
+  	\end{tikzpicture}
+	}
+	\subfigure[Spectral MQI, seed: Minneapolis and suburban areas]{
+  	\begin{tikzpicture}[every node/.style={anchor=center}]
+   	 \node(a) at (8,4){\label{Fig_usroads_l1vl2_3}\includegraphics[scale=0.133]{usroads_smqi}};
+    	\node(b) at (7.5,3.3){\frame{\colorbox{white}{\includegraphics[scale=0.056]{usroads_smqi_zoom}}}};
+    	\draw[black] (8,4.75)rectangle (8.35,4.5);
+    	\draw[black,->](7.5,4.0)--(8,4.5);
+  	\end{tikzpicture}
+	}
+	\caption{US-Roads.\ This figure shows the solutions of MQI, spectral MQI, spectral MQI + sweep cut given Minneapolis and its suburban areas as an input seed set.
+	The meaning of the colours of the nodes and its sizes is the same as in Figure \ref{Fig_senate_l1vl2}.}
+	\label{Fig_usroads_l1vl2}		
+\end{figure*} 
+
+\begin{figure*}
+\centering
+	\subfigure[MQI]{\label{Fig_fb_l1vl2_1}\includegraphics[scale=0.14]{Johns-Hopkins55-cc_mqi}} 
+	\subfigure[Spectral MQI + sweep cut]{\label{Fig_fb_l1vl2_2}\includegraphics[scale=0.14]{Johns-Hopkins55-cc_smqi_sweep}}
+	\subfigure[Spectral MQI]{\label{Fig_fb_l1vl2_3}\includegraphics[scale=0.14]{Johns-Hopkins55-cc_smqi}}
+\caption{FB-Johns55. This figure shows the solutions of MQI, spectral MQI, spectral MQI + sweep cut for a given input seed set.
+The meaning of the colours of the nodes and its sizes is the same as in Figure \ref{Fig_senate_l1vl2}.}
+\label{Fig_fb_l1vl2}
+\end{figure*} 
+
+
+\section{Conductance partitioning}
+
+
+\section{ Sparsest-Cut, Minimum-Conductance, and Spectral~Relaxations}\label{sec:global_cond_spcut}
+In this section, we present two ubiquitous combinatorial optimization problems:
+Sparsest-Cut and Minimum-Conductance.
+These problems are NP-hard \cite{SM90,LR99}, but they can be relaxed to tractable convex optimization problems~\cite{ARV09}. 
+We discuss one of the commonly used relaxation techniques which will motivate part of our discussion for local graph clustering algorithms.
+Both Sparsest-Cut and Minimum-Conductance give different ways of balancing the size of a partition with its quality.
+
+Sparsest-Cut finds the partition that minimizes the ratio of the fraction of edges that are removed divided by the scaled product of volumes of the two disjoint sets of nodes defined by 
+removing those edges. In particular, if we have a partition $(S, S^c)$, where $S^c$ is defined in Section \ref{sec:prelim}, then $\cut(S)$ is the number of edges
+that are removed, and the scaled product of volumes $\vol(S)\vol(S^c)/\vol(\mathcal{V})$ is the volume of the disjoint sets of nodes. 
+Putting all together in an optimization problem, we obtain
+\begin{align}\label{spcut}
+\tilde{\phi}(\mathcal{G}):= \mbox{minimize}             & \ \tilde{\phi}(S):= \frac{\cut(S)}{\frac{1}{\vol(\mathcal{V})}\vol(S)\vol(S^c)} \\\nonumber
+	  		\mbox{subject to} &\ S\subset \mathcal{V}.
+\end{align}
+We shall use the term \emph{expansion of a set} to refer to the ratio $\tilde{\phi}(S)$, and the term \emph{expansion of the graph} to refer to $\tilde{\phi}(\mathcal{G})$, in which case this problem is known as the Sparsest-Cut problem. 
+
+Another way of balancing the partition is
+ \begin{align}\label{isop}
+\phi(\mathcal{G}):= \mbox{minimize}             & \ \phi(S):= \frac{\cut(S)}{\min(\vol(S),\vol(S^c))} \\\nonumber
+	  		\mbox{subject to} &\ S\subset \mathcal{V}.
+\end{align} 
+In this case, we divide by the minimum of $\vol(S)$ and $\vol(S^c)$, rather than their product.
+We shall use the term \emph{conductance of a set} to refer to the ratio of cut to volume $\phi(S)$, and the term \emph{conductance of the graph} to refer to $\phi(\mathcal{G})$, in which case this problem is known as the Minimum-Conductance problem. 
+
+The difference between the two problems \eqref{spcut} and \eqref{isop} is that the former regularizes based on the number of connections lost among pairs of nodes,
+while the latter regularizes based on the size of the small side of the partition. 
+Optimal solutions to these problems differ by a factor of $2$:
+\begin{equation}\label{eq:equiv_cond_sparsecut} 
+\frac{1}{2}\tilde{\phi}(S) \le \phi(S) \le \tilde{\phi}(S),
+\end{equation}
+leading to the two objectives $\tilde{\phi}(S)$ and $\phi(S)$ being almost substitutable from a theoretical computer science perspective~\cite{ARV09}.
+However, this does not mean that the actual obtained solutions by solving \eqref{spcut} and \eqref{isop}
+are similar; in general, they are not. 
+
+
+
+
+There are three major relaxation techniques for the NP-hard problems \eqref{spcut} and \eqref{isop}: spectral relaxation; all pairs multi-commodity flow or linear programming (LP) relaxation; and
+semidefinite programming (SDP) relaxation. For detailed descriptions about the LP and SDP relaxations we refer the reader to \cite{LR99} and \cite{ARV09}, respectively. 
+We focus here on spectral relaxation since similar relaxations are widely used for the development 
+of local clustering methods, which we discuss in subsequent sections. 
+
+
+
+\subsection{Spectral Relaxation}\label{subsec:spcut}
+
+
+Spectral graph partitioning is one of the best known relaxations of the Sparsest-Cut \eqref{spcut} and Minimum-Conductance \eqref{isop}. The relaxation is the same for both problems, although the diversity of derivations of spectral partitioning does not always make this connection clear. 
+For a partition $(S, S^c)$, let's associate a vector $x\in\{c_1,c_2\}^{|\mathcal{V}|}$ such that $x_i=c_1$ if $v_i\in S$ and $x_i=c_2$ if $v_i\in S^c$. (For simplicity, think of
+$c_1 = 1$ and $c_2 = 0$, so $x$ is the set indicator vector.) 
+The spectral clustering relaxation uses a continuous relaxation of the set indicator vector in problems \eqref{spcut} and \eqref{isop} to produce an eigenvector.
+The relaxed problem is
+\begin{align}\label{spcutLD}
+\lambda_2  := \mbox{minimize}   & \ \frac{\|Bx\|_{2,C}^2}{2\|x\|_{2,D}^2} \\\nonumber
+\mbox{subject to} &\  1_{|\mathcal{V}|}^T D x = 0\\\nonumber
+			   &\ x\in\mathbb{R}^{|\mathcal{V}|} - \{0_{|\mathcal{V}|}\}.
+\end{align}
+(The denominator $\|x\|_{2,D}^2 = \sum_i |x_i|^2 d_i$.)
+To see why \eqref{spcutLD} is a continuous relaxation of \eqref{spcut} we make two observations. 
+
+First, notice that for all $x$ in $\mathbb{R}^{|\mathcal{V}|} - \{0_{|\mathcal{V}|}\}$ such that $1_{|\mathcal{V}|}^T D x = 0$ the denominator in \eqref{spcutLD} satisfies $2\vol(\mathcal{V})\|x\|_{2,D}^2 = \sum_{i=1}^{|\mathcal{V}|}\sum_{j=1}^{|\mathcal{V}|} d_id_j|x_i-x_j|^2$.
+Therefore, $\lambda_2$ in \eqref{spcutLD} is equivalent to 
+\begin{align}\label{eq:1434}
+\lambda_2  = \mbox{minimize}   & \ \frac{\|Bx\|_{2,C}^2}{\frac{1}{\vol(\mathcal{V})}\sum_{i=1}^{|\mathcal{V}|}\sum_{j=1}^{|\mathcal{V}|} d_id_j|x_i-x_j|^2} \\\nonumber
+\mbox{subject to} &\  1_{|\mathcal{V}|}^T D x = 0\\\nonumber
+			   &\ x\in\mathbb{R}^{|\mathcal{V}|} - \{0_{|\mathcal{V}|}\}.
+\end{align}
+The optimal value of the right hand side in \eqref{eq:1434} is equivalent to the optimal value of right hand side in the following expression
+\begin{align}\label{eq:1435}
+\lambda_2  = \mbox{minimize}   & \ \frac{\|Bx\|_{2,C}^2}{\frac{1}{\vol(\mathcal{V})}\sum_{i=1}^{|\mathcal{V}|}\sum_{j=1}^{|\mathcal{V}|} d_id_j|x_i-x_j|^2} \\\nonumber
+\mbox{subject to} & \ x\in\mathbb{R}^{|\mathcal{V}|} - \{0_{|\mathcal{V}|},1_{|\mathcal{V}|}\}.
+\end{align}
+To prove this notice that the objective function of the right hand side in \eqref{eq:1435} is invariant to constant shifts of $x$, i.e., $x$ and $x + c 1_{|\mathcal{V}|}$ have the same 
+objective function, where $c$ is a constant. Therefore, if $\tilde{x}$ is an optimal solution of the right hand side in \eqref{eq:1435} then $\hat{x} = \tilde{x} - \frac{1^T_{|\mathcal{V}|}D\tilde{x}}{\vol(\mathcal{V})} 1_{|\mathcal{V}|}$
+has the same optimal objective value and also $1_{|\mathcal{V}|}^TD \hat{x} = 0$.
+
+Second, by restricting the solution in \eqref{eq:1435}
+in $\{0,1\}^{|\mathcal{V}|}$ instead of $\mathbb{R}^{|\mathcal{V}|}$ we get that $\cut(S) = \|Bx\|_{2,C}^2$ and $\sum_{i=1}^{|\mathcal{V}|}\sum_{j=1}^{|\mathcal{V}|} d_id_j|x_i-x_j|^2 = \vol(S)\vol(S^c)$.
+
+Using these two observations, it is easy to see that \eqref{spcutLD} is a continuous relaxation of \eqref{spcut}. 
+Using \eqref{eq:equiv_cond_sparsecut}, it is easy to see that \eqref{spcutLD} is a relaxation for \eqref{isop} as well.
+
+The quality of approximation of relaxation \eqref{spcutLD} to Sparsest-Cut \eqref{spcut} is given by Cheeger's inequality \cite{LS88,SJ89} 
+$${\lambda_2}/{\vol(\mathcal{V})}\le \tilde{\phi}(\mathcal{G}) \le {(8 \lambda_2)^{1/2}}/{\vol(\mathcal{V})} $$
+while the approximation guarantee for the Minimum-Conductance problem \eqref{isop} is 
+$$
+{\lambda_2}/{2}\le \phi(\mathcal{G}) \le (2 \lambda_2)^{1/2},
+$$
+which can be found in \cite{bM89}. (A generalization of these bounds holds for arbitrary vectors~\cite{Mihail}.) Both of these approximation ratios can be realized by rounding procedures described below. 
+
+Another form of relaxation is the combinatorial model relaxation, which is formulation as problem \eqref{spcutLD} by ignoring the orthogonality constraint and restricting $x\in\{0,1\}^{|\mathcal{V}|}$
+instead of $x\in\mathbb{R}^{|\mathcal{V}|}$. An extensive study of the spectral and the combinatorial mode relaxation can be found in \cite{Hoc13}, while empirical comparisons between these relaxations are discussed in \cite{HLB13}.
+
+
+\subsection{Rounding}
+\label{subsec:rounding}
+In practice, the solution obtained by the spectral relaxation is unlikely to lie in $\{0,1\}^{|\mathcal{V}|}$, i.e., it is unlikely to be the indicator vector of a set. Therefore, it is necessary to have an efficient post-processing procedure 
+where the solution is rounded to a set. 
+At the same time 
+it is important to guarantee that the rounded solution has good worst-case guarantees in terms of the conductance or sparsest cut objective.
+
+One of the most efficient and theoretically justified rounding procedures for spectral relaxation is the \emph{sweep cut}.
+The sweep cut procedure is summarized in the following steps.
+\begin{compactenum}\footnotesize
+\item Input: the solution $x\in\mathbb{R}^{|\mathcal{V}|}$ of \eqref{spcutLD}.
+\item Sort the indices of $x$ in decreasing order with respect to the values of the components of $x$. 
+Let $i_1,i_2,\dots,i_{|\mathcal{V}|}$ be the sorted indices.
+\item Using the sorted indices generate a collection of sets $\mathcal{S}_{j}:=\{i_1,i_2,\dots,i_j\}$ for each $j\in \{1,2,\dots,|\mathcal{V}|\}$.
+\item Compute the conductance or sparsest-cut objective for each set $S_j$ 
+and return the minimum. 
+\end{compactenum} 
+Notice that sweep cut can be used to obtain approximate solutions for both Sparsest-Cut and Minimum-Conductance. 
+In fact, the proof for the upper inequalities of the approximation guarantees of spectral relaxation to
+Sparsest-Cut and Minimum-Conductance are obtained by using the sweep cut procedure \cite{LS88,SJ89}. 
+
+
+
+\section{Regularization, $\ell_2$ versus $\ell_1$}
+
+In the previous section we followed a theoretical computer science perspective. We discussed tractable combinatorial problems, i.e.,
+min-cut and $s$-$t$ min-cut, and NP-hard combinatorial problems, i.e., minimum conductance and isoperimetry. 
+We discussed how to relax the latter NP-hard problems in order to obtain continuous versions that are ``good" approximations in terms of worst-case objective value. 
+
+In this section we make a step back and study the regularization properties that are imposed by min-cut and certain spectral problems. 
+Understanding the regularization properties that are imposed by each problem on the solution will allow us to understand the structure
+of the output solution in practice. In subsequent sections we will use the regularization problems by min-cut and spectral to understand 
+what properties are imposed on the solution by current state-of-the-art local algorithms.  
+
+\paragraph{Properties of $s$-$t$ Min-Cut} We now discuss regularization properties for the $s$-$t$ min-cut problem.
+Similar properties hold for min-cut since this is the best $s$-$t$ min-cut over all pairs of nodes in $\mathcal{V}$.
+It can be shown \cite{} that the following optimization problem
+\begin{align}\label{eq:mincutL1}
+\nonumber
+\mbox{minimize}             & \quad  \|Bx\|_{1,C}\\
+	  \mbox{subject to} & \quad x_s =1, \ x_t = 0 \\\nonumber
+	  			      &\quad x\ge 0.
+\end{align}
+is equivalent to $s$-$t$ min-cut, which we introduced in Section \ref{subsec:mincutmaxflow}.
+The solution to $s$-$t$ min-cut is binary and lies in $[0,1]^{|\mathcal{V}|}$, see \cite{}. Thus, the solution 
+defines a partition $S, S^c$.
+Since we assumed that the given graph has edges with unit-weights then the $s$-$t$ min-cut objective penalizes partitions $S,S^c$ that have 
+many outgoing edges from $S$ to $S^c$. Intuitively, this implies that min-cut looks for partitions which have clear boundaries. 
+For many applications, depending on the given graph such a property might be very important. Later on we will see that there are local
+algorithms which preserve this property close to a given input seed set. 
+
+\paragraph{Properties of spectral} Let us now replace the $\ell_1$ norm in \eqref{eq:mincutL1} with the $\ell_2$ norm to obtain the following problem
+\begin{align}\label{eq:spectralL2}
+\nonumber
+\mbox{minimize}             & \quad  \|Bx\|_{2,C}\\
+	  \mbox{subject to} & \quad x_s =1, \ x_t = 0 \\\nonumber
+	  			      &\quad x\ge 0.
+\end{align}
+From the preliminaries we know that $\|Bx\|_{2,C} = x^T L x$. This problem is related to spectral relaxation \eqref{spcutLD}.
+The only difference between \eqref{eq:spectralL2} and \eqref{spcutLD} is that we do not scale the $\ell_2$ norm in the constraint 
+with the diagonal matrix $D$. This means that we do not put weights on nodes based on their degree, i.e., all nodes are of the same 
+importance. Similarly to our discussion on spectral relaxation it can be shown that problem \eqref{eq:spectralL2} is a relaxation of the Minimum-Conductance and Minimum-Isoperimetry problems where
+all nodes are of the same importance. However, in this section our focus is the properties imposed by the $\ell_2$ norm and not the relaxation properties of problem \eqref{eq:spectralL2}.
+The solution to \eqref{eq:spectralL2} satisfies 
+$$
+L x = \lambda_2 x,
+$$
+where $\lambda_2$ is the second smallest eigenvalue of $L$ for a unit-length eigenvector $x$. Since $L$ is the Laplacian operator of the given graph,
+then the eigenvector which satisfies the previous equation can be seen as the solution to a diffusion process. 
+This means that the solution to problem \eqref{eq:spectralL2} is generally ``smooth", meaning that
+the values of the components of $x$ are in $\mathbb{R}$ and they are not binary. This is an important difference between \eqref{eq:mincutL1} and \eqref{eq:spectralL2},
+which is due to the geometry that $\ell_1$ and $\ell_2$ norms define. Intuitively, the ``smoothness" of the solution given by spectral relaxation implies that
+we loose the property of \eqref{eq:mincutL1}, which is to preserve boundaries. If one takes a clustering perspective, then this drawback can be fixed by combining spectral with some sweep procedure which will possibly 
+ignore components of $x$ with very small values, i.e., nodes outside the boundary. This two step-procedure is provably at most as good as \eqref{eq:mincutL1} if our objective is to find the best partition with the fewest outgoing edges. 
+However, one should not conclude that using $\ell_1$ norm than $\ell_2$ defines a better geometry. The decision between $\ell_1$ and $\ell_2$ is application depended. If one wants to preserve boundaries then they should use the $\ell_1$ 
+norm. If one wants to perform a diffusion on a given graph, then one should use the $\ell_2$ norm.
+
+\section{Locally-biased graph partitioning methods}\label{sec:localgraphpart}
+
+All of the algorithms described in Section~\ref{sec:global_cond_spcut} are ``global,'' in that they touch all of the nodes of the input graph at least once, and thus they have a running time that is at least linear in the size of the input graph. 
+Informally, locally-biased graph clustering algorithms find clusters near a specified seed set of vertices, in many cases without even touching the entire input graph.
+In this section, we will describe several local graph clustering algorithms, each of which has somewhat different properties.  
+
+To understand the seemingly-quite-different algorithms we will discuss, we will distinguish local graph clustering algorithms based on three major features.
+\begin{compactenum}
+\item \textit{Weakly or strongly local algorithms}. Weakly local algorithms are those that are biased toward a local part of the graph but may ``touch'' the entire input graph during the computation---i.e., they formally have running times that scale with the size of the graph. Strongly-local graph algorithms are those that only access a small portion of the entire input graph in order to perform their computation---i.e., they formally have running times that are linear in the size of the output or input set of nodes but independent of the size of the input graph.
+We show that the difference between weakly and strongly local algorithms often translates to whether we penalize the solution by adding an $\ell_1$ norm penalty implicitly
+to the objective function and/or by restricting the feasible region of the problem by adding implicitly a locality constraint. Both ways result in strongly local algorithms. 
+\item \textit{Localizing bias.} Current local graph clustering algorithms are supervised, i.e., one has to give a reference set of seed nodes. 
+We discuss two major ways that this information is incorporated in the problem. First, the bias to the input is incorporated in the objective function of the problem through a localizing construction we will call the \emph{reference cut graph}.
+Second, the bias to the input is incorporated to the problem as a constraint.
+\item \textit{$\ell_1$ and $\ell_2$ metrics.} The final major feature that distinguishes locally-biased algorithms is how the cut measure is treated. Via the cut metric~\cite{DezaLaurent97}, this can be viewed as embedding the vertices of $\mathcal{G}$ and evaluating their distance in the embedding. Two distances are explicitly or implicitly used in locally-biased algorithms:  the $\ell_1$ and the $\ell_2$ metric spaces. 
+The former results in local flow algorithms, and the latter results in local spectral algorithms. The distinction between these two is very important 
+in practice, as we show by empirical evaluation in subsequent sections.  
+\end{compactenum}
+
+\noindent
+The local graph clustering algorithms that we consider in the following sections and their basic properties with respect to the above three features are given in Table \ref{table1}.
+\begin{table}  
+\centering
+\begin{tabular}{lcccc}
+\toprule
+ \multicolumn{1}{c}{Methods} & Locality  & Bias & Metric \\ 
+\midrule
+ Flow-Improve \cite{AL08_SODA}                 & Weak & Objective   &  $\ell_1$ \\ 
+ MOV \cite{MOV12_JMLR}                               & Weak & Constraint &  $\ell_2$ \\ 
+ Local Flow-Improve \cite{OZ14}        & Strong & Objective  &  $\ell_1$ \\ 
+ MQI \cite{kevin04mqi}                                & Strong & Constraint  & $\ell_1$  \\ 
+ spectral MQI \cite{Chung07_localcutsLAA}                   & Strong & Constraint &  $\ell_2$ \\ 
+ $\ell_1$-reg. Page-Rank \cite{ACL06,GM14_ICML} & Strong & Objective  & $\ell_2$ \\ 
+\bottomrule
+ \end{tabular}
+ \caption{State-of-the-art local graph clustering methods and their properties with respect to the three features that are discussed in Section \ref{sec:localgraphpart}.}
+\label{table1}
+\end{table}
+
+\subsection{A general localizing construction}
+
+We describe these locally-biased graph methods in terms of an augmented graph we call the \emph{reference cut graph}. 
+We should emphasize that this is a conceptual construction to highlight the similarities and differences between locally-biased algorithms in Table~\ref{table1}---in particular, these algorithms do \emph{not} explicitly construct the reference cut graph.
+
+Let $h,g\in\mathbb{R}^{|\mathcal{V}|}$, $h,g\ge 0$, and $g-h \ge 0$, and let $\alpha$, $\beta$, and $\gamma$ be parameters specified below..  
+Then the reference cut graph is constructed from a simple, undirected graph $\mathcal{G}$ as follows:
+\begin{compactenum}\footnotesize
+	\item Add a source and sink node $s$ and $t$.
+	\item Add edges from $s$ to each node in $\mathcal{V}$.
+	\item Add edges from each node in $\mathcal{V}$ to $t$.
+	\item Weight each original edge by $\gamma$.
+	\item Weight the edges from $s$ to $\mathcal{V}$ by $\alpha h$, where $\alpha \ge 0$.
+	\item Weight the edges from $t$ to $\mathcal{V}$ by $\beta (g - h)$, $\beta \ge 0$.
+\end{compactenum}
+Let $H := diag(h)$, $G := diag(g)$ and $Z = G-H$.  Then we can also view the augmented graph through its incidence matrix and weight matrix:
+\[ \tilde{B} = \begin{bmatrix} 1_{|\mathcal{V}|} & -I_{|\mathcal{V}|}               & 0  \\
+			   		  0 & B            		  & 0 \\
+					  0 & I_{|\mathcal{V}|}               & -1_{|\mathcal{V}|}
+\end{bmatrix},
+\
+\tilde{C}= \begin{bmatrix} \alpha H & 0                  & 0  \\
+			   		           0 & \gamma C   & 0 \\
+					          0 & 0                   & \beta Z
+\end{bmatrix}, 
+\]
+respectively.
+The above construction might look overly complicated. However, we will see in the following subsections 
+that it simplifies for local spectral and flow graph clustering algorithms with specific settings for $h,g$ and $\gamma$.
+
+\subsection{Weakly-Local and Strongly-Local flow methods}
+
+Although finding the set of minimum conductance is NP-hard in general, there are a number of cases and variations that admit polynomial time algorithms and can be solved via Max-Flow/Min-Cut or a parametric Max-Flow method.  
+These algorithms begin with a reference set $R$ of nodes, and they return a smaller (or not much larger) set of nodes that is a better partition in terms of the conductance ratio $\phi$. Typically, the returned value is \emph{optimal} for a variation on the Minimum-Conductance
+and/or the Sparsest-Cut objective. 
+The methods themselves are highly flexible and apply to other variations of Minimum-Conductance and Sparsest-Cut. 
+For the sake of simplicity, we will describe them for conductance. 
+
+All of the following procedures adopt the following meta-algorithm starting with working set $W$ initialized to an input reference set of nodes $R$, values $\alpha_1, \beta_1, \gamma_1$
+and vectors $h = d_R$, $g=d$,
+where $d_R$ is a vector of length $|\mathcal{V}|$ with components equal to $d_i$'s for nodes $v_i\in R$ and zeros for nodes $v_i\in R^c$. 
+Figure~\ref{fig:cut-graph} illustrates the construction of an augmented graph based on the previous setting of $\alpha,\beta,\gamma$
+and $h,g$.
+
+\noindent \textbf{\footnotesize The Local-Flow Meta-algorithm}
+\begin{compactenum} \footnotesize
+ \item Initialize $W_1 = R$, $k = 1$, $h=d_R$, $g=d$ and $\alpha_1, \beta_1, \gamma_1$ based on $R$.
+ \item Create the reference cut graph $\tilde{B}_k, \tilde{C}_k$ based on $R$ and $\alpha_k, \beta_k, \gamma_k$.
+ \item Solve the $s,t$-Min-Cut problem associated with $\tilde{B}_k,\tilde{C}_k$
+ \item Set $W_{k+1}$ to be the $s$-side of the cut
+ \item\label{step:cond-or-variant} Check if $W_{k+1}$ has smaller conductance (or some variant of it, as we will make specific in the text below) than before and stop if not and return $W_k$
+ \item Update $\alpha_{k+1}, \beta_{k+1}, \gamma_{k+1}$ based on $W_{k+1}$ and $R$
+ \item Set $k \to k+1$
+ \item Repeat starting from state 2
+ 
+\end{compactenum}
+
+\begin{figure}
+ \subfigure[A simple graph]{\includegraphics[width=0.3\linewidth]{cut-graph-init}}
+ \hfill
+ \subfigure[Adding the source $s$ and sink $t$]{\includegraphics[width=0.3\linewidth]{cut-graph-1}}
+ \hfill
+ \subfigure[The reference cut graph, with weights indicated]{\includegraphics[width=0.3\linewidth]{cut-graph}}
+ \caption{The construction of the reference cut graph begins by adding a source node $s$ connected to the reference set $R$ and a sink node $t$ connected to the rest of the graph. Then we add weights to the network based on the degrees and three parameters $\alpha, \beta, $ and $\gamma$. Each edge to the source node is weighted by $\alpha \cdot \text{degree}$, each edge to the sink node is weighted by $\beta \cdot \text{degree}$, and each internal edge is weighted by $\gamma$. Note that one of the choices of $\alpha, \beta, $ or $\gamma$ will be 1, but various papers adopt different choices, and so we leave it general.}
+ \label{fig:cut-graph}
+\end{figure}
+
+Next, we describe several procedures that are instantiations of this basic Local-Flow Meta-algorithm.
+
+\paragraph{MQI} The first algorithm we consider is the MQI procedure due to Lang and Rao~\cite{kevin04mqi}. This method is designed to take the reference set $R$ with $\vol(R) \le \vol(G)/2$ and identify a subset of it $S \subseteq R$. The method instantiates the Local-Flow Meta-algorithm using $\alpha_k = \cut(W_k), \gamma_k = \vol(W_k), \beta_k = \infty$ and $h=d_R$, $g=d$.\ The idea with this method is that the reference cut graph will have an $s,t$-Min-Cut value strictly less than $\alpha_k \gamma_k$ if and only if there is a strict subset $S \subset W_k$ that has conductances less than $\alpha_k / \gamma_k$. (See~\cite{kevin04mqi} for the proof.) If there is such a set, then the result $W_{k+1}$ will be a set with conductance less than $\alpha_k / \gamma_k$. Since $\alpha_k$ and $\gamma_k$ are picked based on the current working set $W_k$, at each step the algorithm monotonically improves the conductance. Also, each step minimizes the objective
+\begin{align*}
+	\mbox{minimize}   & \;   \| \tilde{B}x \|_{1,\tilde{C}_k}  \label{eq:mqi-l1} \\
+	\mbox{subject to} & \; x_i = 0 \ \forall v_i\in R^c, x_s = 1, x_t = 0.
+\end{align*}
+
+In fact, when the algorithm terminates, that means that there is no subset of $R$ with conductance less than $\alpha_k / \gamma_k$. Hence, we have solved the following variation on the conductance problem
+\begin{align*}
+\mbox{minimize}   & \;   \phi(S)= \frac{\cut(S)}{\vol(S)} \\
+\mbox{subject to} & \;  S \subseteq R. 
+\end{align*}
+The key difference from the standard conductance problem is that we have restricted ourselves to a \emph{subset} of the reference set $R$. Procedurally, this is guaranteed because the edges connecting $R^c$ to $t$ have weight infinity, so they will never be cut. 
+Thus, operationally, MQI is always a strongly local algorithm since it only operates within the input seed set $R$. Nodes connected to $t$ with weight infinity can be agglomerated or merged into a mega-sink node $T$. The resulting graph has the same size as $R$ along with the source and sink. (This is how the MQI construction is described in the original paper.) The MQI problem can be solved using Max-Flow method on the resulting graph a logarithmic number of times \cite{kevin04mqi}. Therefore, the running time 
+for solving MQI depends on the Max-Flow algorithm that is used. Details about running times of Max-Flow algorithms can be found in~\cite{GT14}.
+
+\paragraph{Flow-Improve} The Flow-Improve method due to Andersen and Lang~\cite{AL08_SODA} was inspired by MQI and designed to address the weakness that the algorithm will always find an output set within the reference set $R$, i.e., that is a subset of $R$. (As an illustration, see Figure~\ref{fig:mqi-vs-flow-improve}.) Again, Flow-Improve takes as input a reference set $R$ with volume less than half the graph. The idea behind Flow-Improve is that we want to find a set with conductance at least as good as $R$ and that also is highly correlated with $R$. To do this, consider the following variant of conductance
+\[ \phi_R(S) = \frac{\cut(S)}{\vol(S \cap R) - \theta \vol(S \cap R^c)} \] 
+where $\theta = \vol(R)/\vol(R^c)$,
+and where the value is $\infty$ if the denominator is negative.
+For any set $S$, $\phi_R(S) \ge \phi(S)$. Thus, this modified conductance score is an upper-bound on the true conductance. Again, we are able to show that the Local-Flow Meta-algorithm can solve for the exact value of $\phi_R(S)$ in polynomial time. To do so, instantiate that algorithm with $\alpha_k = \phi_R(W_k)$, $\beta_k = \theta \phi_R(W_k)$, $\gamma_k = 1$ and $h=d_R$, $g=d$.\ The value of a cut on set $S$ in the resulting graph is 
+\[ \cut(S) + \alpha_k \vol(R) - \alpha_k [\vol(S \cap R) - \theta \vol(S \cap R^c)]. \]
+(See~\cite{AL08} for the justification.) Andersen and Lang show that the algorithm monotonically reduces $\phi_R(W_{k})$ at each iteration as well. Each iteration now solves the $s,t$-Min-Cut problem
+\begin{align}
+	\mbox{minimize}   & \;   \| \tilde{B}x \|_{1,\tilde{C}_k}  \label{eq:FlowImprove} \\
+	\mbox{subject to} & \;  x_s = 1, x_t = 0. \nonumber
+\end{align}
+In order to match precisely their Flow-Improve procedure, we would need to modify our Meta-algorithm to check the value of $\phi_R(W_k)$, instead of conductance (at Step~\ref{step:cond-or-variant} of the Local-Flow Meta-algorithm above), for monotonic decrease. 
+The authors also show that this procedure terminates in a finite number of iterations. 
+
+At termination, the Flow-Improve algorithm has exactly solved $\mbox{minimize} \;   \phi_R(S), S \subseteq V$.
+This can be considered a locally-biased variation of the conductance objective, where we penalize departure from the reference set $R$. Consequently, the solutions will tend to identify small conductance sets nearby $R$. 
+
+Flow-Improve is a very useful algorithm, but it has two small weaknesses. The first is that it is a weakly local algorithm. At each step, we have to solve a Min-Cut problem that is the size of the original graph. The second is that the Min-Cut problems do not have integer weights. (Note that $\theta$ will almost never be an integer.) Most fast Max-Flow/Min-Cut procedures and implementations assume integer weights.  For instance, many implementations of the push-relabel method (hipr~\cite{goldberg95_push}) only allows integer weights. Boykov and Kolmogorov's solver is a notable exception~\cite{Boykov-2004-maxflow}. Similarly to MQI, the running time of solving the Max-Flow/Min-Cut problem depends on the particular solver that is used.
+A summary of Max-Flow/Min-Cut methods can be found in \cite{GT14}.
+
+\begin{figure}
+	\centering
+\subfigure[MQI]{\includegraphics[width=0.30\linewidth,trim=80mm 33mm 00mm 57mm,clip]{U3A-mqi-spectral}}
+\subfigure[Flow-Improve]{\includegraphics[width=0.30\linewidth,trim=80mm 33mm 00mm 57mm,clip]{U3A-flow-improve-spectral}}
+\subfigure[The difference]{\includegraphics[width=0.30\linewidth,trim=80mm 33mm 00mm 57mm,clip]{U3A-flow-improve-mqi-diff}}
+\caption{The results of running MQI and Flow-Improve on the reference set produced by a spectral partitioning method on the geometric graph (i.e., run global spectral \S\ref{subsec:spcut}; then round with a sweep-cut \S\ref{subsec:rounding}; and then refine using MQI and Flow-Improve). The Flow-Improve method identifies the optimal set from Figure~\ref{fig:small-cluster} in this case, whereas MQI cannot because it searches only within the given set $R$.}
+\label{fig:mqi-vs-flow-improve}
+\end{figure}
+
+\paragraph{Local-Flow-Improve} The Local-Flow-Improve algorithm due to Orecchia and Zhu~\cite{OZ14} sought to address the weak-locality of the Flow-Improve method and create a strongly local flow based method. This involved two key innovations: a modification to the construction and objective that enables strong locality; and an algorithm to realize that strong locality. This Local-Flow-Improve method essentially interpolates between MQI and Flow-Improve. In one limit, it is strictly local to the reference graph and exactly reproduces the MQI output. In the other limit, it is exactly Flow-Improve.  To do this, Orecchia and Zhu alter the objective function used for Flow-Improve to place an additional penalty on deviating from the set $R$. They describe this as increasing the weight of connections $\beta_k$ in the reference cut graph by scaling these by a value $\kappa \ge 1$. If $\kappa = 1$, then their construction is exactly that of Flow-Improve. If $\kappa = \infty$, then this construction is equivalent to that of MQI. The effect of $\kappa$ is illustrated in Figure~\ref{fig:local-flow-improve}.
+
+In terms of the optimization framework, their modification corresponds to using 
+\[ \phi_R'(S;\kappa) = \frac{\cut(S)}{\vol(S \cap R) - \theta \kappa \vol(S \cap R^c)} \ \]
+where $\kappa \ge 1$ and $\theta = \vol(R)/\vol(R^c)$ as in Flow-Improve, and again the value is $\infty$ if the denominator is negative. This result corresponds to instantiating the Local-Flow Meta-algorithm using $\alpha_k = \phi_R'(W;\kappa)$, $\beta_k = \phi_R'(W;\kappa) \theta \kappa$ and $h=d_R$, $g=d$. 
+
+The second innovation is that they describe an algorithm to solve the Min-Cut problem on the reference cut graph that does not need to explore the entire graph. This second piece used a novel modification of Dinic's procedure~\cite{D70} to compute a Max-Flow/Min-Cut that exploited the locality. We refer interested readers back to Orecchia and Zhu for details of this second somewhat complicated construction. In our recent work~\cite{Veldt-preprint-simple-local-flow}, however, we describe a simplified framework for the Local-Flow-Improve method that shows that the strong locality in their modification results from implicitly regularizing the Flow-Improve objective with a $\ell_1$ norm regularizer.
+(This will mirror strongly local spectral results in the forthcoming spectral section.) In fact, our recent work~\cite{Veldt-preprint-simple-local-flow} shows that each iteration exactly solves 
+\begin{align}
+	\mbox{minimize}   & \;   \| \tilde{B} x\|_{1,\tilde{C}_k'} + \varepsilon \| D x \|_1   \label{eq:FlowImprove-l1} \\
+	\mbox{subject to} & \;  x_s = 1, x_t = 0, \nonumber
+\end{align}
+where $\tilde{C}_k'$ is a small perturbation on the above definition and $\varepsilon$ is a locality parameter.
+The volume of the output cluster $S$ of the method in \cite{Veldt-preprint-simple-local-flow} is bounded $\vol(S) \le \vol(R)(1+2/\epsilon) + E(R,R^c)$, where 
+$\epsilon:= \vol(R)/\vol(R^c) + \delta$ and $\delta\ge 0$ is a constant.
+
+That work also describes a simple procedure to realize the strong locality that leverages any Max-Flow/Min-Cut solver on a sequence of sub-problems whose size is bounded independent of the graph. 
+
+\begin{figure}
+	\subfigure[Reference set $R$.]{\includegraphics[trim=0 60mm 90mm 10mm, clip,width=0.24\linewidth]{U3A-flow-improve-1-R}}
+	\subfigure[The Flow-Improve result.]{\includegraphics[trim=0 60mm 90mm 10mm, clip,width=0.24\linewidth]{U3A-flow-improve-1-0}}
+	\subfigure[Local-Flow-Improve $\kappa  \!= \! e^3$]{\includegraphics[trim=0 60mm 90mm 10mm, clip,width=0.24\linewidth]{U3A-flow-improve-1-3}}
+	\subfigure[Local-Flow-Improve $\kappa  \!= \! e^5$]{\includegraphics[trim=0 60mm 90mm 10mm, clip,width=0.24\linewidth]{U3A-flow-improve-1-5}}
+\caption{The results of running Flow-Improve compared with Local-Flow-Improve with a reference set $R$. The Flow-Improve result returns a fairly large set whereas the Local-Flow-Improve results produce successively smaller sets as the penalty $\kappa$ increases. When $\kappa = e^5$ then the result simply fills in the hole in the reference~set.}
+\label{fig:local-flow-improve}	
+\end{figure}
+
+\subsection{Weakly-and-Strongly local spectral methods}
+
+There are spectral analogues for each of the three flow-based constructions on the augmented graph. 
+The development of these ideas occurred in parallel, largely independently, and it was not obvious until recently that the ideas were very related. 
+Here, we make these connections explicit. 
+Of the three flow constructions, the simplest is the MQI objective. We begin with it. 
+
+\paragraph{SpectralMQI} The method we call SpectralMQI was proposed as the Dirichlet partitioning problem in~\cite{Chung07_localcutsLAA}. Given a graph $\mathcal{G}$ and a subset of vertices, consider finding the set $S$ of minimal local conductance 
+$\phi'(S) = \cut(S)/\vol(S)$
+such that $S \subseteq R$, where, again, $R$ is a reference set specified in the input. 
+Note that the only difference from conductance is that we don't have the minimum in the denominator. 
+A spectral algorithm to find an approximate minimizer of this is to solve the generalized eigenvector problem
+\begin{align*}
+\lambda_R  = \mbox{minimize}   & \quad \frac{\|Bx\|_{2,C}^2}{\|x\|_{2,D}^2} \\
+\mbox{subject to} &\quad  x_{i} = 0 \ \forall v_i \in R^c.
+\end{align*}
+The solution vector $x$ and value $\lambda_R$ are related to the smallest eigenvalue of the sub-matrix of the normalized Laplacian corresponding to the nodes in $R$. (Note that we take the sub-matrix of the normalized Laplacian, rather than the normalized Laplacian on the sub-graph induced by $R$.) A sweep-cut over the eigenvector $x$ produces a set $S$ that satisfies a Cheeger inequality with respect to the best possible solution~\cite{Chung07_localcutsLAA}. 
+This definition of local conductance is also called $\texttt{NCut'}$ by Hochbaum~\cite{Hochbaum-2010-ncutp}, who gave a polynomial time algorithm to compute it that is closely related to the MQI procedure. In this case, if $R$ has volume less than half the graph, then this is exactly the spectral analogue of the MQI procedure and the result is a Cheeger-like bound on the overall conductance. 
+
+\paragraph{MOV} 
+The Mahoney-Orecchia-Vishnoi (MOV) objective~\cite{MOV12_JMLR} is a spectral analogue of the FlowImprove method, with a few subtle differences. The goal is to find a small Rayleigh quotient, as in \eqref{spcutLD}, that is highly correlated with an input vector $z\in\mathbb{R}^{|V|}$, where $z$ represents the seed or local-bias. Given this, the MOV objective is
+\begin{align*}
+\mbox{minimize}   & \ \frac{\|Bx\|_{2,C}^2}{\|x\|_{2,D}^2} \\\nonumber
+\mbox{subject to} &\  1_{|\mathcal{V}|}^T D x = 0 \\\nonumber
+			   &\  (z^T D x)^2 \ge \kappa
+			   &\ x\in\mathbb{R}^{\mathcal{V}}.
+\end{align*}
+The solution of this problem represents an embedding of the nodes in $\mathcal{V}$ which is locally biased, i.e., large values for components/nodes that are considered important and small or zero values for the rest. 
+
+According to \cite{MOV12_JMLR}, there is a constant $\rho$, i.e., the optimal dual variable for the locally-biased constraint, such that the solution to the MOV problem satisfies
+$ (L+\rho D) x = \rho D z$.\ The null space of $L$ is the vector $1_{|\mathcal{V}|}$, and assuming that $1_{|\mathcal{V}|}Dz = 0$, then the solution to the previous system is unique.
+One final detail is that the MOV construction fixes $\| x \|_2 = 1$. Consequently, the MOV solution is
+\begin{equation} \label{eq:mov}
+ x = c (L + \rho D)^\dagger D z \quad c = (\| (L + \rho D)^\dagger D z \|_2)^{-1}.
+\end{equation}
+In the MOV paper~\cite{MOV12_JMLR}, they show that $\rho$ can be chosen such that $x^T D z = \kappa$, the desired correlation strength with the input vector $z$, through a simple bisection procedure. 
+Solving the linear system \eqref{eq:mov} results in a weakly-local method that satisfies another Cheeger-like inequality.  Recent extensions show that it is possible to get multiple locally-biased vectors that are akin to eigenvectors from this setup~\cite{HM14_JRNL,LBM16_TR}.
+The methodology is able to leverage the large number of Laplacian system solvers \cite{V12} that can find an approximate solution to \eqref{eq:mov} in nearly linear time.
+
+
+The pseudo-inverse allows us to ``pass through'' $\rho = 0$ and approach $\rho = -\lambda_2$. (This system is singular at $\rho = 0$ and $\rho = \lambda_2$.) What is interesting is that taking the limit $\rho \to -\lambda_2$ directly maps to the spectral relaxation~\eqref{spcutLD}. Thus, the $\rho$ parameter interpolates between the global spectral relaxation~\eqref{spcutLD} and a spectral-version of the Min-Cut problem in each step of FlowImprove. 
+
+Based on the reference cut graph, the MOV objective
+is $\mbox{minimize} \ \|\tilde{B}\tilde{x}\|_{2,\tilde{C}}^2$, where $\tilde{x} : = [1; x; 0]$.  
+The reference graph cut setting is $\gamma=1$, $g=d$, $h=Dz$ and $\alpha=\beta=\rho\ge0$ controls the desired strength of the correlation to the input vector $z$.\ 
+Notice that the MOV problem is a spectral, i.e., $\ell_2$, version of the $s,t$-Min-Cut problem. This observation was made first in \cite{GM14_ICML,GM15_KDD}. 
+If $\rho$ is extremely large, the solution to the above problem would have perfect correlation with the input vector $h$. 
+As $\rho \to 0$, we decrease the effective correlation with the input vector $h$. (These arguments are formal in~\cite{MOV12_JMLR}.) 
+
+
+\section{Preliminaries and Notation}
+\label{sec:prelim}
+
+\textbf{Graph assumptions:}
+We use the letter $\mathcal{G}$ to denote a given connected graph. We assume that $\mathcal{G}$ is undirected with no self-loops. 
+Many of the constructions we will use operate on \emph{weighted graphs} and so we assume that each edge may have a positive capacity. Graphs that are unweighted should have all of their capacities set to $1$. 
+ 
+\textbf{Nodes, edges and cuts:}
+Let $\mathcal{V} = \{v_1,v_2\dots,v_n\}$ be a given set of $|\mathcal{V}|$ nodes of graph $\mathcal{G}$. We denote with $e_{ij}$ an edge in the graph between nodes $v_i$ and $v_j$. 
+Let $\mathcal{E}$ be a given set of $|\mathcal{E}|$ edges of graph $\mathcal{G}$. A subset $S\subset\mathcal{V}$ of nodes can be used to define a partitioning 
+of $\mathcal{V}$ into $S$ and $S^c:=\mathcal{V} \backslash S$. We define a cut as subset $E \subset \mathcal{E}$ which partitions the graph $\mathcal{G}$ into
+two sets.
+Given a partition $S\subset\mathcal{V}$ and $S^c$, then $E(S,S^c)=\{e_{ij}\in \mathcal{E} \ | \ v_i\in S \mbox{ and } v_j\in S^c\}$ is the set of edges with one side in $S$ and the other side 
+in $S^c$. If the partition is clear from the context we write the cut set as $E$ instead of $E(S,S^c)$.\ Let $c_{ij}$ be a weight of the edge $e_{ij}$, then we define the cut $S$ as 
+\begin{equation}
+ \cut(S) := \cut(E(S,S^c)) := \sum_{e_{ij}\in E(S,S^c)} c_{ij}.
+\end{equation}
+The volume of a set $S$ is
+\begin{equation}
+ \vol(S) := \sum_{v_i \in S} \sum_{e_{ij} \in \mathcal{E}} c_{ij}.
+\end{equation}
+For simplicity of notation, we will drop the input $\mathcal{G}$ in $\mathcal{V}$ and $\mathcal{E}$ if it is clear from the context that we are referring to a single graph $\mathcal{G}$.
+
+\textbf{Matrix notation:}
+We denote with $A\in\mathbb{R}^{|\mathcal{V}|\times |\mathcal{V}|}$ the adjacency matrix for a given graph, where $A_{ij} = c_{ij}$ $\forall e_{ij}\in \mathcal{E}$ 
+and zero elsewhere.
+Let $d_i$ be the degree of node $v_i\in\mathcal{V}$, 
+$D\in\mathbb{R}^{|\mathcal{V}|\times |\mathcal{V}|}$ be the degree diagonal matrix $D_{ii} = d_i$, 
+$L=D-A$ be the graph Laplacian, and 
+$\mathcal{L} = D^{-1/2}LD^{-1/2}$ be the 
+symmetric
+normalized graph Laplacian. 
+Note that the volume of a subset $S$ is $\vol(S) = \sum_{v_i\in S} d_{i}$.
+We denote with $B\in\mathbb{R}^{|\mathcal{E}|\times |\mathcal{V}|}$ the incidence matrix of the given graph $\mathcal{G}$.  Every row of the incidence matrix corresponds to an edge $e_{ij}\in \mathcal{E}$ in $\mathcal{G}$.  Assuming arbitrary ordering of the edges of the graph, in this paper we define the rows of the incidence matrix as $B_{e_{ij}} = e_i - e_j$ $\forall e_{ij}\in \mathcal{E}$, where $e_i\in\mathbb{R}^{|\mathcal{V}|}$ is equal to one at the $i^{th}$ position and zero elsewhere.
+Finally, $C\in\mathbb{R}^{|\mathcal{E}|\times|\mathcal{E}|}$
+is a diagonal matrix of the weights of each edge, i.e., $C_{ij} = c_{ij}$ $\forall i,j$. In this notation, the Laplacian matrix $L = B^T C B$. 
+
+\textbf{Norms:}
+For all $x \in \mathbb{R}^{|\mathcal{E}|}$, we define the 
+weighted $\ell_1$ and $\ell_2$ norms $\|x\|_{1,C}: = \sum_{e_{ij}\in E} c_{ij} |x_{ij}|$ 
+and $\|x\|_{2,C}^2: = \sum_{e_{ij}\in E} c_{ij} |x_{ij}|^2$, respectively. Given a partition $S,S^c$ and a vector
+$x\in\{0,1\}^{|\mathcal{V}|}$ such that $x_i=1$ if $v_i\in S$ and $x_i = 0$ if $v_i\in S^c$, then $\cut(S) = \|Bx\|_{1,C}$. Moreover, notice that 
+$\cut(S) = \|Bx\|_{2,C}^2 = x^T B^T C B x = x^T L x$.
+
+\textbf{Miscellaneous:}
+We use $[x;y;z]$ to denote a single column vector where the individual vectors $x,y,z$ are stacked in this order.
+Finally, the vectors $0_{|\mathcal{V}|}$ and $1_{|\mathcal{V}|}$ are the all zeros and ones vectors of length $|\mathcal{V}|$, respectively.
+
+
+\subsection{Strongly-local flow and spectral methods}
+
+\paragraph{$\ell_1$-Regularized Page-Rank}
+The $\ell_1$-regularized Page-Rank problem was initially studied in \cite{GM14_ICML} and then further refined in \cite{FCSRM16_TR}.
+In the latter work, the problem is defined as
+\begin{align}\label{eq:l1pr}
+\mbox{minimize} & \quad \frac{1}{2}\|\tilde{B}\tilde{x}\|_{\tilde{C},2}^2 + \epsilon \|Dx\|_1,
+\end{align}
+where $\tilde{x} : = [1; x; 0]$.\ The reference cut graph setting for \eqref{eq:l1pr} is $g=d$ and $h\ge 0$ is a vector that satisfies $\|h\|_1=1$ and $\|h\|_\infty \ge \epsilon$.\ 
+The latter condition is to guarantee that the solution to \eqref{eq:l1pr} is not the zero vector. Moreover, $\alpha = \beta $ and $\gamma = (1-\alpha)/2$. 
+Similarly to $z$ for MOV, the vector $h$ controls the input seed set and the weights of nodes in that set. The larger the weights the more the solution will be correlated 
+with the corresponding nodes in the input seed set.
+The solution vector to problem \eqref{eq:l1pr} is component-wise non-negative and the parameter $\alpha$ controls how much energy is concentrated close to
+the input seed set. Formally, based on theoretical guarantees in \cite{ACL06} the vector $h$ should be an indicator vector for a single seed node, around which there is a 
+target cluster of nodes $C$. The algorithm is not guaranteed to find the exact target cluster $C$, but if $C$ has conductance less than $\alpha/10$ then it is guaranteed to return a cluster 
+with conductance of $\mathcal{O}(\sqrt{\alpha \log(\vol(C))})$. We refer the reader to \cite{ACL06} for a detailed description of the theoretical graph clustering guarantees.
+
+The idea of $\ell_1$-regularized Page-Rank graph clustering initially appeared in \cite{ACL06} in the form of implicit regularization. In particular, the authors in \cite{ACL06}
+suggest solving a personalized Page-Rank linear system approximately. In \cite{FCSRM16_TR,GM14_ICML}, the authors noticed that the termination criteria 
+in \cite{ACL06} are related to the first-order optimality conditions of the above $\ell_1$-regularized Page-Rank problem, and they draw the connection 
+to explicit $\ell_1$ regularization.
+It is shown in \cite{FCSRM16_TR} that solving the $\ell_1$-regularized Page-Rank problem has the same Cheeger-like worst-case approximation guarantees to the Minimum-Conductance 
+problem as the original procedure in \cite{ACL06}. 
+However, there is an important technical difference: one advantage of solving the $\ell_1$-regularized problem is that the locality of the solution is a property of the optimization
+problem as opposed to a property of an algorithm. In particular, by solving the $\ell_1$-regularized problem it is guaranteed to obtain the same solution 
+regardless of the algorithm used.  In comparison, applying the procedure in \cite{ACL06}, where the output depends on the setting of the procedure, i.e., the strategy for choosing 
+nodes to be updated at every iteration, leads to somewhat different solutions, depending on the specific settings chosen.
+
+Let $x^*$ be the optimal solution of \eqref{eq:l1pr} and $S^*$ be the set of nodes where $x^*$ is non-zero.
+In \cite{FCSRM16_TR}, it is shown that many standard optimization algorithms such as iterative soft-thresholding or block iterative soft-thresholding solve 
+\eqref{eq:l1pr} with running time $\mathcal{O}(\vol(S^*)/\alpha)$, which can be independent of the volume of the whole graph $\vol(\mathcal{V})$. This opens up the possibility of the use of these algorithms more generally. For details about the 
+algorithms, we refer the reader to~\cite{FCSRM16_TR}.
+
+
+

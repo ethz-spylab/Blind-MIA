@@ -1,0 +1,576 @@
+
+\section{Introduction}
+
+Variational autoencoders (VAEs) \citep{kingma2013auto, rezende2014stochastic} are a class of deep generative models that are used, e.g., for density modeling \citep{takahashi2018student}, clustering \citep{jiang2016variational}, nonlinear dimensionality reduction of scientific measurements \citep{laloy2017inversion}, data compression \citep{balle2016end}, anomaly detection \citep{xu2018unsupervised}, and image generation \citep{razavi2019generating}.
+VAEs (more precisely, $\beta$-VAEs~\citep{higgins2016beta}) span such a diverse set of application domains in part because they can be tuned to a specific task without changing the network architecture, in a way that is well understood from information theory~\citep{alemi2018fixing}.
+
+The original proposal of VAEs~\citep{kingma2013auto} motivates them from the perspective of generative probabilistic modeling and approximate Bayesian inference.
+However, the generalization to $\beta$-VAEs breaks this interpretation as they are no longer trained by maximizing a lower bound on the marginal data likelihood.
+These models are better described as neural networks that are trained to learn the identity function, i.e., to make their output resemble the input as closely as possible.
+This task is made nontrivial by introducing a so-called (variational) information bottleneck~\citep{alemi2016deep, tishby2015deep} at one or more layers, which restricts the information content that passes through these layers.
+The network activations at the information bottleneck are called latent representations (or simply ``latents''), and they split the network into an encoder part (from input to latents) and a decoder part (from latents to output).
+This separation of the model into an encoder and a decoder allows us to categorize the wide variety of applications of VAEs into three domains:
+\begin{enumerate}
+  \item \textbf{data reconstruction tasks}, i.e.,
+    applications that involve \emph{both the encoder and the decoder};
+    these include various nonlinear inter- and extrapolations (e.g., image upscaling, denoising, or inpainting), and VAE-based methods for lossy data compression;
+  \item \textbf{representation learning tasks}, i.e.,
+    applications that involve \emph{only the encoder};
+    they serve a downstream task that operates on the (typically lower dimensional) latent representation, e.g., classification, regression, visualization, clustering, or anomaly detection; and
+  \item \textbf{generative modeling tasks}, i.e.,
+    applications that involve \emph{only the decoder} are less common but include generating new samples that resemble training data.
+\end{enumerate}
+
+The information bottleneck incentivizes the VAE to encode information into the latents efficiently by removing any redundancies from the input.
+How agressively this is done can be controlled by tuning the strength~$\beta$ of the information bottleneck~\citep{alemi2018fixing}.
+Unfortunately, information theory distinguishes relevant from redundant information only in a quantitative way that is agnostic to the qualitative features that each piece of information represents about some data point. %
+In practice, many VAE-architectures~\citep{deng2017factorized, yingzhen2018disentangled, balle2018variational} try to separate qualitatively different features into different parts of the latent representation by making the model architecture reflect some prior assumptions about the semantic structure of the data.
+This allows downstream applications from the three domains discussed above to more precisely target specific qualitative aspects of the data by using or manipulating only the corresponding part of the latent representation.
+However, in this approach, the degree of detail to which each qualitative aspect is encoded in the latents can be controlled at most indirectly by tuning network layer sizes.
+
+In this paper, we argue both theoretically and empirically that the three different application domains of VAEs identified above require different trade-offs in the amount of information that is encoded in each part of the latent representation.
+We propose a method to independently control the information content (or ``rate'') of each layer of latent representations, generalizing the rate/distortion theory of $\beta$-VAEs~\citep{alemi2018fixing} for VAEs with more than one layer of latents (``hierarchical VAEs'' or HVAEs for short).
+We identify the most general model architecture that is compatible with our proposal and analyze how both theoretical performance bounds and empirically measured performances in each of the above three application domains depend on how rate is distributed across layers.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\textwidth]{imgs/three-metrics/three-metrics-3d.pdf}
+  \caption{%
+    Left: trade-off between performance in the three applications domains of VAEs, using \hbox{GHVAE} trained on the SVHN data set (details: Section~\ref{sec:results});
+    higher is better for all three metrics;
+    gray dots on walls show 2d-projections.
+    Right: color code, corresponding layer-wise rates (Eq.~\ref{eq:individual-rates}), and individual performance landscapes (size of dots~$\propto$~performance).
+    The hyperparameters $\beta_2$ and~$\beta_1$ allow us to tune the HVAE for best data reconstruction~($\triangle$), best representation learning~($\diamond$), or best generative modeling~($\pentagon$).
+    Note that performance landscapes differ strongly across the three applications, and neither a standard VAE ($\beta_2\!=\!\beta_1\!=\!1$; marked ``$\bullet$'' in right panels) nor a conventional $\beta$-VAE ($\beta_2\!=\!\beta_1$; dashed red lines) result in optimal models for any of the three applications.
+  }
+  \label{fig:three-metrics-3d}
+\end{figure}
+
+Our approach is summarized in Figure~\ref{fig:three-metrics-3d}.
+The 3d-plot shows empirically measured performance metrics (discussed in detail in Section~\ref{sec:no-on-fits-all}) for the three application domains identified above.
+Each point on the colored surface corresponds to different layer-wise rates in an HVAE with two layers of latents.
+Crucially, the rates that lead to optimal performance are different for each of the three application domains (see markers $\triangle$, $\pentagon$, and~$\diamond$ in Figure~\ref{fig:three-metrics-3d}), and none of these three optimal models coincide with a conventional $\beta$-VAE (dashed red lines in right panels).
+Thus, being able to control each layer's individual rate allows practitioners to train VAEs that target a specific application.
+
+The paper is structured as follows.
+Section~\ref{sec:related} summarizes related work.
+Section~\ref{sec:infe-hvaes} introduces the proposed information-trading method. %
+We then analyze how controlling individual layers' rates can be used to tune HVAEs for specific tasks, i.e., how performance in each of the three application domains identified above depends on the allocation of rates across layers.
+This analysis is done theoretically in Section~\ref{sec:theoretical-bounds} and empirically in Section~\ref{sec:results}.
+Section~\ref{sec:conclusions} provides concluding remarks.
+
+\section{Related Work}
+\label{sec:related}
+
+We group related work into work on model architectures for hierarchical VAEs, and on $\beta$-VAEs.
+
+\paragraph{Model Design for Hierarchical VAEs.}
+The original VAE design~\citep{kingma2013auto, rezende2014stochastic} has a single layer of latent variables, but recent works~\citep{vahdat2020nvae, child2020very}, found that increasing the number of stochastic layers in hierarchical VAEs (HVAEs) improves performance. 
+HVAEs have various designs for their inference models.
+\citet{sonderby2016ladder} introduced Ladder VAE (LVAE) with a top-down inference path rather than the naive bottom-up inference (see Section~\ref{sec:infe-hvaes}),
+whereas the Bidirectional-Inference VAE (BIVA)~\citep{maaloe2019biva} uses a combination of top-down and bottom-up.
+Our proposed framework applies to a large class of inference models (see \secref{sec:infe-hvaes}) that includes the popular LVAE~\citep{sonderby2016ladder}.
+
+\paragraph{$\beta$-VAEs And Their Information-Theoretical Interpretations.}
+\citet{higgins2016beta} introduced an extra hyperparameter~$\beta$ in the objective of VAEs that tunes the strength of the information bottleneck, and they observed that large~$\beta$ leads to a disentangled latent representation.
+An information-theoretical interpretation of $\beta$-VAEs was provided in~\citep{alemi2018fixing} by applying the concept of a (variational) bottleneck~\citep{tishby2015deep,alemi2016deep} to autoencoders.
+Due to this information-theoretical interetation, $\beta$-VAEs are popular models for data compression~\citep{balle2016end, minnen2018joint, yang2020improving}, where tuning~$\beta$ allows trading off between the bit rate of compressed data and data distortion.
+In the present work, we generalize $\beta$-VAEs when applied to HVAEs, and we introduce a framework for tuning the rate of each latent layer individually.
+
+
+
+
+
+
+
+
+
+\section{A Hierarchical Information Trading Framework \label{sec:infe-hvaes}}
+
+\begin{figure}[t]
+    \centering
+    \begin{subfigure}[b]{0.2\linewidth}
+        \centering
+        \includegraphics[scale=0.38]{imgs/bottom-up.pdf}
+        \caption{bottom-up}
+        \label{fig:bu-hvae}
+    \end{subfigure}\hfill
+    \begin{subfigure}[b]{0.35\linewidth}
+      \centering
+      \includegraphics[scale=0.38]{imgs/implicit-top-down.pdf}
+      \caption{implicit top-down (e.g., LVAE)}
+      \label{fig:implicit-top-down}
+  \end{subfigure}\hfill
+  \begin{subfigure}[b]{0.35\linewidth}
+        \centering
+        \includegraphics[scale=0.38]{imgs/explicit-top-down.pdf}
+        \caption{generalized (explicit) top-down}
+        \label{fig:explicit-top-down}
+    \end{subfigure}
+    \caption{Inference (dashed arrows) and generative (solid arrows) models for hierarchical VAEs (HVAEs) with two layers of latent variables.
+    White/gray circles denote latent/observed random variables, respectively; the diamond~$\mathbf d_1$ in~\subref{fig:implicit-top-down} is the result of a deterministic transformation of~$\mathbf x$.
+    }
+    \label{fig:graphical-models}
+\end{figure}
+
+We propose a refinement of the rate/distortion theory of $\beta$-VAEs~\citep{alemi2018fixing} that admits controlling individual layers' rates in VAEs with more than one layers of latents (hierarchical VAEs).
+
+\subsection{Conventional $\beta$-VAE With Hierarchical Latent Representations}
+\label{sec:conventional-beta-vae}
+
+We consider a hierarchical VAE (HVAE) for data~${\bm{x}}$ with $L$~layers of latent representations $\{{\bm{z}}_\ell\}_{\ell=1}^L$.
+Figure~\ref{fig:graphical-models}, discussed further in Section~\ref{sec:trading} below, illustrates various model architectures for the example of~${L=2}$.
+Solid arrows depict the generative model $p_\theta(\{{\bm{z}}_\ell\},{\bm{x}})$, where~$\theta$ are model parameters (neural network weights).
+We assume that the implementation factorizes $p_\theta(\{{\bm{z}}_\ell\},{\bm{x}})$ as follows,
+\begin{align} \label{eq:generative-model}
+  p_\theta(\{{\bm{z}}_\ell\}, {\bm{x}}) = p_\theta({\bm{z}}_L)\, p_\theta({\bm{z}}_{L-1}|{\bm{z}}_L)\, p_\theta({\bm{z}}_{L-2}|{\bm{z}}_{L-1}, {\bm{z}}_L) \,\cdots\, p_\theta({\bm{z}}_1|{\bm{z}}_{\geq2}) \, p_\theta({\bm{x}}|{\bm{z}}_{\geq1})
+\end{align}
+where the notation ${\bm{z}}_{\geq n}$ for any~$n$ is short for the collection of latents $\{{\bm{z}}_\ell\}_{\ell=n}^L$ (thus, ${\bm{z}}_{\geq 1}$ and~$\{{\bm{z}}_\ell\}$ are synonymous), and %
+the numbering of latents from~$L$ down to~$1$ follows the common convention in the literature~\citep{sonderby2016ladder, gulrajani2016pixelvae, child2020very}.
+The loss function of a normal $\beta$-VAE~\citep{higgins2016beta} with this generic architecture would be
+\begin{align}\label{eq:beta-vae}
+  {\mathcal L}_\beta(\theta,\phi) &= \mathbb{E}_{{\bm{x}}\sim {\mathbb{X}}_\text{train}}\big[
+    \underbrace{\mathbb{E}_{q_\phi(\{{\bm{z}}_\ell\}|{\bm{x}})} \big[-\log p_\theta({\bm{x}}|\{{\bm{z}}_\ell\})\big]}_{=\text{ ``distortion'' $D$}}
+    + \beta \underbrace{D_{\mathrm{KL}}\big[q_\phi(\{{\bm{z}}_\ell\} \,|\, {\bm{x}}) \,\big|\!\big|\, p_\theta(\{{\bm{z}}_\ell\})\big]}_{=\text{ ``rate'' $R$}}
+  \big].
+\end{align}
+Here, $q_\phi(\{{\bm{z}}_\ell\}\,|\,{\bm{x}})$ is the inference (or ``encoder'') model with parameteres~$\phi$, ${\mathbb{X}}_\text{train}$ is the training set, $D_{\mathrm{KL}}[\,\cdot\, |\!\!\!\;| \,\cdot\,]$ denotes Kullback-Leibler divergence, and the Lagrange parameter $\beta>0$ trades off between a (total) rate~$R$ and a distortion~$D$~\citep{alemi2018fixing}.
+Setting $\beta=1$ turns Eq.~\ref{eq:beta-vae} into the negative ELBO objective of a regular VAE~\citep{kingma2013auto}.
+The rate~$R$ obtains its name as it measures the (total) information content that $q_\phi$ encodes into the latent representations~$\{{\bm{z}}_\ell\}$, which would manifest itself in the expected bit rate when one optimally encodes a random draw $\{{\bm{z}}_\ell\}\sim q_\phi(\{{\bm{z}}_\ell\}\,|\,{\bm{x}})$ using $p_\theta(\{{\bm{z}}_\ell\})$ as an entropy model~\citep{agustsson2020universally, bennett2002entanglement}.
+An important observation pointed out in~\citep{alemi2016deep} is that, regardless how rate~$R$ is traded off against distortion~$D$ by tuning~$\beta$, their sum $R+D$ is---in expectation under any data distribution $p_\text{data}({\bm{x}})$---always lower bounded by the entropy~$H[p_\text{data}({\bm{x}})] := \mathbb{E}_{p_\text{data}({\bm{x}})}[-\log p_\text{data}({\bm{x}})]$,
+\begin{align}\label{eq:r-d-h}
+  \mathbb E_{p_\text{data}({\bm{x}})}[R + D] \geq H[p_\text{data}({\bm{x}})]
+  \qquad\forall\, p_\text{data}.
+\end{align}
+
+\paragraph{Limitations.}
+The rate~$R$ in Eq.~\ref{eq:beta-vae} is a property of the \emph{collection} $\{{\bm{z}}_\ell\}$ of all latents, which can limit its interpretability for some inference models. %
+For example, the common convention of enumerating layers~${\bm{z}}_\ell$ from $\ell=L$ down to~$1$ in Eq.~\ref{eq:generative-model} is reminiscent of a naive architecture for the inference model that factorizes in reverse order compared to Eq.~\ref{eq:generative-model} (``bottom up'', see dashed arrows in Figure~\ref{fig:bu-hvae}), i.e., $q_\phi(\{{\bm{z}}_\ell\}\,|\,{\bm{x}}) = q_\phi({\bm{z}}_1|{\bm{x}})\,q_\phi({\bm{z}}_2|{\bm{z}}_1) \cdots q_\phi({\bm{z}}_L|{\bm{z}}_{L-1})$.
+Using a HVAE with such a ``bottom-up'' inference model to reconstruct some given data point~${\bm{x}}$ would map ${\bm{x}}$ to~${\bm{z}}_1$ using $q_\phi({\bm{z}}_1|{\bm{x}})$ and then map~${\bm{z}}_1$ back to the data space using $p_\theta({\bm{x}}|{\bm{z}}_1)$, thus ignoring all latents ${\bm{z}}_\ell$ with $\ell>1$.
+Yet, the rate term in Eq.~\ref{eq:beta-vae} still depends on all latents, including the ones not needed to reconstruct any data (practical VAE-based compression methods using bits-back coding~\citep{frey1997cient} would, however, indeed use ${\bm{z}}_\ell$ with $\ell>1$ as auxiliary variables for computational efficiency).
+
+
+\subsection{Trading Information Between Latents}
+\label{sec:trading}
+
+Many HVAEs used in the literature allow us to resolve the limitations identified in Section~\ref{sec:conventional-beta-vae}.
+For example, the popular LVAE architecture~\citep{sonderby2016ladder}, (Figure~\ref{fig:implicit-top-down}), uses an inference model (dashed arrows) that traverses the latents $\{{\bm{z}}_\ell\}$ in the same order as the generative model (solid arrows).
+We consider the following generalization of this architecture (see Figure~\ref{fig:explicit-top-down}),
+\begin{align}\label{eq:explicit-top-down}
+  q_\phi(\{{\bm{z}}_\ell\} \,|\, {\bm{x}})
+  &= q_\phi({\bm{z}}_L|{\bm{x}})\, q_\phi({\bm{z}}_{L-1} \,| \, {\bm{z}}_L,{\bm{x}})\, q_\phi({\bm{z}}_{L-2} \,| \, {\bm{z}}_{L-1}, {\bm{z}}_L, {\bm{x}})\, \cdots\, q_\phi({\bm{z}}_1 \,| \, {\bm{z}}_{\geq 2},{\bm{x}}).
+\end{align}
+Formally, Eq.~\ref{eq:explicit-top-down} is just the product rule of probability theory and therefore holds for arbitrary inference models $q_\phi(\{{\bm{z}}_\ell\} \,|\, {\bm{x}})$.
+More practically, however, we make the assumption that the actual implementation of $q_\phi(\{{\bm{z}}_\ell\} \,|\, {\bm{x}})$ follows the structure in Eq.~\ref{eq:explicit-top-down}.
+This means that, using the trained model, the most efficient way to map a given data point~${\bm{x}}$ to its reconstruction~$\hat{\bm{x}}$ now involves \emph{all} latents ${\bm{z}}_\ell$ (either drawing a sample or taking the mode at each step):
+\begin{align}\label{eq:generic-round-trip}
+  {\bm{x}} \xrightarrow{\; q_\phi({\bm{z}}_L|{\bm{x}}) \;} {\bm{z}}_L \xrightarrow{\; q_\phi({\bm{z}}_{L-1}|{\bm{z}}_L,{\bm{x}}) \;} {\bm{z}}_{L-1}
+  \longrightarrow \cdots \longrightarrow
+  {\bm{z}}_2 \xrightarrow{\; q_\phi({\bm{z}}_1|{\bm{z}}_{\geq 2},{\bm{x}}) \;} {\bm{z}}_1 \xrightarrow{\; p_\theta({\bm{x}}|\{{\bm{z}}_\ell\}) \;} \hat{{\bm{x}}}.
+\end{align}
+
+\paragraph{Layer-wise Rates.}
+We can interpret Eq.~\ref{eq:generic-round-trip} in that it first maps~${\bm{x}}$ to a ``crude'' representation~${\bm{z}}_L$, which gets iteratively refined to~${\bm{z}}_1$, and finally to a reconstruction~$\hat{\bm{x}}$.
+Note that each factor $q_\phi({\bm{z}}_\ell \,|\, {\bm{z}}_{\geq\ell+1}, {\bm{x}})$ of the inference model in Eq.~\ref{eq:explicit-top-down} is conditioned not only on the previous layers~${\bm{z}}_{\geq\ell+1}$ but also on the original data~${\bm{x}}$.
+This allows the inference model to target each refinement step in Eq.~\ref{eq:generic-round-trip} such that the reconstruction~$\hat{\bm{x}}$ becomes close to~${\bm{x}}$.
+More formally, we chose the inference architecture in Eq.~\ref{eq:explicit-top-down} such that it factorizes over $\{{\bm{z}}_\ell\}$ in the same order as the generative model (Eq.~\ref{eq:generative-model}).
+This allows us to split the total rate~$R$ into a sum of layer-wise rates as follows,
+\begin{align}\label{eq:rate-split}
+  \begin{split}
+    R &= \mathbb{E}_{q_\phi(\{{\bm{z}}_\ell\}|{\bm{x}})}\left[
+    \log\frac{q_\phi({\bm{z}}_L|{\bm{x}})}{p_\theta({\bm{z}}_L)}
+    +\log\frac{q_\phi({\bm{z}}_{L-1}|{\bm{z}}_L,{\bm{x}})}{p_\theta({\bm{z}}_{L-1}|{\bm{z}}_L)}
+    +\ldots
+    +\log\frac{q_\phi({\bm{z}}_1|{\bm{z}}_{\geq2},{\bm{x}})}{p_\theta({\bm{z}}_1|{\bm{z}}_{\geq2})}
+  \right] \\
+  &= R({\bm{z}}_L) + R({\bm{z}}_{L-1}|{\bm{z}}_L) + R({\bm{z}}_{L-2}\,|\,{\bm{z}}_{L-1},{\bm{z}}_L) + \,\ldots\, + R({\bm{z}}_1|{\bm{z}}_{\geq2}).
+  \end{split}
+\end{align}
+Here,
+\begin{align}\label{eq:individual-rates}
+  \begin{split}
+  R({\bm{z}}_L) &= D_{\mathrm{KL}}\big[q_\phi({\bm{z}}_L|{\bm{x}}) \,\big|\!\big|\, p_\theta({\bm{z}}_L)\big]
+  \qquad\text{and}\\
+  R({\bm{z}}_\ell|{\bm{z}}_{\geq\ell+1}) &= \mathbb{E}_{q({\bm{z}}_{\geq\ell+1}|{\bm{x}})}\big[
+    D_{\mathrm{KL}}\big[q_\phi({\bm{z}}_\ell\,|\,{\bm{z}}_{\geq\ell+1},{\bm{x}}) \,\big|\!\big|\, p_\theta({\bm{z}}_\ell\,|\,{\bm{z}}_{\geq\ell+1})\big]
+    \big]
+  \end{split}
+\end{align}
+quantify the information content of the highest-order latent representation~${\bm{z}}_L$ and the (expected) \emph{increase} in information content in each refinement step ${\bm{z}}_{\ell+1} \to {\bm{z}}_{\ell}$ in Eq.~\ref{eq:generic-round-trip}, respectively.
+
+\paragraph{Controlling Each Layer's Rate.}
+Using Eqs.~\ref{eq:rate-split}-\ref{eq:individual-rates}, we generalize the rate/distortion trade-off from Section~\ref{sec:conventional-beta-vae} by introducing $L$~individual Lagrange multipliers $\beta_L$, $\beta_{L-1}$, \ldots, $\beta_1$, collectively denoted as boldface~$\boldsymbol\beta$.
+This leads to a new loss function that generalizes Eq.~\ref{eq:beta-vae} as follows,
+\begin{align}\label{eq:beta-L-vae}
+  {\mathcal L}_{\boldsymbol\beta}(\theta,\phi) &= \mathbb{E}_{{\bm{x}}\sim {\mathbb{X}}_\text{train}}\big[
+    D
+    + \beta_L R({\bm{z}}_L)
+    + \beta_{L-1} R({\bm{z}}_{L-1} | {\bm{z}}_L)
+    + \ldots
+    + \beta_1 R({\bm{z}}_1 | {\bm{z}}_{\geq 2})
+  \big].
+\end{align}
+Setting all $\beta$s to the same value recovers the conventional $\beta$-VAE (Eq.~\ref{eq:beta-vae}), which trades off distortion against \emph{total} information content in $\{{\bm{z}}_\ell\}$.
+Tuning each $\beta$-hyperparameter individually allows trading off information content across latents.
+(In a very deep HVAE (i.e., large~$L$) it may be more practical to group layers into only few bins and to use the same $\beta$-value for all layers within a bin.)
+We analyze how to tune $\beta$s for various applications theoretically in Section~\ref{sec:theoretical-bounds} and empirically in Section~\ref{sec:results}.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+\section{Information-Theoretical Performance Bounds for HVAEs}
+\label{sec:theoretical-bounds}
+
+In this section, we analyze theoretically how various performance metrics for HVAEs are restricted by the individual layers' rates $R({\bm{z}}_L)$ and $R({\bm{z}}_\ell|{\bm{z}}_{\geq\ell+1})$ identified in Eq.~\ref{eq:individual-rates} for a HVAE with ``top-down'' inference model.
+Our analysis motivates the use of the information-trading loss function in Eq.~\ref{eq:beta-L-vae} for training HVAEs, following the argument from the introduction that VAEs are commonly used for a vast variety of tasks.
+As we show, different tasks require different trade-offs that can be targeted by tuning the Lagrange multipliers~$\boldsymbol\beta$ in Eq.~\ref{eq:beta-L-vae}.
+We group tasks into the application domains of (i)~data reconstruction and manipulation, (ii)~representation learning, and (iii)~data generation.
+
+\paragraph{Data Reconstruction and Manipulation.}
+The most obvious class of application domains of VAEs includes tasks that combine encoder and decoder to map some data point~${\bm{x}}$ to representations~$\{{\bm{z}}_\ell\}$ and then back to the data space.
+The simplest performance metric for such data reconstruction tasks is the expected distortion~$E_{p_\text{data}({\bm{x}})}[D]$, which we can bound by combining Eq.~\ref{eq:r-d-h} with Eqs.~\ref{eq:rate-split}-\ref{eq:individual-rates},
+\begin{align}\label{eq:r-r-d-h}
+  \mathbb E_{p_\text{data}({\bm{x}})}[D]
+  &\geq H[p_\text{data}({\bm{x}})] - \mathbb{E}_{p_\text{data}({\bm{x}})}\big[R({\bm{z}}_L) + R({\bm{z}}_{L-1}|{\bm{z}}_L) + \cdots + R({\bm{z}}_1|{\bm{z}}_{\geq2})\big].
+\end{align}
+Eq.~\ref{eq:r-r-d-h} would suggest that higher rates (i.e., lower~$\beta$'s) are always better for data reconstruction tasks.
+However, in many practical tasks (e.g., image upscaling, denoising, or inpainting) the goal is not solely to reconstruct the original data but also to manipulate the latent representations~$\{{\bm{z}}_\ell\}$ in a meaningful way.
+Here, lower rates can lead to more semantically meaningful representation spaces (see, e.g., Section~\ref{sec:results-representation} below).
+Controlling how rate is distributed across layers via Eq.~\ref{eq:beta-L-vae} may allow practitioners to have a semantically meaningful high-level representation~${\bm{z}}_L$ with low rate $R({\bm{z}}_L)$ while still retaining a high \emph{total} rate~$R$, thus allowing for low distortion~$D$ without violating Eq.~\ref{eq:r-r-d-h}.
+
+
+\paragraph{Representation Learning.}
+In many practical applications,
+VAEs are used as nonlinear dimensionality reduction methods to prepare some complicated high-dimensional data~${\bm{x}}$ for downstream tasks such as classification, regression, visualization, clustering, or anomaly detection.
+We consider a classifier $p_\text{cls.}(y|{\bm{z}}_\ell)$ operating on the latents~${\bm{z}}_\ell$ at some level~$\ell$.
+We assume that the (unknown) true data generative process $p_\text{data}(y,{\bm{x}}) = p_\text{data}(y)\, p_\text{data}({\bm{x}}|y)$ generates data~${\bm{x}}$ conditioned on some true label~$y$,
+thus defining a Markov chain
+$
+  y \xrightarrow{p_\text{data}} {\bm{x}}
+  \xrightarrow{q_\phi} {\bm{z}}_\ell
+  \xrightarrow{p_\text{cls.}} \hat y
+$
+where $\hat y := \arg\max_y p_\text{cls.}(y|{\bm{z}}_\ell)$.
+Classification accuracy is bounded~\citep{meyen2016relation} by a function of the mutual information $I_q(y;{\bm{z}}_\ell)$,
+\begin{align}\label{eq:mi-r}
+  I_q(y;{\bm{z}}_\ell)
+  \leq I_q({\bm{x}};{\bm{z}}_\ell)
+  &\equiv \mathbb{E}_{p_\text{data}({\bm{x}})}\left[ \mathbb{E}_{q_\phi({\bm{z}}_\ell|{\bm{x}})}\left[
+    \log\frac{q_\phi({\bm{z}}_\ell|{\bm{x}})}{q_\phi({\bm{z}}_\ell)}
+  \right] \right] \\
+  &= \mathbb{E}_{p_\text{data}({\bm{x}})}\left[ \mathbb{E}_{q_\phi({\bm{z}}_\ell|{\bm{x}})}\left[
+    \log\frac{q_\phi({\bm{z}}_\ell|{\bm{x}})}{p_\theta({\bm{z}}_\ell)}
+  \right] \right]
+  - D_{\mathrm{KL}}\big[ q_\phi({\bm{z}}_\ell) \,\big|\!\big|\, p_\theta({\bm{z}}_\ell) \big] \nonumber\\
+  &\leq \mathbb{E}_{p_\text{data}({\bm{x}})}\bigg[ \mathbb{E}_{q_\phi({\bm{z}}_{\geq\ell}|{\bm{x}})}\left[
+    \log\frac{q_\phi({\bm{z}}_{\geq\ell}|{\bm{x}})}{p_\theta({\bm{z}}_{\geq\ell})}
+  \right] \nonumber\\
+  &\qquad\qquad\quad -\mathbb{E}_{q_\phi({\bm{z}}_\ell|{\bm{x}})}\Big[D_{\mathrm{KL}}\big[ q_\phi({\bm{z}}_{\geq\ell+1} \,|\, {\bm{x}},{\bm{z}}_\ell) \,\big|\!\big|\, p_\theta({\bm{z}}_{\geq\ell+1}|{\bm{z}}_\ell) \big] \Big] \bigg] \nonumber\\
+  &\leq \mathbb{E}_{p_\text{data}({\bm{x}})}\big[ \underbrace{R({\bm{z}}_L) + R({\bm{z}}_{L-1}|{\bm{z}}_L) + \ldots + R({\bm{z}}_\ell\,|\,{\bm{z}}_{\geq\ell+1})}_{=:R({\bm{z}}_{\geq\ell}) \;(\leq R)} \big]. \nonumber
+\end{align}
+Here, $q_\phi({\bm{z}}_\ell) := \mathbb{E}_{p_\text{data}({\bm{x}})}[q_\phi({\bm{z}}_\ell|{\bm{x}})]$ and we identify $R({\bm{z}}_{\geq\ell})$ as the rate accumulated in all layers from~${\bm{z}}_L$ to~${\bm{z}}_\ell$.
+The first inequality in Eq.~\ref{eq:mi-r} comes from the data processing inequality~\citep{mackay2003information}, and the other two inequalities result from discarding the (nonnegative) KL-terms.
+The classification accuracy is thus bounded by~\citep{meyen2016relation} (see also proof in \appref{app:proof-acc-bound})
+\begin{align}
+\label{eq:acc_bound}
+  \text{class.~accuracy} \leq f^{-1}\big(I_q(y;{\bm{z}}_\ell)\big)
+  \leq f^{-1}\big(\mathbb{E}_{p_\text{data}({\bm{x}})}[ R({\bm{z}}_{\geq\ell})] \big)
+  \quad\big(\!\leq f^{-1}\big(\mathbb{E}_{p_\text{data}({\bm{x}})}[R] \big) \big)
+\end{align}
+where $f^{-1}$ is the inverse of the monotonic function $f(\alpha) = H[p_\text{data}(y)] + \alpha\log\alpha + (1-\alpha)\log\frac{1-\alpha}{M-1}$ with $M$~being the number of classes and $H[p_\text{data}(y)]\leq \log M$ the marginal label entropy.
+Eq.~\ref{eq:acc_bound} suggests that the accuracy of an optimal classifier on~${\bm{z}}_\ell$ would increase as the rate $R({\bm{z}}_{\geq\ell})$ accumulated from~${\bm{z}}_L$ to~${\bm{z}}_\ell$ grows (i.e., as $\beta_{\geq\ell}\to0$), and that the rate added in downstream layers~${\bm{z}}_{<\ell}$ would be irrelevant.
+Practical classifiers, however, have a limited expressiveness, which a very high rate $R({\bm{z}}_{\geq\ell})$ might exceed by encoding too many details into~${\bm{z}}_\ell$ that are not necessary for classification.
+We observe in Section~\ref{sec:results-representation} that, in such cases, increasing the rates of \emph{downstream} layers ${\bm{z}}_{<\ell}$ improves classification accuracy as it allows keeping~${\bm{z}}_\ell$ simpler by deferring details to~${\bm{z}}_{<\ell}$.
+
+\paragraph{Data Generation.}
+The original proposal of VAEs~\citep{kingma2013auto} motivated them from a generative modeling perspective using that, for $\beta=1$, the negative of the loss function in Eq.~\ref{eq:beta-vae} is a lower bound on the log marginal data likelihood.
+This suggests setting all $\beta$-hyperparameters in Eq.~\ref{eq:beta-L-vae} to values close to~$1$ if a HVAE is used primarily for its generative model~$p_\theta$.
+
+In summary, our theoretical analysis suggests that optimally tuned layer-wise rates depend on whether a HVAE is used for data reconstruction, representation learning, or data generation.
+The next section tests our theoretical predictions empirically for the same three application domains.
+
+
+
+
+
+
+\section{Experiments}
+\label{sec:results}
+
+To demonstrate the features of our hierarchical information trading framework, we run large-scale grid searches over a two-dimensional rate space using two different implementations of HVAEs and three different data sets.
+Although the proposed framework is applicable for HVAEs with $L \geq 2$, we only use HVAEs with $L=2$ in our experiments for simplicity and visualization purpose.
+
+
+\subsection{Experimental setup}
+
+\paragraph{Data sets.}
+We used the SVHN~\citep{netzer2011reading} and CIFAR-10~\citep{krizhevsky2009learning} data sets (both $32\times 32$ pixel color images), and MNIST~\citep{lecun1998gradient} ($28\times 28$ binary pixel images).
+SVHN consists of photographed house numbers from 0 to~9, which are geometrically simpler than the 10~classes of objects from CIFAR-10 but more complex than MNIST digits.
+Most results shown in the main paper use SVHN;
+comprehensive results for CIFAR-10 and MNIST are shown in \appref{app:results} and tell a similar story except where explicitly discussed.
+
+\paragraph{Model Architectures.} 
+For the generative model (Eq.~\ref{eq:generative-model}), we assume a (fixed) standard Gaussian prior $p({\bm{z}}_2) = \mathcal{N}(\mathbf{0}, \mathbf{I})$, and we use diagonal Gaussian models for $p_\theta({\bm{z}}_1|{\bm{z}}_2) = \mathcal{N}(g_\mu ({\bm{z}}_2), g_\sigma ({\bm{z}}_2)^2)$ and (for SVHN and CIFAR-10) $p_\theta({\bm{x}}|{\bm{z}}_1) = \mathcal{N}(g_{\mu'} ({\bm{z}}_1), \sigma_{\bm{x}}^2 \mathbf{I})$ (this is similar to, e.g.,~\citep{minnen2018joint}).
+Here, $g_\mu$, $g_\sigma$, and $g_{\mu'}$, denote neural networks (see details below).
+Since MNIST has binary pixel values, we model it with a Bernoulli distribution for $p_\theta({\bm{x}}|{\bm{z}}_1) = \operatorname{Bern}(g_{\mu'} ({\bm{z}}_1))$.
+For the inference model, we also use diagonal Gaussian models for $q_\phi({\bm{z}}_2|{\bm{x}}) = \mathcal{N}(f_\mu({\bm{x}}), f_\sigma({\bm{x}})^2)$ and for $q_\phi({\bm{z}}_1|{\bm{x}},{\bm{z}}_2) = \mathcal{N}(f_{\mu'}({\bm{x}},{\bm{z}}_2), f_{\sigma'}({\bm{x}},{\bm{z}}_2)^2)$, where $f_\mu$, $f_\sigma$, $f_{\mu'}$, and $f_{\sigma'}$ are again neural networks.
+
+We examine both LVAE (\figref{fig:implicit-top-down}) and our generalized top-down HVAEs (GHVAEs; see \figref{fig:explicit-top-down}), using simple network architectures with only 2 to~3 convolutional and 1 fully connected layers (see \appref{app:implementation} for details) so that we can scan a large rate-space efficiently.
+Note that we are not trying to find the new state-of-the-art HVAEs.
+Results for LVAE are in \appref{app:lvae-svhn}.
+
+
+
+
+We trained~441 different HVAEs for each data set/model combination, scanning the rate-hyperparameters $(\beta_2, \beta_1)$ over a $21 \times 21$ grid ranging from $0.1$ to~$10$ on a log scale in both directions (see \figref{fig:three-metrics-3d} on page~\pageref{fig:three-metrics-3d}, right panels).
+Each model took about 2~hours to train on an RTX-2080Ti GPU ($\sim\!27$~hours in total for each data set/model combination using 32~GPUs in parallel).
+
+
+
+\paragraph{Baselines.}
+Our proposed framework (Eq.~\ref{eq:beta-L-vae}) generalizes over both VAEs and $\beta$-VAEs (Eq.~\ref{eq:beta-vae}), which we obtain in the cases $\beta_2 = \beta_1 = 1$ and $\beta_2 = \beta_1$, respectively.
+These baselines are indicated as black ``\tikzcircle[black, fill=white]{2pt}'' and red ``\tikzcircle[red, fill=white]{2pt}'' circles, respectively, in Figures~\ref{fig:psnr:2d_3d}, \ref{fig:is:svhn_2d}, \ref{fig:acc_bound:svhn_rbf_rate}, and~\ref{fig:accs:svhn_cifar_2d}, discussed below.
+
+
+\paragraph{Metrics.}
+Performance metrics for the three application domains of VAEs mentioned in the introduction are introduced at the beginnings of the corresponding Sections~\ref{sec:results-reconstruction}-\ref{sec:results-representation}.
+In addition, we evaluate the individual rates $R(\mathbf z_2)$ and $R(\mathbf z_1|\mathbf z_2)$ (Eq.~\ref{eq:individual-rates}), which we report in \textit{nats} (i.e., to base~$e$).
+
+
+
+\subsection{There is no ``One HVAE Fits All''}
+\label{sec:no-on-fits-all}
+
+
+\figref{fig:three-metrics-3d} on page~\pageref{fig:three-metrics-3d} summarizes our results.
+The ${21\!\times\! 21}$ GHVAEs trained with the grid of hyperparameters $\beta_2$ and $\beta_1$ map out a surface in a 3d-space spanned by suitable metrics for the three application domains (metrics defined in Sections~\ref{sec:results-reconstruction}-\ref{sec:results-representation} below).
+The two upper right panels map colors on this surface to $\beta$s used for training and to the resulting layer-wise rates, respectively.
+The lower right panels show performance landscapes and identify the optimal models for the three application domains of data reconstruction~($\triangle$), representation learning~($\diamond$), and generative modeling~($\pentagon$).
+
+The figure shows that moving away from a conventional $\beta$-VAE ($\beta_2\!=\!\beta_1$; dashed red lines in \figref{fig:three-metrics-3d}) allows us to find better models for a given application domain as the three application domains favor vastly different regions in $\beta$-space.
+Thus, \emph{there is no single HVAE that is optimal for all tasks}, and a HVAE that has been optimized for one task can perform poorly on a different task.
+
+
+\subsection{Definition of the Optimal Model for a Given Total Rate}
+\label{sec:convex-hull}
+
+One of the questions we study in Sections~\ref{sec:results-reconstruction}-\ref{sec:results-representation} below is:
+``Which allocation of rates across layers results in best model performance \emph{if we keep the total rate~$R$ fixed}''.
+Unfortunately, it is difficult to keep~$R$ fixed at training time since we control rates only indirectly via their Lagrange multipliers $\beta_2$ and~$\beta_1$.
+We instead use the following definition, illustrated in \figref{fig:acc_bound:svhn_rbf_rate} for a performance metric introduced in Section~\ref{sec:results-representation} below.
+The figure plots the performance metric over~$R$ for all $21\times 21$ $\beta$-settings and highlights with purple circles~``\tikzcircle[purp, fill=white]{2pt}'' all points on the upper convex hull.
+These highlighted models are optimal for a small interval of total rates in the following sense:
+if we use the total rates~$R$ of all~``\tikzcircle[purp, fill=white]{2pt}'' to partition the horizontal axis into intervals then, by definition of the convex hull, each~``\tikzcircle[purp, fill=white]{2pt}'' represents the model with highest performance in either the interval to its left or the one to its right.
+
+
+\subsection{Performance on Data Reconstruction}
+\label{sec:results-reconstruction}
+
+\begin{figure}[t]
+  \centering
+  \begin{subfigure}[b]{0.4\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{imgs/iclr2023/svhn_psnr_vs_rates_3d.pdf}
+    \subcaption{%
+        Rate/rate/distortion surface for SVHN.
+    }
+    \label{fig:psnr:svhn_3d}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[b]{0.55\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{imgs/iclr2023/svhn_cifar_psnr_vs_rates_2d.pdf}
+    \subcaption{%
+        PSNR-rates comparison in 2d.
+    }
+    \label{fig:psnr:svhn_cifar_2d}
+  \end{subfigure}
+\caption{
+PSNR-rate trade-off for GHVAEs trained on SVHN and CIFAR-10.
+Figure~\subref{fig:psnr:svhn_3d} visualizes the same data as the left panel of \subref{fig:psnr:svhn_cifar_2d} in~3d.
+Black circles~``\tikzcircle[black, fill=white]{2pt}'' mark standard VAEs ($\beta_2\!=\!\beta_1=1$), red circles ``\tikzcircle[red, fill=white]{2pt}'' mark $\beta$-VAEs ($\beta_2=\beta_1$), and
+purple circles~``\tikzcircle[purp, fill=white]{2pt}'' mark optimal models along constant total rate (dashed diagonal lines) as defined in \secref{sec:convex-hull}.
+Crosses point to columns in \figref{fig:gen_recon_samples}. 
+}
+\label{fig:psnr:2d_3d}
+\end{figure}
+
+
+
+Reconstruction is a popular task for VAEs, e.g., in the area of lossy compression \citep{balle2016end}.
+We measure reconstruction quality using the common peak signal-to-noise ratio (PSNR), which is equal to $\mathbb{E}_{{\bm{x}}\sim {\mathbb{X}}_\text{test}}[-\log D]$ up to rescaling and shifting.
+Higher PSNR means better reconstruction.
+
+
+\figref{fig:psnr:svhn_3d} shows a 3d-plot of PSNR as a function of both $R({\bm{z}}_1|{\bm{z}}_2)$ and $R({\bm{z}}_2)$ for SVHN, thus generalizing the rate/distortion curve of a conventional $\beta$-VAE to a rate/rate/distortion surface.
+\figref{fig:psnr:svhn_cifar_2d} introduces a more compact 2d-representation of the same data that we use for all remaining metrics in the rest of this section and in \appref{app:results}, and it also shows results for CIFAR-10.
+
+
+Unsurprisingly and consistent with Eq.~\ref{eq:r-r-d-h}, reconstruction performance improves as total rate grows.
+However, minimizing distortion without any constraints is not useful in practice as we can simply use the original data, which has no distortion.
+To simulate a practical constraint in, e.g., a data-compression application, we consider models with optimal PSNR \emph{for a given total rate~$R$} (as defined in \secref{sec:convex-hull}) which are marked as purple circles~``\tikzcircle[purp, fill=white]{2pt}'' in \figref{fig:psnr:svhn_cifar_2d}.
+We see for both SVHN and CIFAR-10 that conventional $\beta$-VAEs ($\beta_2\!=\!\beta_1$; red circles) perform somewhat suboptimal for a given total rate and can be improved by trading some rate in~${\bm{z}}_2$ for some rate in~${\bm{z}}_1$. %
+Reconstruction examples for the three models marked with crosses in \figref{fig:psnr:svhn_cifar_2d} are shown in \figref{fig:gen_recon_samples}~(bottom).
+Visual reconstruction quality improves from ``3'' to ``2'' to~``1'', consistent with reported PSNRs.
+
+
+
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\textwidth]{imgs/samples-reconstructions/samples-recons.pdf}
+  \caption{
+    Samples (top) and reconstructions (bottom) from 3 different models (blue column labels ``1'', ``2'', and ``3'' from left to right correspond to crosses ``1'', ``2'', and ``3'' in Figures~\ref{fig:psnr:svhn_cifar_2d} \&~\ref{fig:is:svhn_2d}).
+    Consistent with PSNR and IS metrics, model ``1'' produces poorest samples but best reconstructions.
+  }
+  \label{fig:gen_recon_samples}
+\end{figure}
+
+
+
+\subsection{Performance on Sample Generation}
+\label{sec:results-generation}
+
+
+\begin{figure}[t]
+  \centering
+  \begin{minipage}[t]{.68\textwidth}
+    \centering
+    \includegraphics[height=37mm]{imgs/iclr2023/svhn_is_div_sharp_vs_rates_2d.pdf}
+    \caption{%
+      Sample generation performance, measured in Inception Score~(IS, see Eq.~\ref{eq:is}) and its factorization into diversity and sharpness as a function of layer-wise rates for GHVAEs trained using SVHN data.
+      Crosses in left panel correspond to samples shown in \figref{fig:gen_recon_samples}.
+      Markers ``\tikzcircle[black, fill=white]{2pt}'', ``\tikzcircle[red, fill=white]{2pt}'', and ``\tikzcircle[purp, fill=white]{2pt}'' same as in \figref{fig:psnr:2d_3d}.
+    }
+    \label{fig:is:svhn_2d}
+  \end{minipage}\hfill
+  \begin{minipage}[t]{.28\textwidth}
+    \centering
+    \includegraphics[height=37mm]{imgs/iclr2023/svhn_acc_bound_ch_vs_rate_2d.pdf} %
+    \caption{%
+      RBF-SVM classification accuracies on $\bm{\mu}_2$. %
+      Dashed line shows theoretical bound (\eqref{eq:acc_bound}).
+      Other markers as in \figref{fig:psnr:2d_3d}.
+    }
+    \label{fig:acc_bound:svhn_rbf_rate}
+  \end{minipage}
+\end{figure}
+
+
+
+We next evaluate how tuning layer-wise rates affects the quality of samples from the generative model.
+We measure sample quality by the widely used Inception Score~(IS)~\citep{salimans2016improved},
+\begin{equation}\label{eq:is}
+    \text{IS} = \exp{ \big\{ \mathbb{E}_{ p_\theta({\bm{x}})} \big[ D_{\mathrm{KL}}[p_\text{cls.}(y|\bm{x}) \,|\!|\, p_\text{cls.}(y) ] \big] \big\}}
+    = e^{ H[p_\text{cls.}(y)] } \times e^{ - \mathbb{E}_{p_\theta({\bm{x}})}[ H[p_\text{cls.}(y|{\bm{x}})]] }
+\end{equation}
+Here, $p_\theta$ is the trained generative model (Eq.~\ref{eq:generative-model}), $p_\text{cls.}(y|\bm{x})$ is the predictive distribution of a classifier trained on the same training set, and $p_\text{cls.}(y) := \mathbb{E}_{ p_\theta({\bm{x}})}[p_\text{cls.}(y|{\bm{x}})]$.
+The second equality in Eq.~\ref{eq:is} follows~\citet{barratt2018note} to split~IS into a product of a diversity score
+and a sharpness score.
+Higher is better for all scores.
+The classifier
+is a ResNet-18~\citep{he2016deep} for SVHN (test accuracy~$95.02\,\%$) and a DenseNet-121~\citep{huang2017densely} for CIFAR-10 (test accuracy~$94.34\,\%$).
+
+
+\figref{fig:is:svhn_2d}~(left) shows IS for GHVAEs trained on SVHN.
+Unlike the results for PSNR, here, higher rate does not always lead to better sample quality: for very high $R(\mathbf z_2)$ and low $R(\mathbf z_1|\mathbf z_2)$, IS eventually drops.
+The region of high IS
+is in the area where $\beta_2 < \beta_1$, i.e., where $R(\mathbf z_2)$ is higher than in a comparable conventional $\beta$-VAE.
+The center and right panels of \figref{fig:is:svhn_2d} show diversity and sharpness, indicating that IS is mainly driven here by sharpness, which depends mostly on $R(\mathbf z_2)$,
+possibly because~${\bm{z}}_2$ captures higher-level concepts than~${\bm{z}}_1$ that may be more important to the classifier in Eq.~\ref{eq:is}.
+Samples from the the three models marked with crosses in \figref{fig:is:svhn_2d} are shown in \figref{fig:gen_recon_samples}~(top).
+Visual sample quality improves from ``1'' to ``3'' to~``2'', consistent with reported IS.
+
+
+
+
+
+\subsection{Performance on Representation Learning for Downstream Classification}
+\label{sec:results-representation}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=1.\textwidth]{imgs/iclr2023/svhn_cifar_mi_accs_vs_rates_2d.pdf}
+  \caption{%
+    Mutual information (MI) $I_q(y;{\bm{z}}_2)$ and classification accuracies of four classifiers (see column labels) as a function of layer-wise rates $R({\bm{z}}_2)$ and $R({\bm{z}}_1|{\bm{z}}_2)$.
+    Classifiers are conditioned on $\bm{\mu}_2:=\arg\max_{{\bm{z}}_2} q({\bm{z}}_2|{\bm{x}})$ learned from GHVAEs trained with SVHN (top) and CIFAR-10 (bottom).
+    Markers ``\tikzcircle[black, fill=white]{2pt}'', ``\tikzcircle[red, fill=white]{2pt}'', and ``\tikzcircle[purp, fill=white]{2pt}'' same as in \figref{fig:psnr:2d_3d}.
+  }
+  \label{fig:accs:svhn_cifar_2d}
+\end{figure}
+
+VAEs are very popular for representation learning as they map complicated high dimensional data~${\bm{x}}$ to typically lower dimensional representations $\{{\bm{z}}_\ell\}$.
+To measure the quality of learned representations, we train two sets of classifiers on a labeled test set
+for each trained HVAE, each consisting of: logistic regression, a Support Vector Machine (SVM)~\citep{boser1992training} with linear kernel, an SVM with RBF kernel, and $k$-nearest neighbors (kNN) with $k=5$.
+One set of classifiers is conditioned on the mode~$\bm\mu_2$ of $q_\phi({\bm{z}}_2|{\bm{x}})$ and the other one on the mode~$\bm\mu_1$ of $q_\phi({\bm{z}}_1|{\bm{z}}_2,{\bm{x}})$, where ${\bm{z}}_2\sim q_\phi({\bm{z}}_2|{\bm{x}})$.
+We use the implementations from scikit-learn~\citep{scikit-learn} for all classifiers.
+
+
+
+\begin{wraptable}{r}{75mm}
+\centering\vspace{-2pt}
+\caption{Optimal classification accuracies (across all $(\beta_2, \beta_1)$-settings) using either $\bm{\mu}_2$ or~$\bm{\mu}_1$.}
+\label{tab:accs}
+\small
+\begin{tabular}{@{\;}l@{\;\;}c@{\;\,}c@{\;\,}c@{\;\,}c@{\;}}
+\toprule
+Data Set                & log.~reg.   & lin.~SVM      & RBF SVM         & kNN             \\\midrule
+SVHN ($\bm{\mu}_2$)     & 28.43\,\%         & 27.87\,\%         & \textbf{77.60\,\%}        & \textbf{64.25\,\%}         \\
+SVHN ($\bm{\mu}_1$)     & \textbf{45.77\,\%}         & \textbf{49.81\,\%}         & 59.28\,\%         & 56.49\,\%         \\ \midrule
+CIFAR-10 ($\bm{\mu}_2$) & \textbf{47.36\,\%}         & \textbf{46.95\,\%}         & \textbf{53.15\,\%}         & \textbf{44.20\,\%}         \\
+CIFAR-10 ($\bm{\mu}_1$) & 43.27\,\%         & 42.55\,\%         & 45.60\,\%         & 39.25\,\%         \\ \bottomrule
+\end{tabular}
+\end{wraptable}
+\figref{fig:accs:svhn_cifar_2d} shows the classification accuracies (columns~2-5) for all classifiers trained on~$\bm\mu_2$.
+The first column shows the mutual information $I_q(y;{\bm{z}}_2)$, which depends mainly on $R({\bm{z}}_2)$ as expected from Eq.~\ref{eq:mi-r}. %
+As long as the classifier is expressive enough (e.g., RBF-SVM or kNN) and the data set is simple (SVHN; top row), higher mutual information ($\approx$~higher $R({\bm{z}}_2)$) corresponds to higher classification accuracies, consistent with \eqref{eq:acc_bound}.
+But for less expressive (e.g., linear) classifiers or more complex data (CIFAR-10; bottom row), increasing $R({\bm{z}}_1|{\bm{z}}_2)$ improves classification accuracy (see purple circles~``\tikzcircle[purp, fill=white]{2pt}'' in corresponding panels), consistent with the discussion below Eq.~\ref{eq:acc_bound}.
+We see a similar effect (Table~\ref{tab:accs}) for most classifier/data set combinations when replacing $\bm\mu_2$ by~$\bm\mu_1$, which has more information about~${\bm{x}}$ but is also higher dimensional. 
+
+
+
+
+
+
+
+
+
+\section{Conclusions}
+\label{sec:conclusions}
+
+We classified the various tasks that can be performed with Variational Autoencoders (VAEs) into three application domains and argued that each domain has different trade-offs, such that a good VAE for one domain is not necessarily good for another.
+This observation motivated us to propose a refinement of the rate/distortion theory of VAEs that allows trading off rates across individual layers of latents in hierarchical VAEs.
+We showed both theoretically and empirically that the proposal indeed provides practitioners better control for tuning VAEs for the three application domains.
+In the future, it would be interesting to explore adaptive schedules for the Lagrange parameters~$\boldsymbol\beta$ that would make it possible to target a specific given rate for each layer in a single training run, for example by using the method proposed by \citet{rezende2018taming}.
+
+
+
+
+
+
+\newpage
+\subsubsection*{Acknowledgments}
+
+The authors would like to thank Johannes Zenn, Zicong Fan, Zhen Liu for their helpful discussion.
+Funded by the Deutsche Forschungsgemeinschaft (DFG, German Research Foundation) under Germany’s Excellence Strategy~--~EXC number 2064/1~--~Project number 390727645.
+This work was supported by the German Federal Ministry of Education and Research (BMBF): Tübingen AI Center, FKZ:~01IS18039A.
+The authors thank the International Max Planck Research School for Intelligent Systems (IMPRS-IS) for supporting Tim Z.~Xiao.
+
+
+\paragraph{Reproducibility Statement.}
+All code necessary to reproduce the results in this paper is available at \url{https://github.com/timxzz/HIT/}.
+
+

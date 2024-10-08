@@ -1,0 +1,404 @@
+
+
+\section{Introduction}
+
+
+Dense prediction refers to the process of predicting the label for each point in a point cloud. It is widely known that dense prediction plays a pivotal role in 3D robotic perception and autonomy, enabling an array of tasks such as semantic segmentation, depth completion, and scene flow estimation. 
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=3.3in]{./figures/qua_scannet.pdf} 
+    \caption{In a dense prediction task, i.e., 3D semantic segmentation, we note
+   
+    the segmentation prediction (top), segmentation error  (middle) and dense uncertainty map (bottom, estimated by \sysname+) of two scenes from ScanNet validation split. Incorrect predictions tend to have high uncertainties.} 
+    \label{fig_qua_scannet}
+\end{figure}
+
+
+UNet \cite{ronneberger2015u} based network has been the de-facto choice of today's point neural network architecture design for cloud dense prediction \cite{choy2019fully, ao2021spinnet, thomas2019kpconv}. In a UNet-like network, one can observe that the input and the output of two correspondingly linked layers have the same number of points, e.g., if the input point cloud is denoted by a $N \times 3$ tensor, then the output of its correspondingly linked layer is a $N \times D$ tensor. In this regard, the output can also be viewed as an embedding map, and a dense prediction network can then be decomposed as an embedding learning network and a task-specific regressor (or classifier).
+Therefore, 
+the heart of the dense prediction task is embedding learning.
+
+Embedding learning aims to learn a discriminative embedding model that pulls samples of the same class closer and pushes those of different classes away from each other in the embedding space. Successful embedding learning empowers many downstream tasks, including image retrieval \cite{musgrave2020metric}, face recognition \cite{meng2021magface} and zero-shot learning \cite{bucher2016improving}. In addition to improving the embedding model's discriminative capability, quantifying its uncertainty is also attracting much attention.
+
+For dense prediction tasks of point clouds, it is desirable that an uncertainty level could be provided in conjunction with the point-wise labels to make its downstream decision-making more information-aware.  Consider a scenario where an autonomous vehicle is predicting semantic labels of each point on the road, a prediction with an estimated uncertainty level would be helpful for the computer to decide when to trust its prediction and moreover, utilize the uncertainty to optimize the vehicle's planning and control. Such promising benefits have stimulated the development of various uncertainty estimation methods for different dense prediction tasks. In 3D semantic segmentation tasks, for example, the 
+popular approaches 
+include (1) using the output of the logit layer to calculate softmax entropy~\cite{czolbe2021segmentation}, (2) building a two-head network to predict the mean and variance of an embedding separately \cite{kendall2017uncertainties}, and (3) resorting to a BNN model and approximating posterior weights with MCD \cite{qi2021neighborhood}. 
+
+However, two major issues remain in existing uncertainty estimation methods for dense prediction of 3D point clouds. 
+First, points can only interact in the limited 
+receptive field of convolution kernels, and they need a shared MLP to realize an implicit interaction among logits (see Fig. \ref{fig_pipeline2}.a).
+Such under-treatment of cross-point dependencies, unfortunately, often results in sub-optimal uncertainty estimation as evidenced by~\cite{monteiro2020stochastic}. 
+Second, 
+a notable trait of the predominant dense prediction networks is that they are sequential compositions of embedding learning networks and task-specific regressors (or classifiers). While prior arts have shown that 
+enforcing embedding learning in regression or classification tasks
+can yield better predictive performance \cite{li2021learning,wang2021exploring},
+it is largely under-explored 
+if utilizing embedding learning  
+can also give rise to better-calibrated uncertainty. 
+
+
+In this paper, we propose a novel and generic uncertainty estimation pipeline, called \sysname\ in the paper for \textbf{C}ross-point embedding \textbf{U}ncertainty \textbf{E}stimation, to bridge the gap between the dense prediction of point clouds and its dense uncertainty quantification. \sysname\ involves building a probabilistic embedding model and enforcing metric alignments of massive points in the embedding space. In view of the aforementioned issues, \sysname\ identifies the importance of 
+embedding learning, and exploits this embedding space via a diagonal multivariate Gaussian model amenable to cross-point interactions. Moreover, we propose \sysname+ that further utilizes cross-point dependencies by a low-rank multivariate Gaussian model. Low-rank covariance matrix in \sysname+ explicitly expresses off-diagonal elements' dependencies while maintaining computational efficiency. 
+Specifically, our contributions are stated as follows:
+\begin{itemize}
+    \item For the first time we propose a generic dense uncertainty estimation framework for dense prediction tasks of 3D point clouds.
+    \item We propose a novel method that fully explores cross-point information for dense uncertainty estimation.
+    \item We validate our proposed method on two representative dense prediction tasks, with the experimental results consistently showing that our method produces better-calibrated uncertainty than state-of-the-arts without losing any predictive performance. 
+   
+   
+    \item Source code of both \sysname\ and \sysname+ is available at: \url{https://github.com/ramdrop/cue}. 
+\end{itemize}
+
+\section{Related Work}
+
+\begin{figure*}[htbp]
+    \centering
+    \includegraphics[width=6.6in]{./figures/pipeline2.pdf} 
+    \caption{An overview of a) traditional probabilistic prediction pipeline (e.g., aleatoric uncertainty \cite{kendall2017uncertainties}) and b) the proposed \sysname\ and \sysname+. We take semantic segmentation for instance where there are $5$ points in the input point cloud and $2$ classes in the labels. A traditional probabilistic prediction pipeline treats logits as distributions where logits can only interact implicitly through a shared MLP (Dashed triangle). In contrast, \sysname\ explores cross-point embeddings by building a probabilistic embedding model (Red curves) and enforcing metric alignments (Blue arrows), and \sysname+ goes further by replacing the diagonal covariance matrix with a low-rank covariance matrix. } 
+    \label{fig_pipeline2}
+\end{figure*}
+
+
+\subsection{Dense Prediction of 3D Point Cloud}
+
+With the dense nature of the 3D point cloud, we focus on its dense prediction tasks, e.g., 3D geometric feature learning and 3D semantic segmentation. 
+
+
+\textit{3D Geometric Features Learning}: To find the correspondences in the absence of relative transformation information, a series of methods is to convert point clouds from the 3D Euclidean space to a feature space, where the correspondences are the nearest neighbors. Early work focus on hand-crafted features, such as SHOT \cite{salti2014shot} and FPFH \cite{rusu2009fast}, we kindly refer readers to \cite{guo2016comprehensive} for more details about hand-crafted features.
+
+Recently deep learned geometric features are becoming popular, which are generally based on volumetric and point-wise operations on point clouds: (1) Volumetric: 3DMatch \cite{zeng20173dmatch} learns patch descriptors by applying a 3D convolutional neural network on volumetric input. FCGF \cite{choy2019fully} directly applies 3D CNN to volumetric point clouds with the hardest contrastive loss, generating dense point features. (2) Point-wise: PointNet \cite{qi2017pointnet} uses multiple parallel shared MLP to learn global or dense features. DGCNN \cite{wang2019dynamic} combines point-wise MLP with dynamic graph neural networks, obtaining flexible and effective feature extractors for unordered point clouds. 
+SpinNet \cite{ao2021spinnet} proposes a reference axis with a spherical voxelization to learn viewpoint-invariant point descriptors. Nevertheless, the above methods focus on improving predictive performance while ignoring the inherent uncertainty in massive points.
+
+\textit{3D Semantic Segmentation}:
+PointNet \cite{qi2017pointnet} is the very first work for 3D point cloud learning, and its shared-MLP architecture shows strong representation capability. However, the perturbation invariance of point clouds is obtained at the cost of ignorance of the local context. Following works propose different solutions to make for this limitation: PointNet++ \cite{qi2017pointnet++} adopts hierarchical sampling strategies, KPConv \cite{thomas2019kpconv} proposes a kernel-based MLP operation mimicking convolution, MinkowskiNet \cite{choy20194d} extends 2D convolution to 3D voxel and specifically design sparse operation python library for point clouds, and recently PointTransformer \cite{zhao2021point} shows the power of Transformer mechanisms in point cloud processing. 
+
+
+
+\subsection{Dense Uncertainty Estimation}
+\textit{Embedding Learning Uncertainty}:
+Kendall \cite{kendall2017uncertainties} categorizes uncertainties in deep learning as two types: aleatoric uncertainty and epistemic uncertainty. Aleatoric uncertainty stems from data noises, while epistemic uncertainty refers to model uncertainty, which can be reduced with sufficient training data. Embedding learning is usually applied to image recognition tasks, where most methods focus on estimating aleatoric uncertainty: PFE \cite{shi2019probabilistic} models face embeddings as Gaussian distributions and uses the proposed Mutual Likelihood Score to measure the likelihood of two embeddings belonging to the same class. DUL \cite{chang2020data} proposes to learn aleatoric uncertainty for both regression and classification face recognition tasks. BTL \cite{warburg2021bayesian} proposes a Bayesian loss to learn aleatoric uncertainty in place recognition. RUL \cite{zhang2021relative} uses relative uncertainty measurements to learn aleatoric uncertainty. 
+
+In the above image recognition tasks, a single feature is learned for a whole image. But in the dense prediction task of the point cloud, a single point cloud will involve learning thousands of features (i.e., equals to the number of points in the point cloud). Furthermore, image recognition is applied to regular-size images, while point clouds are totally unordered and varied-size. The massive features within a batch and irregular input size render it rather challenging to estimate dense uncertainty for a 3D point cloud.
+
+
+\textit{Semantic Segmentation Uncertainty}:
+Popular uncertainty estimation methods for semantic segmentation include 
+softmax entropy \cite{czolbe2021segmentation}
+, Bayesian Neural Network (BNN) \cite{kendall2015bayesian}, 
+learned aleatoric uncertainty \cite{kendall2017uncertainties}
+, auxiliary network \cite{zheng2021rectifying} 
+and variance propagation based on Assumed Density Function (ADF) \cite{cortinhal2020salsanext}. Please refer to \cite{jungo2019assessing} for a thorough overview. 
+However, these dominant approaches for semantic segmentation usually treat pixels or points as independent of each other (see Fig. \ref{fig_pipeline2}.a). Such ignorance of cross-pixel or cross-point dependencies tends to result in noisy uncertainty estimation \cite{monteiro2020stochastic}. 
+
+
+
+
+Embedding learning has been explored in image segmentation: \cite{wang2021exploring} and \cite{tang2022contrastive} show contrastive learning optimizes embedding space and improve prediction performance in a semantic segmentation task, \cite{li2021learning} proves that optimized embeddings contribute to predictive performance. However, all the above methods exploit embedding learning for improving predictive performance, 
+rather than estimating dense uncertainty.
+SSN \cite{monteiro2020stochastic} has used a low-rank multivariate Gaussian model to account for cross-pixel dependencies. But it is developed for logits, which does not involve embedding optimization.
+
+Our \sysname\
+is based on a probabilistic embedding model and enforces metric alignments in the embedding space by using bayesian triplet loss.
+Bayesian triplet loss has been used in \cite{warburg2021bayesian}
+in image recognition. The major differences are: (1) the image recognition \cite{warburg2021bayesian} requires a single embedding for an image (i.e., whole pixels), while massive point-wise embeddings are desired in \sysname. Thus, we design additional sophisticated sampling strategies and efficient networks for unordered point clouds; and (2) the probabilistic embedding model of \cite{warburg2021bayesian} ignores the cross-point dependencies. Thus, we propose \sysname+ to alleviate this issue by a low-rank multivariate Gaussian model. 
+
+
+
+
+
+
+
+
+
+\section{Method}
+
+\subsection{Preliminary}
+A dense prediction network maps a batch of points to a set of scalars. The process can be decomposed into a metric learning phase and a task-oriented regression or classification phase.
+Formally, given a point cloud $\boldsymbol{\mathcal{P}} \in \mathbb{R}^{N \times 3}$, the network $f_{\theta}$ first maps it to a set of embeddings $\boldsymbol{\mathcal{X}} \in \mathbb{R}^{N \times D}$, where $N$ is the number of points, and $D$ is the embedding dimension:
+\begin{equation}
+    \rm metric \ \ learning:\ \boldsymbol{\mathcal{X}} = f_{\theta}(\boldsymbol{\mathcal{P}})
+\end{equation}
+which is followed by a task-oriented regressor (or classifier) $f_{r}$ that generates predictions $\boldsymbol{\mathcal{Y}} \in \mathbb{R}^{N \times 1}$ (or $\boldsymbol{\mathcal{Y}} \in \mathbb{R}^{N \times C}$ where $C$ is the number of class )
+for the set of embedding:
+\begin{equation}
+    \rm regression \ or\  classification:\ \boldsymbol{\mathcal{Y}} = f_{r}(\boldsymbol{\mathcal{X}})
+\end{equation}
+ In the above formulation, predictions are regarded as deterministic,
+while the inherent noise from data is ignored. A probabilistic prediction model (e.g., probabilistic semantic segmentation~\cite{kendall2017uncertainties}) casts the prediction as a Gaussian distribution, which provides uncertainty level along with prediction (See Fig. \ref{fig_pipeline2}.a). But embeddings are still deterministic and equally weighted, which means each embedding will contribute equally to the regressor (or classifier).
+
+Inspired by probabilistic contrastive learning in face recognition \cite{shi2019probabilistic,chang2020data}, we adopt a probabilistic embedding model for a point cloud, where embeddings are represented by a diagonal multivariate Gaussian distribution: 
+\begin{equation}
+    \label{eq_distribution}
+    \boldsymbol{\mathcal{X}} \sim \boldsymbol{\mathcal{N}}\left ( \boldsymbol{\mu}, \boldsymbol{\Lambda^2}\right )
+\end{equation}
+where $\boldsymbol{\mu}=f_\mu(\boldsymbol{\mathcal{P}})\in \mathbb{R}^{N \times D}$ and $\boldsymbol{\Lambda^2}=f_\sigma(\boldsymbol{\mathcal{P}}) \in \mathbb{R}^{(N \times D) \times (N \times D)}$ 
+is a diagonal matrix. $f_\mu$ and $f_\sigma$ represents the mean branch and variance branch of the network $f_\theta$. We will later propose a full-covariance multivariate Gaussian model and show its superiority in Sec. \ref{lrmg}. 
+
+
+\subsection{Exploring Cross-point Embeddings}
+
+
+
+
+After building the probabilistic embedding model, we now discuss how to optimize the embedding space and derive the uncertainty.
+
+An overview of a traditional probabilistic prediction pipeline, the proposed \sysname\ and \sysname+ is presented in Fig. \ref{fig_pipeline2}. A traditional probabilistic prediction only allows logits to interact implicitly through a shared MLP, while \sysname\ explores cross-point embeddings by building a probabilistic embedding model and enforcing metric alignments, and \sysname+ goes further by replacing the diagonal covariance matrix with a low-rank covariance matrix. In what follows we will first describe \sysname\ that is based on the diagonal multivariate Gaussian model. Then an improved version \sysname+ will be introduced, which is based on the low-rank multivariate Gaussian model. 
+
+\subsubsection{\sysname}
+Given a triplet $\{\boldsymbol{P_a},\boldsymbol{P_p}, \boldsymbol{P_n} \vert \boldsymbol{P_i} \in \mathbb{R}^{1 \times 3}, i=a, p, n\}$, their embeddings are obtained as  $\{\boldsymbol{X_a},\boldsymbol{X_p}, \boldsymbol{X_n} \vert \boldsymbol{X_i} \in \boldsymbol{\mathcal{N}}(\boldsymbol{\mu}_i, \boldsymbol{\Sigma}_i^2), \boldsymbol{\mu}_i \in \mathbb{R}^{1 \times D}, \boldsymbol{\Sigma^2}_i \in \mathbb{R}^{1 \times D}, i=a, p, n\}$, where the subscripts $a, p, n$ denote an anchor, positive and negative sample, respectively. In the probabilistic setting, we are interested in the probability of the positive embedding being closer than the negative to the anchor:
+\begin{equation}
+    \label{eq_bayesian_triplet}
+P(\Vert \boldsymbol{X}_a - \boldsymbol{X}_p \Vert - \Vert \boldsymbol{X}_a - \boldsymbol{X}_n \Vert + m < 0)
+\end{equation}
+Rewrite it as:
+\begin{equation}
+    \label{eq_normal}
+    P(\tau<-m)
+\end{equation}
+where the new distribution $\tau= \sum_d^D \boldsymbol{T} ^d=\sum_d^D (\boldsymbol{X}_a^d - \boldsymbol{X}_p^d)^2 - (\boldsymbol{X}_a^d - \boldsymbol{X}_n^d)^2$, and $d$ means $d^{th}$ dimension . According to central limit theorem, $\tau$ will approximate a normal distribution when $D$ is large, i.e.,$\frac{\tau - \mu_{\tau}}{\sigma_{\tau}} \thicksim \mathcal{N}(0, 1)$, where $\mu_\tau$ and $\sigma^2_\tau$ are the mean and the variance of the distribution $\tau$. Then Eq. \ref{eq_normal} is solved as:
+\begin{equation}
+    P(\tau<-m) = \Phi_{\mathcal{N}(0, 1)} (\frac{-m - \mu_{\tau}}{\sigma_{\tau}})
+\end{equation}
+where $\Phi$ is the Conditional Density Function (CDF). Now the task is converted to finding an analytical solution of $\mu_\tau$ and $\sigma_\tau$.
+The mean $\mathbb{E}^\prime [\tau]$ and variance $\mathbb{D}^\prime[\tau]$ of a single dimension is given as follows (the superscript $d$ at right-hand side is omitted for brevity): 
+\begin{equation}
+\begin{aligned}
+\mathbb{E}[\boldsymbol{T}^d] &= \mu_{p}^{2}+\sigma_{p}^{2}-\mu_{n}^{2}-\sigma_{n}^{2}-2 \mu_{a}\left(\mu_{p}-\mu_{n}\right) \\
+\mathbb{D}[\boldsymbol{T}^d] &= 2[\sigma_{p}^{4}+2 \mu_{p}^{2} \sigma_{p}^{2}+2\left(\sigma_{a}^{2}+\mu_{a}^{2}\right)\left(\sigma_{p}^{2}+\mu_{p}^{2}\right)- 2 \mu_{a}^{2} \mu_{p}^{2}\\&-4 \mu_{a} \mu_{p} \sigma_{p}^{2}] + 2[\sigma_{n}^{4}+2 \mu_{n}^{2} \sigma_{n}^{2}+2\left(\sigma_{a}^{2}+\mu_{a}^{2}\right)\left(\sigma_{n}^{2}+\mu_{n}^{2}\right)\\&-2 \mu_{a}^{2} \mu_{n}^{2}-4 \mu_{a} \mu_{n} \sigma_{n}^{2}] +4 \mu_{p} \mu_{n} \sigma_{a}^{2}
+\end{aligned}
+\end{equation}
+Since the embedding model is assumed to be isotropic, we arrive at:
+\begin{equation}
+    \mu_\tau = \sum_d^D \mathbb{E}[\boldsymbol{T} ^d], \quad \sigma _\tau^2 = \sum_d^D \mathbb{D}[\boldsymbol{T} ^d]
+\end{equation}
+
+In summary, after the network generates a set of embeddings for a point cloud, we calculate the probability of the positive embedding being closer than the negative to the anchor, and the goal of training is to minimize the metric loss derived from Eq. \ref{eq_bayesian_triplet}:
+\begin{equation}
+    \label{eq_metric_loss}
+L_{M} = -\frac{1}{T} \sum _{t=1}^T P(\Vert \boldsymbol{X}_{t,a} - \boldsymbol{X}_{t,p} \Vert - \Vert \boldsymbol{X}_{t,a} - \boldsymbol{X}_{t,n} \Vert + m < 0)
+\end{equation}
+where $T$ is the number of total triplets in a mini-batch.
+
+\subsubsection{\sysname+}
+\label{lrmg}
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=3.3in]{./figures/network.pdf} 
+    \caption{The network architectures of \sysname\ and \sysname+: $\boldsymbol{\mathcal{P}}$ means a 3D point cloud, $\boldsymbol{\mu}$ embeddings' mean, $\boldsymbol{\Lambda}$ diagonal elements of embeddings' covariance matrix, $\boldsymbol{P}$ scale factor of embeddings' covariance matrix.} 
+    \label{fig_network}
+\end{figure}
+
+Points usually show spatial correlation with their neighbors. For example, points at the boundaries of an object usually exhibit high uncertainty since the points around the boundary have varied semantic labels.
+But \sysname\ fails to model point-wise dependencies because the diagonal covariance matrix of \sysname\ (see Eq. \ref{eq_distribution}) is based on the assumption that points are independent of each other. To solve this issue, we propose further capturing the point-wise dependencies by a full-covariance multivariate Gaussian model. Specifically, the diagonal covariance matrix in Eq. \ref{eq_distribution} is replaced with a full covariance matrix $\boldsymbol{\Sigma}^2 \in \mathbb{R}^{(N \times D) \times (N \times D)}$: 
+\begin{equation}
+    \boldsymbol{\mathcal{X}} \sim \boldsymbol{\mathcal{N}}\left ( \boldsymbol{\mu}, \boldsymbol{\Sigma^2}\right )    
+   
+\end{equation}
+where $\boldsymbol{\mu} \in \mathbb{R}^{N \times D}$. However, the computational complexity of the full covariance matrix  $\boldsymbol{\Sigma}^2$ scales with the square of $N$, and a point cloud usually consists of tens of thousands of points, i.e., $N>10^4$. This makes training networks difficult. To alleviate this issue, we resort to a low-rank parameterization of the covariance matrix \cite{magdon2010approximating}:
+\begin{equation}
+    \boldsymbol{\Sigma}^2 = \boldsymbol{P}\boldsymbol{P}^T+\boldsymbol{\Lambda}^2 
+\end{equation}
+where the scale factor $\boldsymbol{P} \in \mathbb{R}^{(N\times D)\times K}$ and $K$ is the rank of the parameterization, $\boldsymbol{\Lambda}^2 \in \mathbb{R}^{(N\times D) \times (N\times D)}$ and $\boldsymbol{\Lambda}^2$ is a diagonal matrix. Therefore, we refer to the pipeline based on  a low-rank covariance matrix as \sysname+. Compared with \sysname, \sysname+ learns parameters of additional elements other than diagonal elements of the covariance matrix. This makes the point-wise dependencies explicitly described by the learned variances. 
+
+For ease of application, we choose $K=1$. Then the equivalent of the embedding $\boldsymbol{\mathcal{X}}$ is obtained as
+
+\begin{equation}
+    \begin{aligned}
+    \boldsymbol{\mathcal{X}}
+   
+    =& \boldsymbol{\mu} + \left(\boldsymbol{P} + \boldsymbol{\Lambda} \right ) \cdot \boldsymbol{\mathcal{N}}\left (\boldsymbol{0}, \boldsymbol{I} \right ) \\
+    \end{aligned}
+\end{equation}
+
+$L_M$ is then used to train the network. By experimental results we show that \sysname+ generates better-calibrated uncertainty than \sysname\ (see Sec. \ref{experiments}).
+
+The network architectures of the proposed \sysname\ and \sysname+ are shown in Fig. \ref{fig_network}, where $\boldsymbol{\mathcal{P}}$ means a 3D point cloud. The backbone encoder and decoder can be chosen from any UNet-like network. We add three branches to predict the mean $\boldsymbol{\mu}$, diagonal covariance matrix $\boldsymbol{\Lambda^2}$ and the scale factor $\boldsymbol{P}$. $\boldsymbol{\mu}$ branch ends with an L2-Normalization layer, while $\boldsymbol{\Lambda^2}$ and $\boldsymbol{P}$ branches with softplus layers. 
+\section{Experimental Results}
+\label{experiments}
+
+
+\subsection{3D Geometric Feature Learning}
+
+
+While \sysname\ and \sysname+ are generic to dense prediction tasks, sampling strategies for triplets should be adapted 
+according 
+to different downstream tasks. Here, we present practical sampling strategies for two different
+tasks:
+3D geometric feature learning and 3D semantic segmentation.
+
+\textit{3D geometric feature learning} aims to learn a discriminative mapping function represented by a deep neural network, such that raw points in the Euclidean space are mapped to the feature space. Ideally, points with similar geometric characteristics should be close to each other in the feature space. \cite{choy2019fully} studies different sampling strategies, including hardest-triplet sampling and random triplet sampling, where triplet loss is adopted.  We follow their sampling methods but adapt their conventional triplet loss to our metric loss $L_M$. Specifically, given point clouds $\boldsymbol{\mathcal{P}}_i$ and $\boldsymbol{\mathcal{P}}_j$ and the relative transformation $\boldsymbol{\mathcal{T}}$, we first sample anchor embeddings $\boldsymbol{X}_{i,a}$ and $\boldsymbol{X}_{j,a}$. Then, we randomly choose its positives $\boldsymbol{X}_{i,p}$, $\boldsymbol{X}_{j,p}$ and negatives $\boldsymbol{X}_{i,n}$, $\boldsymbol{X}_{j,n}$. Finally, we calculate the metric loss $L_M$  of the triplets $\{\boldsymbol{X}_{i,a}, \boldsymbol{X}_{i,p}, \boldsymbol{X}_{i,n}\}$ and $\{ \boldsymbol{X}_{j,a}, \boldsymbol{X}_{j,p}, \boldsymbol{X}_{j,n}\}$ for training.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=3in]{./figures/ece_fcgf.pdf} 
+    \caption{Reliability diagram on the 3D Match Benchmark. \sysname\ and \sysname+ are closer to the ideally-calibrated line than others.} 
+    \label{fig_ece_fcgf}
+\end{figure}
+
+
+\begin{table}
+    \centering
+    \label{table_fcgf}
+    \caption{Predictive performance and uncertainty quality on the 3D Match Benchmark. 
+   
+   
+    }    
+    \begin{tabular}{l|c|c} 
+    \hline
+    Method                                 & FMR@0.05 ↑ & ECE ↓             \\ 
+    \hline
+    FPFH$^*$\cite{rusu2009fast}                                 & 36.4       & \textbackslash{}  \\
+    PerfectMatch$^*$\cite{gojcic2019perfect}                          & 94.9       & \textbackslash{}  \\
+    
+    FCGF$^*$\cite{choy2019fully}                                  & 95.3       & \textbackslash{}  \\
+    SpinNet\cite{ao2021spinnet}                                & 97.5       & \textbackslash{}  \\     
+    FCGF\cite{choy2019fully}                               & 97.5       &     \textbackslash{}         \\    
+
+    \hline
+    FCGF+RG                               & 97.5       & 0.251             \\
+    FCGF+MCD                             & 94.1       & 0.344             \\
+    \rowcolor[rgb]{1,0.949,0.8} FCGF+\sysname  & 97.5       & 0.142             \\
+    \rowcolor[rgb]{1,0.949,0.8} FCGF+\sysname+ & 97.6       & 0.135             \\
+    \hline
+    \end{tabular}
+\begin{tablenotes}
+    \footnotesize
+    \item[1] $^*$ denotes predicting correspondences without a symmetric test \cite{horache20213d}.
+\end{tablenotes}      
+\end{table}
+
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=3.3in]{./figures/qua_fcgf.pdf} 
+    \caption{Matching results and dense uncertainty map (estimated by \sysname+) of a point cloud from 3D Match Benchmark. Incorrect correspondences ($1$ and $2$ areas) tend to have high uncertainties.  } 
+    \label{fig_qua_fcgf}
+\end{figure}
+
+\noindent \textbf{Datasets.} We use the 3D Match dataset \cite{zeng20173dmatch}, following the official training and evaluation splits.
+
+\noindent \textbf{Model Architectures.} 
+FCGF is the first 3D convolutional network to integrate metric learning in a fully-convolutional setting. We choose FCGF \cite{choy2019fully} as our backbone because it holds state-of-the-art predictive performance with fast training and inferencing. To empower the deterministic FCGF to estimate the uncertainty of each point, we integrate it with our proposed \sysname\ and \sysname+ as is shown in Fig. \ref{fig_network}. 
+
+
+
+\noindent \textbf{Training Details.}
+We train FCGF following the original paper \cite{choy2019fully}, i.e., Hardest-contrastive loss, $100$ epoches with SGD optimizer and batch size $4$, learning rate starts from $0.1$ with exponetial decay rate $0.99$, dada augmentation includes random scaling $\in [0.8, 1.2]$ and random rotation $\in [0 ^\circ , 360^\circ)$. 
+
+\noindent \textbf{Competing Methods.}
+\begin{itemize}
+    \item RG: After training the FCGF, we randomly form ten bins of points and then calculate ECE.
+    \item MCD: We insert dropout layers with dropout rate $p=0.1$ after every convolutional layer. We take $N=40$ samples from the weights' posterior distribution at test time.
+    \item \sysname: To assure original predictive performance, we freeze the $\boldsymbol{\mu}$ branch and train $\boldsymbol{\Lambda^2}$ branches with the metric loss $L_M$. 
+    \item \sysname+: We freeze the $\boldsymbol{\mu}$ branch, and train $\boldsymbol{\Lambda^2}$ and $\boldsymbol{P}$ branches with the metric loss $L_M$.
+\end{itemize}
+Note that MCD produces epistemic uncertainty, while our methods generate aleatoric uncertainty. We include it here for a comprehensive comparison. 
+
+\noindent \textbf{Evaluation Metrics.}
+To evaluate the predictive performance, we use Feature Matching Recall with $0.1m$ inlier distance threshold and $0.05$ inlier recall threshold (FMR@0.05) \cite{choy2019fully}. We adopt the widely used Expected Calibrated Error (ECE) \cite{warburg2021bayesian} and the reliability diagram \cite{warburg2021bayesian} to evaluate uncertainty quality, where we calculate the Hit Ratio \cite{choy2019fully} of points in the same bin. 
+
+\noindent \textbf{Results.}
+We evaluate the above methods on the 3D Match Benchmark \cite{zeng20173dmatch}. We establish correspondences by the nearest neighbor search in the embedding space, where each correspondence has an estimated uncertainty.\footnote[1]{We follow the covariance formulation in \cite{warburg2021bayesian} and use the sum of two points' uncertainty as the correspondence's uncertainty.} Table. \ref{table_fcgf} shows the predictive performance and uncertainty quality of different methods on the 3DMatch dataset. MCD shows degraded predictive performance due to the dropout layers significantly harming the network's representation ability. Since the $\boldsymbol{\mu}$ branch is inherited from the backbone network, \sysname\ and \sysname+ do not sacrifice any predictive accuracy. Compared with MCD, \sysname\ reduces ECE by $0.202$. Besides, \sysname+ outperforms \sysname\ with ECE $0.135$.    
+
+Fig. \ref{fig_ece_fcgf} illustrates the reliability diagram on the 3D Match Benchmark. The ideal line means points with higher uncertainty levels should have lower hit ratios. RG produces a horizontal line, while MCD fails to produce a sensible estimation. \sysname\ and \sysname+ present closer lines to the ideal line. Fig. \ref{fig_qua_fcgf} shows the matching results and dense uncertainty map estimated by \sysname+ of a point cloud. We can observe that incorrect correspondences ($1$ and $2$ areas) tend to have high uncertainties. 
+
+In summary, the proposed \sysname\ and \sysname+ provide well-calibrated uncertainty that can be used as an effective tool to filter incorrect correspondence. 
+
+\subsection{3D Semantic Segmentation}
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=3in]{./figures/ece_scannet.pdf} 
+    \caption{Reliability diagram on the ScanNet validation split. \sysname\ and \sysname+ are closer to the ideal calibrated line than other methods.} 
+    \label{fig_ece_scannet}
+\end{figure}
+
+\textit{3D semantic segmentaion} aims to learn a classification network that predicts class labels for each point in a point cloud. To optimize the embedding space by enforcing metric alignments, we first randomly sample anchors from a point cloud $\boldsymbol{\mathcal{P}}$, and then, within the neighbors of each anchor $\boldsymbol{X}_{a}$,  choose embeddings with the same class label as positives $\boldsymbol{X}_{p}$, and those with different class label as negatives $\boldsymbol{X}_{n}$. Finally, we calculate the metric loss $L_M$ of the triplet $\{ \boldsymbol{X}_{a}, \boldsymbol{X}_{p}, \boldsymbol{X}_{n}\}$ for training.
+
+\noindent \textbf{Datasets.} 
+Following \cite{park2022fast}, we use the ScanNet dataset \cite{dai2017scannet} and evaluate models on the ScanNet validation split.
+
+\noindent \textbf{Model Architectures.} 
+Considering inference latency and accuracy, we choose MinkowskiNet42 (Mink) \cite{choy20194d, park2022fast} as our 3D semantic segmentation backbone. The semantic segmentation network is the same as that in Fig. \ref{fig_network}, except that we add a convolution layer as the segmentation classfier before the L2-Normalization layer of the $\boldsymbol{\mu}$ branch. 
+
+\begin{table}
+    \centering
+    \label{table_scannet}
+    \caption{Predictive performance and uncertainty quality on the ScanNet validation split. 
+   
+   
+    }        
+    \begin{tabular}{l|l|c|c} 
+        \hline
+   & Method                             & mIOU ↑                              & ECE ↓                                \\ 
+        \hline
+        \multirow{5}{*}{\begin{tabular}[c]{@{}c@{}}Training \\without \\uncertainty\end{tabular}} & PointNet\cite{qi2017pointnet}                           & 0.535                               & \textbackslash{}                     \\
+                                                                                                  & PointConv\cite{wu2019pointconv}                          & 0.610                               & \textbackslash{}                     \\
+                                                                                                  & KPConv
+          deform \cite{thomas2019kpconv}                   & 0.692                               & \textbackslash{}                     \\
+                                                                                                  & SparseConvNet\cite{graham20183d}                      & 0.693                               & \textbackslash{}                     \\
+                                                                                                  & Mink\cite{choy20194d}                           & 0.715                               &   \textbackslash{}                              \\                                                       & Mink+SE\cite{jungo2019assessing}                           & 0.715                               & 0.251                                \\ 
+        \hline
+        \multirow{4}{*}{\begin{tabular}[c]{@{}c@{}}Training  \\with \\uncertainty\end{tabular}}   & Mink+AU\cite{kendall2017uncertainties}                          & 0.717                               & 0.254                                \\
+                                                                                                  & Mink+MCD(p=0.2)                        & 0.658                               & 0.176                                \\
+                                                                                                  & Mink+MCD(p=0.05)                        & 0.663                               & 0.170                                \\                                                                                                  & {\cellcolor[rgb]{1,0.949,0.8}}Mink+\sysname\  & {\cellcolor[rgb]{1,0.949,0.8}}0.721 & {\cellcolor[rgb]{1,0.949,0.8}}0.142  \\
+                                                                                                  & {\cellcolor[rgb]{1,0.949,0.8}}Mink+\sysname+ & {\cellcolor[rgb]{1,0.949,0.8}}0.727 & {\cellcolor[rgb]{1,0.949,0.8}}0.141  \\
+        \hline
+        \end{tabular}
+    \end{table}
+
+
+
+
+
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=3.3in]{./figures/qua_compare.pdf} 
+    \caption{Segmentation errors (left column) and dense uncertainty maps (right column) on a scene from ScanNet validation split. \sysname\ and \sysname+ produce better-calibrated dense uncertainty maps than others. For correct predictions (rectangular area $1$),  \sysname\ is under-confident while \sysname+ is more confident than \sysname.} 
+    \label{fig_qua_compare}
+\end{figure}
+
+
+\noindent \textbf{Training Details.}
+We train the model for $10^5$ steps with an SGD optimizer, learning rate starting from $0.1$ with a cosine annealing schedule and a linear warmup. We use a batch size of $8$. For more training details, we kindly refer readers to \cite{park2022fast}.
+
+\noindent \textbf{Competing Methods.}
+We compare \sysname\ and \sysname+ with the following popular uncertainty estimation methods from image segmentation:
+\begin{itemize}
+    \item Softmax Entropy \cite{jungo2019assessing} (SE): 
+    \begin{equation}
+        H = -\sum_c^Cp_c\log(p_c)/log(C) \in [0,1]
+    \end{equation}
+    where $C$ is the number of classes, $p_c$ is a probability by the softmax layer. 
+    \item Aleatoric Uncertainty \cite{kendall2017uncertainties, jungo2019assessing} (AU): Logits are modeled as Gaussian distribution, whose mean and variance are predicted by two heads of the network. We use MC sampling ($n=10$ ) to draw samples from the logits distribution and optimize the network with Cross Entropy Loss.
+    \item MCD \cite{jungo2019assessing}: MCD estimates epistemic uncertainty because dropout at test time approximates random sampling of the model's weights. Test time inference is obtained by
+    $ p_c = \frac{1}{N}\sum_n^Np_{n,c} $, where $p_c$ denotes the output of the Softmax layer. We set the number of MC samples $N=40$ as suggested by \cite{kendall2016modelling}. We evaluate MCD with two dropout probability settings: $p=0.2$ and $p=0.05$.   Aleatoric uncertainty and MCD uncertainty generates high-dimensional variance vectors, which are converted to uncertainty levels by $y(1-0.5q)+(1-y)(0.5q)$, where $q\in[0,1]$ is the normalized variance\cite{jungo2019assessing}.
+    
+    \item \sysname\ / \sysname+: We train the \sysname\ / \sysname+ network from scratch with a weighted sum of cross entropy loss and the metric loss $L = L_{CR} + \lambda L_M$, 
+    where we set $\lambda=1$ for all experiments.
+    
+   
+
+\end{itemize}
+
+\noindent \textbf{Evaluation Metrics.}
+We use the mean IOU (mIOU) to evaluate the predictive performance. mIOU refers to the ratio of the intersection of ground-truth labels and predicted labels to their union, and a higher mIOU indicates better performance. The reliability diagram \cite{warburg2021bayesian} and ECE \cite{warburg2021bayesian} are adopted to evaluate uncertainty quality, where we calculate the precision of points in each bin.
+
+\noindent \textbf{Results.}
+Table. \ref{table_scannet} presents the predictive performance and uncertainty quality on the ScanNet validation split. In terms of predictive performance, we observe that AU, \sysname\ produce comparable results to  Mink, while MCD shows degraded performance due to dropout layers decreasing representative power. \sysname+ promotes the Mink's predictive power with $0.13$ boost in mIOU. From the perspective of uncertainty quality, SE achieves a $0.251$ ECE, outperformed by MCD (p=0.05) with a $0.170$ ECE, while \sysname\ and \sysname+ provide significantly improved uncertainty with ECE $0.142$ and $0.141$, i.e., \sysname+ reduces ECE of SE by $43.8\%$. 
+
+Fig. \ref{fig_ece_scannet} shows the reliability diagram on the ScanNet validation split. It can be seen that \sysname\ is close to the ideal calibrated line, while \sysname+ improves \sysname\ in the low-uncertainty region. Fig. \ref{fig_qua_scannet} presents the qualitative results of \sysname+, where we can observe a significant correlation between segmentation prediction error and estimated uncertainty, i.e., Incorrect predictions tend to have high uncertainties. 
+
+Fig. \ref{fig_qua_compare} presents segmentation errors and dense uncertainty maps by different methods on the ScanNet validation split. For incorrect predictions (black points in the magnified area), we can observe that SE fails to detect them and shows high confidence, while \sysname\ and \sysname+ are uncertain about those incorrect predictions. AU is under-confident in most areas, while MCD (p=0.05) cannot produce sensible results. 
+For correct predictions (Rectangular area $1$),
+\sysname\ is under-confident while \sysname+ is more confident than \sysname.
+
+The above results indicate that \sysname\ and \sysname+ provide better-calibrated uncertainty than existing methods without compromising any predictive performance. \sysname+ outperforms \sysname\ in both predictive performance and uncertainty quality. This shows that embedding learning contributes to uncertainty estimation of dense prediction tasks and low-rank multivariate Gaussian model is more effective than a diagonal one.
+
+
+\section{Conclusion}
+\label{conclusion}
+Observing the fact that dense prediction networks are sequential compositions of embedding learning networks and task-specific regressors (or classifiers), we propose \sysname\ that estimates dense uncertainty by building a probabilistic embedding model and enforcing metric alignments with a diagonal multivariate Gaussian model. Besides, we propose \sysname+ that further enhances cross-point interactions with a low-rank multivariate Gaussian model, which explicitly expresses off-diagonal elements' dependencies while maintaining computational efficiency. Experimental results on the 3D Match Benchmark and the ScanNet dataset prove that \sysname\ and \sysname+ are generic and effective tools for 3D dense uncertainty estimation. 

@@ -1,0 +1,319 @@
+\section{Introduction}
+Offline reinforcement learning seeks to solve decision-making problems without interacting with the environment.
+This is compelling because online data collection can be dangerous or expensive in many realistic tasks.
+However, relying entirely on a static dataset imposes new challenges.
+One is that policy evaluation is hard because the mismatch between the behavior and the learned policy usually introduces extrapolation error \citep{bcq}. In most offline tasks, it is difficult or even impossible for the collected transitions to cover the whole state-action space. When evaluating the current policy via dynamic programming, leveraging actions that are not presented in the dataset (out-of-sample) may lead to highly unreliable results, and thus performance degrade. Consequently, in offline RL it is critical to stay close to the behavior policy during training.
+
+Recent advances in model-free offline methods mainly include two lines of work. The first is the adaptation of existing off-policy algorithms. These methods usually include value pessimism about unseen actions or regulations of feasible action space \citep{bcq, bear, cql}.
+The other line of work \citep{awr, crr, awac} is derived from constrained policy search and mainly trains a parameterized policy via weighted regression. Evaluations of every state-action pair in the dataset are used as regression weights.
+
+The main motivation behind weighted policy regression is that it helps prevent querying out-of-sample actions \citep{awac,iql}. However, we find that this argument is untenable in certain settings. Our key observation is that policy models in existing weighted policy regression methods are usually unimodal Gaussian models and thus lack distributional expressivity, while in the real world collected behaviors can be highly diverse. This distributional discrepancy might eventually lead to selecting unseen actions. For instance, given a bimodal target distribution, fitting it with a unimodal distribution unavoidably results in covering the low-density area between two peaks. 
+In Section \ref{motivation}, we empirically show that lack of policy expressivity may lead to performance degrade.
+
+Ideally, this problem could be solved by switching to a more expressive distribution class. However, it is nontrivial in practice since weighted regression requires exact and derivable density calculation, which places restrictions on distribution classes that we can choose from. Especially, we may not know what the behavior or optimal policy looks like in advance.
+
+To overcome the limited expressivity problem, we propose to decouple the learned policy into two parts: an expressive generative behavior model and an action evaluation model. Such decoupling avoids explicitly learning a policy model whose target distribution is difficult to sample from, whereas learning a behavior model is much easier because sampling from the behavior policy is straightforward given the offline dataset collected by itself. Access to data samples from the target distribution is critical because it allows us to leverage existing advances in generative methods to model diverse behaviors. To sample from the learned policy, we use importance sampling to select actions from candidates proposed by the behavior model with the importance weights computed by the action evaluation model, which we refer to as \textbf{S}electing \textbf{f}rom \textbf{B}ehavior \textbf{C}andidates (\textbf{SfBC}).
+
+The fidelity of the learned behavior model is critical in our method because it directly determines the feasible action space. While covering any low-density area increases the possibility of selecting unseen actions during training, failing to cover all action modes in the dataset results in overly restricted action space. To fulfill this requirement, we propose to learn from diverse behaviors using diffusion probabilistic models \citep{diffusion}, which have recently achieved great success in modeling diverse image distributions, outperforming other existing generative models \citep{diffusion_beat_gan}. 
+We also propose a planning-based operator for Q-learning, which performs implicit planning strictly within dataset trajectories based on the current policy, and is provably convergent. The planning scheme greatly reduces bootstrapping steps required for dynamic programming and thus can help to further reduce extrapolation error and increase computational efficiency.
+
+The main contributions of this paper are threefold: 
+1. We address the problem of limited policy expressivity in conventional methods by decoupling policy learning into behavior learning and action evaluation, which allows the policy to inherit distributional expressivity from a diffusion-based behavior model. 
+2. The learned policy is further combined with an implicit in-sample planning technique to suppress extrapolation error and assist dynamic programming over long horizons. 
+3. Extensive experiments demonstrate that our method achieves competitive or superior performance compared with state-of-the-art offline RL methods, especially in sparse-reward tasks such as AntMaze.
+
+\section{Background}
+\subsection{Constrained Policy Search in Offline RL}
+Consider a Markov Decision Process (MDP), described by a tuple $\langle\mathcal{S},\mathcal{A},P,r,\gamma\rangle$. $\mathcal{S}$ denotes the state space and $\mathcal{A}$ is the action space. $P({\bm{s}}'|{\bm{s}},{\bm{a}})$ and $r({\bm{s}}, {\bm{a}})$ respectively represent the transition and reward functions, and $\gamma \in (0,1]$ is the discount factor.
+Our goal is to maximize the expected discounted return $J(\pi) = \mathbb{E}_{{\bm{s}} \sim \rho_\pi({\bm{s}})}\mathbb{E}_{{\bm{a}} \sim \pi(\cdot|{\bm{s}})}\left[r({\bm{s}}, {\bm{a}})\right]$ of policy $\pi$, where $\rho_\pi({\bm{s}}) = \sum_{n=0}^\infty \gamma^n p_\pi({\bm{s}}_n = {\bm{s}})$ is the discounted state visitation frequencies induced by the policy $\pi$ \citep{rlbook}.
+
+According to the \textit{policy gradient theorem} \citep{PG}, given a parameterized policy $\pi_\theta$, and the policy's state-action function $Q^\pi$, the gradient of $J(\pi_\theta)$ can be derived as:
+\begin{equation}
+\label{Eq:objective}
+    \nabla_\theta J(\pi_\theta) = \int_\mathcal{S} \rho_\pi({\bm{s}}) \int_\mathcal{A} \nabla_\theta \pi_\theta({\bm{a}} | {\bm{s}}) Q^\pi({\bm{s}}, {\bm{a}}).
+\end{equation}
+When online data collection from policy $\pi$ is not possible, it is difficult to estimate $\rho_\pi({\bm{s}})$ in \Eqref{Eq:objective}, and thus the expected value of the Q-function $\eta(\pi_\theta) := \int_\mathcal{S} \rho_\pi({\bm{s}}) \int_\mathcal{A} \pi_\theta({\bm{a}} | {\bm{s}}) Q^\pi({\bm{s}}, {\bm{a}})$.
+Given a static dataset $\mathcal{D}^\mu$ consisting of multiple trajectories $\{\left({\bm{s}}_n, {\bm{a}}_n, r_n \right)\}$ collected by a behavior policy $\mu({\bm{a}}|{\bm{s}})$, previous off-policy methods \citep{dpg, ddpg} estimate $\eta(\pi_\theta)$ with a surrogate objective $\hat{\eta}(\pi_\theta)$ by replacing $\rho_\pi({\bm{s}})$ with $\rho_\mu({\bm{s}})$. In offline settings, due to the importance of sticking with the behavior policy, prior works \citep{awr, awac} explicitly constrain the learned policy $\pi$ to be similar to $\mu$, while maximizing the expected value of the Q-functions:
+\begin{equation}
+    \mathop{\mathrm{arg \ max}}_{\pi} \quad \int_\mathcal{S} \rho_\mu({\bm{s}}) \int_\mathcal{A} \pi({\bm{a}} | {\bm{s}}) Q_\phi({\bm{s}}, {\bm{a}}) \ d{\bm{a}} \ d{\bm{s}} - \frac{1}{\alpha}\int_\mathcal{S} \rho_\mu({\bm{s}}) D_{\mathrm{KL}} \left(\pi(\cdot |{\bm{s}}) || \mu(\cdot |{\bm{s}}) \right) d{\bm{s}}.
+    \label{Eq:rl_main}
+\end{equation}
+The first term in \Eqref{Eq:rl_main} corresponds to the surrogate objective $\hat{\eta}(\pi_\theta)$, where $Q_\phi({\bm{s}}, {\bm{a}})$ is a learned Q-function of the current policy $\pi$. The second term is a regularization term to constrain the learned policy within support of the dataset $\mathcal{D}^\mu$ with $\alpha$ being the coefficient. 
+
+\subsection{Policy Improvement via Weighted Regression}
+\label{Sec:weighted_regression}
+The optimal policy $\pi^*$ for \Eqref{Eq:rl_main} can be derived  \citep{rwr, awr, awac} by use of Lagrange multiplier:
+\begin{align}
+    \pi^*({\bm{a}}|{\bm{s}}) &= \frac{1}{Z({\bm{s}})} \ \mu({\bm{a}}|{\bm{s}}) \ \mathrm{exp}\left(\alpha Q_\phi({\bm{s}}, {\bm{a}}) \right),
+\label{Eq:pi_optimal}
+\end{align}
+where $Z({\bm{s}})$ is the partition function. \Eqref{Eq:pi_optimal} forms a policy improvement step. 
+
+Directly sampling from $\pi^*$ requires explicitly modeling behavior $\mu$, which itself is challenging in continuous action-space domains since $\mu$ can be very diverse. 
+Prior methods \citep{awr, crr, bail} bypass this issue by projecting $\pi^*$ onto a parameterized policy $\pi_\theta$:
+\begin{align}
+    & \mathop{\mathrm{arg \ min}}_{\theta} \quad \mathbb{E}_{{\bm{s}} \sim \mathcal{D}^\mu} \left[ D_{\mathrm{KL}} \left(\pi^*(\cdot  | {\bm{s}}) \middle|\middle| \pi_\theta(\cdot  | {\bm{s}})\right) \right]\nonumber \\
+    = & \mathop{\mathrm{arg \ max}}_{\theta} \quad \mathbb{E}_{({\bm{s}}, {\bm{a}}) \sim \mathcal{D}^\mu} \left[ \mathrm{log} \ \pi_\theta({\bm{a}} | {\bm{s}}) \ \mathrm{exp}\left(\alpha Q_\phi({\bm{s}}, {\bm{a}}) \right) \right].
+    \label{Eq:wr}
+\end{align}
+Such method is usually referred to as weighted regression, with $\mathrm{exp}\left(\alpha Q_\phi({\bm{s}}, {\bm{a}})\right)$ being the regression weights.
+
+Although weighted regression avoids the need to explicitly model the behavior policy, it requires calculating the exact density function $\pi_\theta({\bm{a}} | {\bm{s}})$ as in \Eqref{Eq:wr}. This constrains the policy $\pi_\theta$ to distribution classes that have a tractable expression for the density function. We find this in practice limits the model expressivity and could be suboptimal in some cases (See Section \ref{motivation}).
+\subsection{Diffusion Probabilistic Model}
+\label{Sec:diffusion_bg}
+Diffusion models \citep{sohl2015deep,diffusion,sde} are generative models by firstly defining a forward process to gradually add noise to an unknown data distribution $p_0({\bm{x}}_0)$ and then learning to reverse it. The forward process $\{ {\bm{x}}(t) \}_{t\in [0, T]}$ is defined by a stochastic differential equation (SDE) $d{\bm{x}}_t = f({\bm{x}}_t, t) \mathrm{d}t + g(t) \mathrm{d} {\bm{w}}_t$,  where ${\bm{w}}_t$ is a standard Brownian motion and $f(t)$, $g(t)$ are hand-crafted functions \citep{sde} such that the transition distribution $p_{t0}({\bm{x}}_t|{\bm{x}}_0)=\mathcal{N}({\bm{x}}_t|\alpha_t{\bm{x}}_0, \sigma_t^2\bm{I})$ for some $\alpha_t,\sigma_t>0$ and $p_T({\bm{x}}_T)\approx \mathcal{N}({\bm{x}}_T|0,\bm{I})$. To reverse the forward process, diffusion models define a scored-based model ${\bm{s}}_\theta$ and optimize the parameter $\theta$ by:
+\begin{equation}
+\mathop{\mathrm{arg \ min}}_{\theta} \quad \mathbb{E}_{t,{\bm{x}}_0,\bm{\epsilon}}[\| \sigma_t \mathbf{s}_\theta({\bm{x}}_t, t) + \bm{\epsilon} \|_2^2],
+\end{equation}
+where $t\sim\mathcal{U}(0,T)$, ${\bm{x}}_0\sim p_0({\bm{x}}_0)$, $\bm{\epsilon}\sim \mathcal{N}(0,\bm{I})$, ${\bm{x}}_t=\alpha_t{\bm{x}}_0+\sigma_t\bm{\epsilon}$.
+
+Sampling by diffusion models can be alternatively viewed as discretizing the diffusion ODEs~\citep{sde}, which are generally faster than discretizing the diffusion SDEs~\citep{song2020denoising,lu2022dpm}. Specifically, the sampling procedure needs to firstly sample a pure Gaussian ${\bm{x}}_T\sim\mathcal{N}(0,\bm{I})$, and then solve the following ODE from time $T$ to time $0$ by numerical ODE solvers:
+\begin{equation}
+d {\bm{x}}_t = \bigg[f(t){\bm{x}}_t - \frac{1}{2}g^2(t) {\bm{s}}_\theta({\bm{x}}_t,t)\bigg] \mathrm{d}t.
+\label{Eq:prob_ode}
+\end{equation}
+Then the final solution ${\bm{x}}_0$ at time $0$ is the sample from the diffusion models.
+
+\section{Method}
+\label{Method}
+We propose a Selecting-from-Behavior-Candidates (SfBC) approach to address the limited expressivity problem in offline RL. Below we first motivate our method by highlighting the importance of a distributionally expressive policy in learning from diverse behaviors. Then we derive a high-level solution to this problem from a generative modeling perspective. 
+
+\subsection{Learning from Diverse Behaviors}
+\label{motivation}
+In this section, we show that the weighted regression broadly used in previous works might limit the distributional expressivity of the policy and lead to performance degrade. As described in Section \ref{Sec:weighted_regression}, conventional policy regression methods project the optimal policy $\pi^*$ in \Eqref{Eq:pi_optimal} onto a parameterized policy set. In continuous action-space domains, the projected policy is usually limited to a narrow range of unimodal distributions (e.g., squashed Gaussian), whereas the behavior policy could be highly diverse (e.g., multimodal). Lack of expressivity directly prevents the RL agent from exactly mimicking a diverse behavior policy. This could eventually lead to sampling 
+undesirable out-of-sample actions during policy evaluation and thus large extrapolation error. Even if Q-values can be accurately estimated, 
+an inappropriate unimodal assumption about the optimal policy might still lead to failure in extracting a policy that might have multiple similarly rewarding but distinctive action choices.
+
+\begin{wrapfigure}{r}{0.555\textwidth}{
+\vskip -0.45cm
+\sbox{\measurebox}{%
+  \begin{minipage}[b]{.27\textwidth}
+    \centering
+    \vskip 0.2cm
+    \subfloat{\label{fig:figB}\hspace{-0.1cm}\includegraphics[width=0.95\textwidth]{pics/toydrawleft.drawio.pdf}}
+    \vfill
+    \vskip 0.4cm
+    \subfloat{\label{fig:figC}\includegraphics[width=\textwidth]{pics/toypolicyillustration.pdf}}
+  \end{minipage}
+  }
+\usebox{\measurebox}
+\begin{minipage}[b][\ht\measurebox][s]{.27\textwidth}
+\vskip 0.1cm
+\centering
+\subfloat{\label{fig:figA}\includegraphics[width=\textwidth]{pics/toyresultcomparison.pdf}}
+\end{minipage}
+\caption{Illustration of the Bidirectional-Car task and comparison between SfBC and unimodal policies. See Section \ref{lfdb} for experimental details.}
+\label{fig:illustration}
+\vskip -0.3cm
+}
+\end{wrapfigure}
+We design a simple task named Bidirectional Car to better explain this point. Consider an environment where a car placed in the middle of two endpoints can go either side to gain the final reward. If an RL agent finds turning left and right similarly rewarding, by incorrectly assuming a unimodal distribution of the behavior policy, it ends up staying put instead of taking either one of the optimal actions (Figure \ref{fig:illustration}).
+As a result, unimodal policies fail to completely solve this task or loss diversity while a more distributionally expressive policy easily succeeds.
+
+We therefore deduce that distributional expressivity is a necessity to enable diverse behavior learning.
+To better model the complex behavior policy, we need more powerful generative modeling for the policy distribution, instead of the simple and unimodal Gaussians.
+
+\subsection{Selecting from Behavior Candidates}
+In this section, we provide a generative view of how to model a potentially diverse policy. Specifically, in order to model $\pi^*$ with powerful generative models, essentially we need to perform maximum likelihood estimation for the model policy $\pi_\theta$, which is equivalent to minimizing KL divergence between the optimal and model policy:
+\begin{equation}
+    \mathop{\mathrm{arg \ max}}_{\theta} \quad \mathbb{E}_{{\bm{s}} \sim \mathcal{D}^\mu} \mathbb{E}_{a \sim \pi^*(\cdot | s)}\left[\log \pi_\theta(a|s) \right] \
+    \Leftrightarrow \
+    \mathop{\mathrm{arg \ min}}_{\theta} \quad \mathbb{E}_{{\bm{s}} \sim \mathcal{D}^\mu} \left[ D_{\mathrm{KL}} \left(\pi^*(\cdot  | {\bm{s}}) \middle|\middle| \pi_{\theta}(\cdot  | {\bm{s}})\right) \right].
+\end{equation}
+However, drawing samples directly from $\pi^*$ is difficult, so previous methods \citep{awr, awac, crr} rely on the weighted regression as described in \Eqref{Eq:wr}.
+
+The main reason that limits the expressivity of $\pi_\theta$ is the need of calculating exact and derivable density function $\pi_\theta({\bm{a}} | {\bm{s}})$ in policy regression, which places restrictions on distribution classes that we can choose from. Also, we might not know what the behavior or optimal policy looks like previously.
+
+Our solution is based on a key observation that directly parameterizing the policy $\pi$ is not necessary. To better model a diverse policy, we propose to decouple the learning of $\pi$ into two parts. Specifically, we leverage \Eqref{Eq:pi_optimal} to form a policy improvement step:
+\begin{equation}
+\label{Eq:decouple}
+    \pi({\bm{a}}|{\bm{s}}) \propto \mu_\theta({\bm{a}}|{\bm{s}}) \ \mathrm{exp}\left(\alpha Q_\phi({\bm{s}},{\bm{a}}) \right).
+\end{equation}
+One insight of the equation above is that minimizing KL divergence between $\mu$ and $\mu_\theta$ is much easier compared with directly learning $\pi_\theta$ because sampling from $\mu$ is straightforward given $D^\mu$. This allows to us to leverage most existing advances in generative modeling (Section \ref{dbc}). $Q_\phi(s,a)$ could be learned using the existing Q-learning framework (Section \ref{imp}).
+
+The inverse temperature parameter $\alpha$ in \Eqref{Eq:decouple} serves as a trade-off between conservative and greedy improvement. We can see that when $\alpha \to 0$, the learned policy falls back to the behavior policy, and when $\alpha \to +\infty$ the learned policy becomes a greedy policy.
+
+To sample actions from $\pi$, we use an importance sampling technique. Specifically, for any state ${\bm{s}}$, first we draw $M$ action samples from a learned behavior policy $\mu_\theta(\cdot|{\bm{s}})$ as candidates. Then we evaluate these action candidates with a learned critic $Q_\phi$. Finally an action is resampled from $M$ candidates with $\mathrm{exp}\left(\alpha Q_\phi({\bm{s}},{\bm{a}}) \right)$ being the sampling weights. We summarize this procedure as selecting from behavior candidates (SfBC), which could be understood as an analogue to rejection sampling.
+
+The main difference between our method and previous works is that we do not seek to fit a parameterized model $\pi_\theta$ to $\pi^*$.
+Although generative modeling of the behavior policy has been explored by several works \citep{bcq, bear}, it was mostly used to form an explicit distributional constraint for the policy model $\pi_\theta$. In contrast, we show directly leveraging the learned behavior model to generate actions is not only feasible but beneficial on the premise that high-fidelity behavior modeling can be achieved. We give a practical implementation in the next section.
+\section{Practical Implementation}
+In this section, we derive a practical implementation of SfBC, which includes diffusion-based behavior modeling and planning-based Q-learning. An algorithm overview is given in Appendix \ref{overview}.
+\subsection{Diffusion-based behavior modeling}
+\label{dbc}
+It is critical that the learned behavior model is of high fidelity because generating any out-of-sample actions would result in unwanted extrapolation error, while failing to cover all in-sample actions would restrict feasible action space for the policy. This requirement brings severe challenges to existing behavior modeling methods, which mainly include using Gaussians or VAEs. Gaussian models suffer from limited expressivity as we have discussed in Section \ref{motivation}. VAEs, on the other hand, need to introduce a variational posterior distribution to optimize the model distribution, which has a trade-off between the expressivity and the tractability~\citep{kingma2016improved, lucas2019understanding}. This still limits the expressivity of the model distribution. An empirical study is given in Section \ref{Sec:ablation}.
+
+To address this problem, we propose to learn from diverse behaviors using diffusion models \citep{diffusion}, which have recently achieved great success in modeling diverse image distributions \citep{dalle2, imagen}, outperforming other generative models \citep{diffusion_beat_gan}. Specifically, we follow \citet{sde} and learn a state-conditioned diffusion model $s_\theta$ to predict the time-dependent noise added to the action ${\bm{a}}$ sampled from the behavior policy $\mu(\cdot|{\bm{s}})$:
+\begin{equation}
+\theta = \mathop{\mathrm{arg \ min}}_{\theta} \quad \mathbb{E}_{({\bm{s}}, {\bm{a}}) \sim D^\mu,\bm{\epsilon}, t}[\| \sigma_t \mathbf{s}_\theta(\alpha_t{\bm{a}}+\sigma_t\bm{\epsilon}, {\bm{s}}, t) + \bm{\epsilon} \|_2^2],
+\end{equation}
+where $\bm{\epsilon}\sim \mathcal{N}(0,\bm{I})$, $t\sim\mathcal{U}(0,T)$. $\alpha_t$ and $\sigma_t$ are determined by the forward diffusion process. Intuitively $s_\theta$ is trained to denoise ${\bm{a}}_t := \alpha_t {\bm{a}} + \sigma_t \bm{\epsilon}$ into the unperturbed action ${\bm{a}}$ such that ${\bm{a}}_T \sim \mathcal{N}(0,\bm{I})$ can be transformed into ${\bm{a}} \sim \mu_\theta(\cdot|{\bm{s}})$ by solving an inverse ODE defined by $s_\theta$ (\Eqref{Eq:prob_ode}).
+
+\subsection{Q-learning via in-sample planning}
+\label{imp}
+Generally, Q-learning can be achieved via the Bellman expectation operator:
+\begin{equation}
+    \label{Eq:one_step_bellman}
+    \mathcal{T}^\pi Q({\bm{s}}, {\bm{a}}) = r({\bm{s}}, {\bm{a}}) + \gamma\mathbb{E}_{{\bm{s}}' \sim P(\cdot|{\bm{s}},{\bm{a}}), {\bm{a}}' \sim \pi(\cdot|{\bm{s}}')} Q({\bm{s}}', {\bm{a}}').
+\end{equation}
+However, $\mathcal{T}^\pi$ is based on one-step bootstrapping, which has two drawbacks: First, this can be computationally inefficient due to its dependence on many steps of extrapolation. This drawback is exacerbated in diffusion settings since drawing actions from policy $\pi$ in \Eqref{Eq:one_step_bellman} is also time-consuming because of many iterations of Langevin-type sampling. Second, estimation errors may accumulate over long horizons. To address these problems, we take inspiration from episodic learning methods \citep{MFEC, vem} and propose a planning-based operator $\mathcal{T}^\pi_\mu$:
+\begin{equation}
+    \label{Eq:planning_operator}
+    \mathcal{T}^\pi_\mu Q({\bm{s}}, {\bm{a}}) := \max_{n \geq 0}\{(\mathcal{T}^{\mu})^{n}\mathcal{T}^{\pi}Q({\bm{s}}, {\bm{a}})\},
+\end{equation}
+where $\mu$ is the behavior policy. $\mathcal{T}^\pi_\mu$ combines the strengths of both the n-step operator $(\mathcal{T}^{\mu})^{n}$, which enjoys a fast contraction property, and the operator $\mathcal{T}^\pi$, which has a more desirable fixed point. We prove in Appendix \ref{analysis} that $\mathcal{T}^\pi_\mu$ is also convergent, and its fixed point is bounded between $Q^\pi$ and $Q^*$.
+
+Practically, given a dataset $\mathcal{D}^\mu = \{(s_n, a_n, r_n)\}$ collected by behavior $\mu$, with $n$ being the timestep in a trajectory. We can rewrite \Eqref{Eq:planning_operator} in a recursive manner to calculate the Q-learning targets:
+\begin{align}
+    \label{Eq:planning:1}
+    &R_{n}^{(k)} = r_n + \gamma\max(R_{n+1}, V_{n+1}^{(k-1)}), \\
+    \label{Eq:planning:2}
+    \text{where} \quad &V_{n}^{(k-1)} := \mathbb{E}_{{\bm{a}} \sim \pi(\cdot|{\bm{s}}_n)} Q_\phi({\bm{s}}_n, {\bm{a}}), \\ 
+    \text{and} \quad &\phi = \mathop{\mathrm{arg \ min}}_{\phi} \quad \mathbb{E}_{({\bm{s}}_n, {\bm{a}}_n) \sim \mathcal{D}^\mu} \| Q_\phi({\bm{s}}_n, {\bm{a}}_n) - R_n^{(k-1)} \|_2^2.
+\end{align}
+Above $k \in \{1, 2, \dots \}$ is the iteration number. We define $R_{n}^{(0)}$ as the vanilla return of trajectories. \Eqref{Eq:planning:1} offers an implicit planning scheme within dataset trajectories that mainly helps to avoid bootstrapping over unseen actions and to accelerate convergence. \Eqref{Eq:planning:2} enables the generalization of actions in similar states across different trajectories (stitching together subtrajectories). Note that we have omitted writing the iteration superscript of $\pi$ and $\mu$ for simplicity. During training, we alternate between calculating new Q-targets $R_n$ and fitting the action evaluation model $Q_\phi$.
+
+The operator $\mathcal{T}^\pi_\mu$ is similar to the multi-step estimation operator $\mathcal{T}_{\text{vem}}$ proposed by \citet{vem}. A notable difference between the two operators is that $\mathcal{T}_{\text{vem}}$ is combined with expectile regression, and thus can only apply to deterministic environments, while our method also applies to stochastic settings. However, unlike $\mathcal{T}_{\text{vem}}$, $\mathcal{T}^\pi_\mu$ does not share the same fixed point with $\mathcal{T}^\pi$. 
+
+\begin{figure*} [t] \centering
+\includegraphics[width=1.00\textwidth]{pics/ant-medium-diverse-value.pdf}
+\caption{
+Visualizations of the implicitly planned Q-targets $R_n^{(k)}$ sampled from the dataset of an AntMaze task in four subsequent value iterations. The red pentagram stands for the reward signal. Implicit planning helps to iteratively stitch together successful subtrajectories.
+}
+\label{fig:ant_stitch}
+\end{figure*}
+
+\section{Related Work}
+\label{Related}
+\textbf{Reducing extrapolation error in offline RL}. Offline RL typically requires careful trade-offs between maximizing expected returns and staying close to the behavior policy. Once the learned policy deviates from the behavior policy, extrapolation error will be introduced in dynamic programming, leading to performance degrade \citep{bcq}. Several works propose to address this issue by introducing either policy regularization on the distributional discrepancy with the behavior policy \citep{bcq, bear, brac, minimal}, or value pessimism about unseen actions \citep{cql, fisher}. Another line of research directly extracts policy from the dataset through weighted regression, hoping to avoid selecting unseen actions \citep{awr, awac, crr}. However, some recent works observe that the trade-off techniques described above are not sufficient to reduce extrapolation error, and propose to learn Q-functions through expectile regression without ever querying policy-generated actions \citep{iql, vem}. Unlike them, We find that limited policy expressivity is the main reason that introduces extrapolation error in previous weighted regression methods, and use an expressive policy model to help reduce extrapolation error.
+
+\textbf{Dynamic programming over long horizons}. Simply extracting policies from behavior Q-functions can yield good performance in many D4RL tasks because it avoids dynamic programming and therefore the accompanied extrapolation error \citep{awr, bail, noeval}. However, this method performs poorly in tasks that have sparse rewards and require stitching together successful subtrajectories (e.g., Maze-like environments). Such tasks are also challenging for methods based on one-step bootstrapping because they might require hundreds of steps to reach the reward signal, with the reward discounted and estimation error accumulated along the way. Episodic memory-based methods address this problem by storing labeled experience in the dataset, and plans strictly within the trajectory to update evaluations of every decision \citep{MFEC, gem, vem}. The in-sample planning scheme allows dynamic programming over long horizons to suppress the accumulation of extrapolation error, which inspires our method.
+
+\textbf{Generative models for behavior modeling}. Cloning diverse behaviors in a continuous action space requires powerful generative models. In offline RL, several works \citep{bcq, bear, brac} have tried using generative models such as Gaussians or VAEs \citep{vae} to model the behavior policy. However, the learned behavior model only serves as an explicit distributional constraint for another policy during training. In broader RL research, generative adversarial networks \citep{gan}, normalizing flows \citep{flow} and energy-based models \citep{EBM} have also been used for behavior modeling \citep{gail,Parrot, EBI}. 
+Recently, diffusion models \citep{diffusion} have achieved great success in generating diverse and high-fidelity image samples \citep{diffusion_beat_gan}. However, exploration of its application in behavior modeling is still limited. \citet{diffuser} proposes to solve offline tasks by iteratively denoising trajectories, while our method uses diffusion models for single-step decision-making.
+
+\section{Experiments}
+In the following sections, we evaluate the performance of SfBC using several related or state-of-the-art offline RL methods as baselines.
+We additionally gain insight into SfBC by studying the following two questions: 
+1) How does SfBC benefit from an expressive generative policy in performing diverse behavior learning? 
+2) Which part of SfBC has a strong influence on the performance of the algorithm?
+
+\begin{table*}[t]
+\centering
+\small
+\resizebox{1.0\textwidth}{!}{%
+\begin{tabular}{llccccccccc}
+\toprule
+\multicolumn{1}{c}{\bf Dataset} & \multicolumn{1}{c}{\bf Environment} & \multicolumn{1}{c}{\bf SfBC (Ours)}& \multicolumn{1}{c}{\bf IQL}  & \multicolumn{1}{c}{\bf VEM} & \multicolumn{1}{c}{\bf AWR} & \multicolumn{1}{c}{\bf BAIL} & \multicolumn{1}{c}{\bf BCQ} & \multicolumn{1}{c}{\bf CQL}& \multicolumn{1}{c}{\bf DT} & \multicolumn{1}{c}{\bf Diffuser} \\
+\midrule
+Medium-Expert & HalfCheetah    & $\bf{91.4 \pm 0.5}$  &  $86.7     $&    -        & $52.7$  &   $72.2$     & $64.7$  &  $62.4$    & $\bf{86.8}$  & $    79.8$ \\
+Medium-Expert & Hopper         & $\bf{110.4 \pm 0.9}$ &  $     91.5$&   -         & $27.1$  & $\bf{106.2}$ & $100.9$ &   $98.7$   & $\bf{107.6}$ & $\bf{107.2}$ \\
+Medium-Expert & Walker         & $\bf{109.2 \pm 0.3}$ & $\bf{109.6}$&    -        & $53.8$  & $\bf{107.2}$ & $57.5$  & $\bf{111.0}$& $\bf{108.1}$& $\bf{108.4}$ \\
+\midrule
+Medium        & HalfCheetah    &  $ 42.4\pm 0.1$      &  $\bf{47.4}$&  $\bf{47.4}$& $37.4$  & $30.0$       & $40.7$  &  $44.4$    & $42.6$       & $ 44.2$ \\
+Medium        & Hopper         &  $\bf{65.3 \pm 4.9}$ &  $\bf{66.3}$&  $56.6$     & $35.9$  & $62.2$       & $54.5$  &$ 58.0 $    & $\bf{67.6}$  & $58.5$ \\
+Medium        & Walker         &  $\bf{78.3\pm 1.0}$  &  $\bf{78.3}$&  $74.0$     & $17.4$  & $73.4$       & $53.1$  &$\bf{79.2}$ & $74.0$       & $\bf{79.7}$ \\
+\midrule
+Medium-Replay & HalfCheetah    &  $ 38.1 \pm 2.1$&  $\bf{44.2}$&    -        & $40.3$  &   $40.3$     & $38.2$  &$\bf{46.2}$ & $36.6$       & $42.2$ \\
+Medium-Replay & Hopper         &  $72.3 \pm 4.4$      &  $\bf{94.7}$&    -        & $28.4$  &   $\bf{94.7}$& $33.1$  &   $48.6$   & $82.7$       & $\bf{96.8}$ \\
+Medium-Replay & Walker         &  $\bf{71.9 \pm 4.2}$ &  $\bf{73.9}$&    -        & $15.5$  &   $58.8$     & $15.0$  &   $26.7$   & $66.6$       & $61.2$ \\
+\midrule
+\multicolumn{2}{c}{\bf Average (Locomotion)}&$\bf{75.5}$ &  $\bf{76.9}$     &    -        & $34.3$  &   $71.6$     & $51.9$  &   $63.9$   & $\bf{74.7}$       & $\bf{75.3}$ \\
+\specialrule{.05em}{.4ex}{.1ex}
+\specialrule{.05em}{.1ex}{.65ex}
+Default       & AntMaze-umaze  &  $\bf{93.3 \pm 4.7}$ &  $87.5$& $87.5$ & $56.0$  & $85.0$       & $78.9$  & $74.0$     & $59.2$       & - \\
+Diverse       & AntMaze-umaze  &  $\bf{86.7 \pm 4.7}$ &  $62.2  $   & $78.0$      & $70.3$  & $76.7$       & $55.0$  &$\bf{84.0}$ & $53.0$       & - \\
+\midrule  
+Play          & AntMaze-medium &  $\bf{88.3 \pm 8.5}$ &  $71.2$     & $78.0$      & $0.0$   & $15.0$       & $0.0$   & $61.2$     & $0.0$        & - \\
+Diverse       & AntMaze-medium &  $\bf{90.0 \pm 4.1}$ &  $70.0$     & $77.0$      & $0.0$   & $23.3$       & $0.0$   & $53.7$     & $0.0$        & - \\
+\midrule
+Play          & AntMaze-large  &  $\bf{63.3 \pm 2.4}$ &  $39.6$     & $57.0$      & $0.0$   & $0.0$        & $6.7$   & $15.8$     & $0.0$        & - \\
+Diverse       & AntMaze-large  &  $41.7 \pm 7.1$      &  $47.5$     & $\bf{58.0}$ & $0.0$   & $8.3$        & $2.2$   & $14.9$     & $0.0$        & - \\
+\midrule
+\multicolumn{2}{c}{\bf Average (AntMaze)}&  $\bf{77.2}$         &  $63.0$     & $72.6$      & $21.0$  &   $46.7$     & $23.8$  &   $50.6$   & $18.7$       & - \\
+\specialrule{.05em}{.4ex}{.1ex}
+\specialrule{.05em}{.1ex}{.65ex}
+\multicolumn{2}{c}{\bf Average (Maze2d)}&  $74.0$              &  $50.0$     & -            & $10.8$  & -           & $9.1$    &   $7.7$   & -           & $\bf{119.5}$ \\
+\specialrule{.05em}{.4ex}{.1ex}
+\specialrule{.05em}{.1ex}{.65ex}
+\multicolumn{2}{c}{\bf Average (FrankaKitchen)}&  $\bf{57.1}$         &  $53.3$     & -          & $8.7$   & -           & $11.7$  &   $48.2$   & -           & - \\
+\specialrule{.05em}{.4ex}{.1ex}
+\specialrule{.05em}{.1ex}{.65ex}
+Both-side       & Bidirectional-Car&$\bf{100.0 \pm 0.0}$&  $15.7$        & $0.0$  &   $0.0$ & $52.0$       & $88.0$  &   $42.3$   & $33.3$       & - \\
+Single-side        & Bidirectional-Car&$\bf{100.0 \pm 0.0}$&  $\bf{100.0}$       & $\bf{100.0}$&  $\bf{96.3}$ & $\bf{100.0}$      & $\bf{100.0}$  &   $\bf{100.0}$  & $\bf{100.0}$      & - \\
+
+\bottomrule
+\end{tabular}
+}
+\caption{
+Evaluation numbers of SfBC. We report the mean and standard deviation over three seeds for SfBC. Scores are
+normalized according to \citet{d4rl}. Numbers within 5 percent of the maximum in every individual task are highlighted in boldface. Sources of referenced scores and experimental details are provided in Appendix \ref{details}. Note that Diffuser leverages the prior knowledge that Maze2d is a goal-based environment in ``trajectory inpainting'' while other algorithms don't.}
+\label{tbl:results}
+\end{table*}
+
+\subsection{Evaluations on D4RL Benchmarks}
+In Table \ref{tbl:results}, we compare the performance of SfBC to multiple offline RL methods in several D4RL \citep{d4rl} tasks. 
+\texttt{MuJoCo locomotion} is a classic benchmark where policy-generated datasets only cover a narrow part of the state-action space, so avoiding querying out-of-sample actions is critical \citep{bcq, cql}. The Medium dataset of this benchmark is generated by a single agent, while the Medium-Expert and the Medium-Replay dataset are generated by a mixture of policies. 
+\texttt{AntMaze} is about an ant robot navigating itself in a maze, which requires both low-level robot control and high-level navigation. Since the datasets consist of undirected trajectories, solving AntMaze typically requires the algorithm to have strong ``stitching'' ability \citep{d4rl}. Different environments contain mazes of different sizes, reflecting different complexity.
+\texttt{Maze2d} is very similar to AntMaze except that it's about a ball navigating in a maze instead of an ant robot. \texttt{FrankaKitchen} are robot-arm manipulation tasks. 
+We only focus on the analysis of MuJoCo locomotion and AntMaze tasks due to the page limit. 
+Our choices of referenced baselines are detailed in Appendix \ref{choice_baseline}. 
+
+Overall, SfBC outperforms most existing methods by large margins in complex tasks with sparse rewards such as AntMaze. We notice that VEM also achieves good results in AntMaze tasks and both methods share an implicit in-sample planning scheme, indicating that episodic planning is effective in improving algorithms' stitching ability and thus beneficial in Maze-like environments. In easier locomotion tasks, SfBC provides highly competitive results compared to state-of-the-art algorithms. It can be clearly shown that performance gain is large in datasets generated by a mixture of distinctive policies (Medium-Expert) and is relatively small in datasets that are highly uniform (Medium). This is reasonable because SfBC is motivated to better model diverse behaviors.
+
+\subsection{Learning from Diverse Behaviors}
+\label{lfdb}
+\begin{figure} [t] \centering
+\includegraphics[width=1.00\textwidth]{pics/toy-action-visualize32.pdf}
+\caption{
+Visualizations of actions taken by different RL agents in the Bidirectional-Car task. The ground truth corresponds to an agent which always takes the best actions, which is either 1.0 or -1.0. White space indicates suboptimal decisions. Green bounding boxes indicate possible initial states.
+}
+\label{fig:toyacion}
+\end{figure}
+In this section, we analyze the benefit of modeling behavior policy using highly expressive generative models. Although SfBC outperforms baselines in many D4RL tasks. The improvement is mainly incremental, but not decisive. We attribute this to the lack of multiple optimal solutions in existing benchmarks. 
+To better demonstrate the necessity of introducing an expressive generative model, we design a simple task where a heterogeneous dataset is collected in an environment that allows two distinctive optimal policies.
+
+\textbf{Bidirectional-Car task}. As depicted in Figure \ref{fig:illustration}, we consider an environment where a car is placed in the middle of two endpoints.
+The car chooses an action in the range [-1,1] at each step, representing throttle, to influence the direction and speed of the car. The speed of the car will \textit{monotonically} increase based on the absolute value of throttle. The direction of the car is determined by the sign of the current throttle. Equal reward will be given on the arrival of either endpoint within the rated time. 
+It can be inferred with ease that, in any state, the optimal decision should be either 1 or -1, which is not a unimodal distribution. The collected dataset also contains highly diverse behaviors, with an approximately equal number of trajectories ending at both endpoints. For the comparative study, we collect another dataset called ``Single-Side'' where the only difference from the original one is that we remove all trajectories ending at the left endpoint from the dataset.
+
+We test our method against several baselines, with the results given in Table \ref{tbl:results}.
+Among all referenced methods, SfBC is the only one that can always arrive at either endpoint within rated time in the Bidirectional-Car environment, whereas most methods successfully solve the ``Single-Side'' task. To gain some insight into why this happens, we illustrate the decisions made by an SfBC agent and other RL agents in the 2-dimensional state space. As is shown in Figure \ref{fig:toyacion}, the SfBC agent selects actions of high absolute values at nearly all states, while other unimodal actors fail to pick either one of the optimal actions when presented with two distinctive high-rewarding options. Therefore, we conclude that an expressive policy is necessary for performing diverse behavior learning. 
+\subsection{Ablation Studies}
+\label{Sec:ablation}
+\begin{table*}[t]
+\centering
+\small
+\begin{tabular}{cccccc}
+\toprule
+\multicolumn{1}{c}{\bf Taks} & \multicolumn{1}{c}{\bf SfBC }& \multicolumn{1}{c}{\bf SfBC + Gaussian}  & \multicolumn{1}{c}{\bf SfBC + VAE} & \multicolumn{1}{c}{\bf SfBC - Planning} \\
+\midrule
+Medium-Expert    &  $\bf{103.7 \pm 0.6}$&  $86.2 \pm 4.7$         &  $95.5 \pm 4.8$ &  $\bf{103.3 \pm 0.9} $  \\
+Medium           &  $\bf{62.0 \pm 2.9}$ &  $\bf{60.9} \pm 1.1$         &  $\bf{62.7 \pm 2.5} $     &  $\bf{60.9 \pm 2.5} $   \\
+Medium-Replay    &  $\bf{60.8 \pm 3.6}$ &  $56.6 \pm 4.6$         &  $54.4 \pm 3.7 $     &  $52.8 \pm 1.5 $ \\
+\midrule
+\multicolumn{1}{c}{\bf Average (Locomotion)}&  $\bf{75.5 \pm 2.3}$ &  $67.9 \pm 3.3$         &  $70.9 \pm 3.5 $     &  $\bf{72.3 \pm 1.8} $   \\
+\midrule
+AntMaze-umaze    &  $\bf{90.0 \pm 4.7}$&  $\bf{90.8 \pm 2.4}$         &  $85.0 \pm 3.7$ &  $\bf{88.4 \pm 8.3}$  \\
+AntMaze-medium   &  $\bf{89.2 \pm 6.7}$ &  $82.5 \pm 5.8$         &  $66.7 \pm 5.3 $     &  $34.2 \pm 5.3 $   \\
+AntMaze-large    &  $\bf{52.5 \pm 5.3}$ &  $35.0 \pm 7.8$         &  $27.5 \pm 5.8 $     &  $7.5 \pm 6.9 $ \\
+\midrule
+\multicolumn{1}{c}{\bf Average (AntMaze)}&  $\bf{77.2 \pm 5.2}$ &  $69.4 \pm 5.8$         &  $59.7 \pm 4.8 $     &  $43.3 \pm 5.5 $   \\
+\bottomrule
+\end{tabular}
+\caption{Ablations of generative modeling methods and the implicit planning method. We report performance numbers averaged over three random seeds and multiple similar tasks. Detailed experimental results appear in Appendix \ref{missing}.}
+\label{tbl:ablation}
+\end{table*}
+We provide experimental results for several variants of SfBC in Table \ref{tbl:ablation}. 
+
+\textbf{Diffusion vs. other generative models}.
+Our first ablation study aims to evaluate 3 variants of SfBC which are respectively based on diffusion models \citep{diffusion}, Gaussian probabilistic models and latent-based models (VAEs, \citet{vae}). The three variants use exactly the same training framework with the only difference being the behavior modeling method. The diffusion-based policy outperforms the other two variants by a clear margin in most experiments, especially in tasks with heterogeneous datasets (e.g., Medium-Expert), indicating that diffusion models are fit for ``high-fidelity'' behavior modeling.
+
+\textbf{Implicit in-sample planning}.
+To study the importance of implicit in-sample planning on the performance of SfBC, we first visualize the estimated state values learned at different iterations of Q-learning in an AntMaze environment (Figure \ref{fig:ant_stitch}). We can see that implicit planning helps to iteratively stitch together successful subtrajectories and provides optimistic action evaluations. 
+Then we compare SfBC to a variant that removes the iterative planning scheme and instead learns the Q-function purely from vanilla returns. As shown in Table \ref{tbl:ablation}, implicit planning is beneficial in complex tasks like AntMaze-Medium and AntMaze-Large. However, it is less important in MuJoCo-locomotion tasks, except for Medium-Replay tasks in which many data  trajectories suffer from an early-truncated problem and requires dynamic programming for more accurate evaluations. This finding is consistent with a prior work \citep{noeval}. 
+
+\section{Conclusion}
+In this work, we address the problem of limited policy expressivity in previous weighted regression methods by decoupling the policy model into a behavior model and an action evaluation model. Such decoupling allows us to use a highly expressive diffusion model for high-fidelity behavior modeling, which is further combined with a planning-based operator to reduce extrapolation error. Our method enables learning from a heterogeneous dataset in a continuous action space while avoiding selecting out-of-sample actions. Experimental results on the D4RL benchmark show that our approach outperforms state-of-the-art algorithms in most tasks. With this work, we hope to draw attention to the application of high-capacity generative models in offline RL.
+
+

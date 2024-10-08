@@ -1,0 +1,505 @@
+\section{Impact of larger training batches}
+\label{app:large_batches}
+
+In this section, we provide the results of training in a regular Textual Inversion setup with much larger batches.
+As we demonstrate in~\cref{fig:loss_by_batch}, the loss dynamics remain the same even if we increase the batch size to 128, which is 64 times larger than the default one and thus requires 64x more time for a single optimization step.
+Although the gradient norm of training runs with extremely large batches (shown in~\cref{fig:grads_by_batch}) begins to display behavior that is more indicative of convergence, using such batches is less practical than using an early stopping criterion. 
+Specifically, when training with these batch sizes, the quality of samples reaches its peak at approximately 250 training steps. 
+This corresponds to $\approx$ 16,000 forward and backward passes with the batch size of 4 (or 8,000 with the batch size of 8 --- the largest size that fits into an 80GB GPU for SD) and thus gives no meaningful speedup to the inversion procedure.
+
+\setlength{\intextsep}{12pt}
+\begin{figure}[htb]
+\begin{subfigure}{0.49\textwidth}
+    \centering
+    \includegraphics[width=\linewidth]{figures/train_loss_by_batch.pdf}
+    \caption{Training loss dynamics.}
+    \label{fig:loss_by_batch}
+\end{subfigure}\hfill
+\begin{subfigure}{0.49\textwidth}
+    \centering
+    \includegraphics[width=\linewidth]{figures/grads_by_batch.pdf}
+    \caption{Gradient norm dynamics.}
+    \label{fig:grads_by_batch}
+\end{subfigure}
+\vspace{-6pt}
+\caption{Training dynamics of Textual Inversion for a single concept with different batch sizes.}
+\vspace{-12pt}
+\end{figure}
+
+\section{Evaluation of other stopping criteria}
+\label{app:other_stopping_criteria}
+
+Besides the ratio of rolling variance to global variance used in DVAR, we also experimented with other metrics for early stopping that consider the behavior of $\mathcal{L}_{det}$.
+All of these metrics have a hyperparameter $n$ that denotes the number of last objective values to use for computing aggregates.
+
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.85\linewidth]{figures/criteria-appendix.pdf}
+    \vspace{-6pt}
+    \caption{The dynamics of metrics for other stopping criteria.}
+    \label{fig:other_criteria}
+    \vspace{-12pt}
+\end{figure}
+
+To obtain the EMA percentile, we calculate the Exponential Moving Average (with $\alpha = 0.1$) at the moment $t$ and $n$ steps back, then apply the following formula: $\frac{EMA(t) - EMA(t-n)}{EMA(t-n)}$. The Hall criterion is simply the difference between the rolling max and the rolling min divided by the moving average over n steps: $\frac{max(\mathcal{L}_{det}[:-n]) - min(\mathcal{L}_{det}[:-n])}{mean(\mathcal{L}_{det}[:-n])}$. The Trend is the slope of a linear regression trained on a loss values in a window of size $n$, which was obtained at each step using the exact formula. One of the distinguishing problems of this criteria is its longer evaluation compared to the others.
+
+The dynamics of all these metrics are shown in \cref{fig:other_criteria}. Their main problem was unstable behavior due to which, we could not find hyperparameters that can be transferred between concepts.
+
+
+\section{Other examples of the convergence process for Textual Inversion}
+\label{app:other_examples}
+We provide additional examples of the behavior of standard model convergence indicators in~\cref{fig:more_examples}. While the reconstruction loss and the gradient norm are hardly informative, both the CLIP image score and $\mathcal{L}_{det}$ exhibit a trend that corresponds to improvements in the visual quality of samples.
+We also demonstrate that samples with \textit{lower CLIP score} can be \textit{more faithful to training data} in \cref{fig:clip_bad_examples}.
+This validates our claim about the inconsistency of CLIP scores with human evaluation.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\linewidth]{figures/figure2_appendix.pdf}
+    \caption{Other examples of the convergence process for Textual Inversion.}
+    \label{fig:more_examples}
+\end{figure}
+
+\setlength{\intextsep}{8pt}
+\begin{figure}[t]
+     \centering
+     \begin{subfigure}[b]{0.49\textwidth}
+         \centering
+         \includegraphics[width=\textwidth]{figures/figure7a.pdf}
+         \caption{Samples after training for 642 steps (DVAR) have lower scores than samples after 445 steps (``Few iters'') yet are more detailed.}
+         \label{fig:clip_bad_examples_a}
+     \end{subfigure}
+     \hfill
+     \begin{subfigure}[b]{0.49\textwidth}
+         \centering
+         \includegraphics[width=\textwidth]{figures/figure7b.pdf}
+         \caption{SD generates images of much higher quality and similarity to the source, but is scored lower than LDM.}
+         \label{fig:clip_bad_examples_b}
+     \end{subfigure}
+     \vspace{-10pt}
+        \caption{Examples illustrating the discrepancy between relative CLIP scores of two sets of samples and their visual quality.}
+        \label{fig:clip_bad_examples}
+\end{figure}
+
+\section{Example pseudocode of using DVAR for training}
+\label{app:full_code}
+
+In~\cref{lst:torch_like}, we provide an example PyTorch training loop that uses an implementation of DVAR defined in~\cref{fig:dvar_pseudocode}.
+This code samples the evaluation batch once before training and computes $\mathcal{L}_{det}$ on it after each training iteration.
+A full implementation of training with DVAR is given at \href{https://github.com/yandex-research/DVAR}{\texttt{github.com/yandex-research/DVAR}}.
+
+\begin{figure}[H]
+\centering
+\begin{minted}{python}
+def training_loop(model, train_dataloader, eval_losses, eval_batch,
+                  optimizer, window_size, threshold):
+               
+    eval_images, eval_captions = eval_batch
+    eval_stochastic = sample_everything(eval_batch)
+    eval_latents, eval_timesteps, eval_noisy_latents = eval_stochastic
+
+    for train_batch in train_dataloader:
+        images, captions = train_batch
+        latents, timesteps, noisy_latents = sample_everything(train_batch)
+    
+        optimizer.zero_grad()
+        denoised_latents = model(captions, noisy_latents, timesteps)
+        train_loss = F.mse_loss(denoised_latents, latents)
+        train_loss.backward()
+        optimizer.step()
+    
+        with torch.no_grad():
+            eval_denoised_latents = model(
+                eval_captions,
+                eval_noisy_latents,
+                eval_timesteps
+            )
+            eval_loss = F.mse_loss(eval_denoised_latents, eval_latents)
+            eval_losses.append(eval_loss)
+    
+        if DVAR(torch.tensor(eval_losses), window_size, threshold):
+            break
+
+\end{minted}
+\caption{PyTorch-like pseudocode of training with DVAR.}
+\label{lst:torch_like}
+\end{figure}
+
+
+
+\section{Background}
+\label{sect:background}
+
+In this section, we describe the context of our study and the key concepts from prior work that are necessary to understand the problem we attempt to solve.
+
+\subsection{Denoising Diffusion Probabilistic Models}
+\label{subsect:ddpm}
+Diffusion models~\cite{ddpm} are a class of generative models that has become popular in recent years due to their ability to generate both diverse and high-fidelity samples. They approximate the data distribution through iterative denoising of a variable $z_t$ sampled from Gaussian distribution. In simple words, the model $\epsilon_{\theta}$ is trained to predict the noise $\epsilon$, following the objective below:
+\begin{equation}
+\min_{\theta}\mathbb{E}_{z_0,\:\epsilon\sim N(0, I),\:t\sim U[1, T]}|| \epsilon - \epsilon_{\theta}(z_t, c, t)||^2_2.
+\end{equation}
+Here, $z_t$ corresponds to a Markov chain \textit{forward} process $z_t(z_0, \epsilon)=\sqrt{\alpha_t} z_0 + \sqrt{1-\alpha_t} \epsilon$ that starts from a sample $z_0$ of the data distribution. For example, in the image domain, $z_0$ corresponds to the target image, and $z_T$ is its version with the highest degree of corruption. In general, $c$ can represent the condition embedding from any other modality. The inference process occurs with a fixed time step $t$ and starts from $z_{t}$ equal to a sample from the Gaussian distribution.
+
+
+\subsection{Text-to-image generation}
+\label{subsect:ldm}
+The most natural and well-studied source of guidance for generative models is textual conditioning because of its convenience for the user, ease of collecting training data and significant improvements in text representations over the past several years. The condition vector is often obtained from Transformer-based~\cite{transformer} models like BERT~\cite{bert}. The tokenizer converts the input text into a sequence of tokens. After that, the encoder produces the final text embedding vector $c$ from them.
+
+State-of-the-art text-to-image models produce forward and reverse processes in the latent space of an autoencoder model $z_0=\mathcal{E}(x), x=\mathcal{D}(z_0)$, where $x$ is the original image, $\mathcal{E}, \mathcal{D}$ are encoder and decoder, respectively.
+We experiment with Latent Diffusion and Stable Diffusion v1.5, which use VAE~\cite{vae} as an encoder-decoder model for latent representations. Importantly, this class of autoencoder models is not deterministic, which makes inference even more stochastic but leads to higher diversity of samples. In total, given caption and image distributions $X, Y$, respectively, the training loss can be formulated as:
+\begin{gather}
+\mathcal{L}_{LDM} = \mathbb{E}_{y,x,\epsilon}|| \epsilon - \epsilon_{\theta}(z_t(\mathcal{E}(x), \epsilon), c(y), t) ||^2_2,\label{objective}\\
+y\sim Y, x\sim X, \epsilon\sim \mathcal{N}(0, I), t\sim U[0, T]
+\end{gather}
+
+
+\subsection{Textual Inversion} 
+
+Our work is based on Textual Inversion~\cite{textualinversion}, which is the simplest and potentially the most efficient method of diffusion models adaptation that has seen many applications shortly after its release\footnote{\href{https://hf.co/sd-concepts-library}{\texttt{hf.co/sd-concepts-library}}}.
+
+This method injects the target concept into the text-to-image model by inserting the new token $\hat{v}$ into the language model embedding space and optimizing the reconstruction loss for a few (typically 3--5) reference images $I$ with a fully frozen model. In more detail, the training process consists of sampling captions for a batch of pictures from $I$ converted into latent representations and training the diffusion model by optimizing \cref{objective}.
+
+The main advantage of this method from a practical point of view is the ability to flexibly operate with pseudo-word in natural language sentences, for example, by placing them into a different environment. Also, while this method is parameter-efficient, \citet{textualinversion} report that to achieve acceptable inversion quality, 6000 steps of the AdamW~\cite{adamw} optimizer are required, which equals to $\approx$2 GPU hours on most machines.
+\section{Conclusion}
+\label{sect:conclusion}
+
+In this paper, we analyze the training process of Textual Inversion and the impact of different sources of stochasticity on the dynamics of its objective.
+We show that removing all these sources makes the training loss much more informative during training.
+This finding motivates the creation of DVAR, a simple early stopping criterion that monitors the stabilization of the deterministic loss based on its running variance.
+Through extensive experiments, we verify that DVAR reduces the training time by 10--15 times while still achieving image quality similar to baselines.
+
+Because our findings and criterion do not rely on the specific details of Textual Inversion, it may be possible to study the same effects in other personalization methods for text-to-image generation, such as DreamBooth or Custom Diffusion.
+Moreover, our work and the challenges we described highlight the importance of better quantitative evaluation for this problem. 
+While we make a first step to reliable large-scale comparisons across multiple concepts with a curated subsample of ImageNet-R, future work may focus on building specialized benchmarks or more robust metrics that would better align with human evaluation.
+
+\section{Experiments}
+\label{sect:evaluation}
+
+In this section, we compare DVAR with several baselines in terms of sample quality for the learned concept (determined by the CLIP image score) and the training time (measured both in iterations and in minutes). Our goal is to verify that this early stopping criterion is broadly applicable and has little impact on the outcome of training.
+
+\subsection{Setup and data}
+We run our experiments on two models: original Latent Diffusion~\cite{ldm}, used in~\citet{textualinversion} for the majority of experiments, and Stable Diffusion v1.5. We take the hyperparameters for both models from the official repository\footnote{\href{https://github.com/rinongal/textual_inversion}{\texttt{github.com/rinongal/textual\_inversion}}} of Textual Inversion and use the implementation from the Diffusers library\footnote{\url{https://github.com/huggingface/diffusers/tree/main/examples/textual_inversion}}~\cite{diffusers}.
+
+To ensure that our findings are consistent across concepts, we would like to evaluate all methods on a large collection of images with renditions of different objects. Since personalized text-to-image generation is a relatively new problem, we found no established benchmarks for it. Hence, we propose to use a subset of the ImageNet-R dataset~\cite{imagenet-r} initially designed for studying image classification robustness. 
+As shown in \cref{fig:imagenet}, this dataset contains several different renditions of a single class and thus perfectly suits our task of learning a concept from its depictions. We manually select 3--5 images of 83 concepts representing different classes of ImageNet-R.
+
+\begin{figure}[h!]
+    \centering
+    \includegraphics[width=\linewidth]{figures/imagenet.pdf}
+    \caption{Examples of images collected from ImageNet-R.}
+    \label{fig:imagenet}
+\end{figure}
+
+Combining this dataset with training examples from~\citet{textualinversion} results in a total of 92 concepts. Our main results are obtained by training each method on all of these concepts, which in total took around 400 GPU hours. Each experiment used a single NVIDIA A100-80GB GPU.
+
+In our experiments, we observed that LDM fails to properly learn some of the concepts, which results either in much lower final scores for methods with a fixed number of iterations or in a higher number of iterations for early stopping methods. To reduce the impact of these outliers, we report the median and the interquartile range over all 92 concepts.
+
+\subsection{Baselines}
+
+We compare DVAR with four baselines: the original setup from~\citet{textualinversion} (named as ``Baseline''), early stopping based on the CLIP score of intermediate samples (``CLIP-s''), as well as the original setup with the reduced number of training iterations and no intermediate sampling.
+
+More specifically, the original setup runs for a predetermined number of 6100 training steps, sampling 8 images every 500 iterations and computing their CLIP similarity to the training set images.
+The final embedding is selected from the iteration with the best CLIP image score.
+CLIP-s evaluates intermediate results every 50 iterations and stops when the score fails to improve by more than 0.05 for 5 consecutive evaluations.
+These values of hyperparameters were chosen in our preliminary experiments and offer a tradeoff between faster termination and a smaller decrease in the quality of generated images.
+
+We include the baselines with a reduced number of iterations to verify the necessity of an adaptive early stopping criterion.
+Since both DVAR and CLIP-s rely on an external objective that can be expensive to compute, it might be faster to train for fewer iterations in general, possibly at the cost of the fidelity of learned concepts.
+However, note that these methods require estimating the smallest number of training steps that would be sufficient for most concepts.
+We compare two possible approaches: selecting the number of iterations as the maximum or as the average over all CLIP-s experiments on our dataset for a given model. 
+Applying the same approach to other models and datasets would involve rerunning such large-scale experiments.
+
+\subsection{Results}
+
+\begin{table}[t]
+\setlength{\tabcolsep}{4pt}
+\centering
+\caption{Comparison of iteration reduction methods for Textual Inversion. Best is in bold, second best is underlined.}
+\label{tab:key_results}
+\begin{tabular}{clll}
+\toprule
+Method              & CLIP score & Iterations & Time, min \\ \midrule
+\multicolumn{4}{c}{Stable Diffusion v1.5}                                     \\ \midrule
+Baseline & 0.742 $\pm$ 0.07 &  6100 & 52.6 $\pm$ 0.2 \\
+CLIP-s & 0.728 $\pm$ 0.08 & 400 $\pm$ 200 & 13.2 $\pm$ 5.9 \\
+Few iters (max) & 0.707 $\pm$ 0.09 &   750 &  5.4 $\pm$ 0.0 \\
+Few iters (mean) & 0.705 $\pm$ 0.08 &   445 &  \underline{3.8} $\pm$ 0.1 \\
+DVAR & 0.706 $\pm$ 0.09 & 384 $\pm$ 254 &  \textbf{3.3} $\pm$ 1.8 \\ \midrule
+\multicolumn{4}{c}{Latent Diffusion}                                \\ \midrule
+Baseline & 0.760 $\pm$ 0.08 &  6100 & 23.5 $\pm$ 0.5 \\
+CLIP-s & 0.753 $\pm$ 0.07 &  350 $\pm$ 50 &  3.8 $\pm$ 0.6 \\
+Few iters (max) & 0.732 $\pm$ 0.09 &   650 &  2.9 $\pm$ 0.5 \\
+Few iters (mean) & 0.724 $\pm$ 0.09 &   377 &  \textbf{1.9} $\pm$ 0.5 \\
+DVAR & 0.725 $\pm$ 0.08 & 395 $\pm$ 194 &  \underline{2.4} $\pm$ 0.8 \\
+\bottomrule
+\end{tabular}
+\vspace{-18pt}
+\end{table}
+The results of our experiments are shown in \cref{tab:key_results}. 
+As we can see, DVAR is either on par with or outperforms all of the baselines both in terms of the number of training iterations and the total runtime while being adaptive (unlike ``Few iters'') and not relying on costly intermediate sampling (unlike CLIP-s). 
+Furthermore, although CLIP-s and the original setup optimize the CLIP score by design (in the case of the baseline, this metric is used for choosing the best final checkpoint), ``Few iters'' and DVAR are able to achieve nearly the same final results. 
+
+We also observe that at a certain point during training, the visual quality of samples and their similarity to the original data becomes less correlated with the CLIP image score.
+This phenomenon is illustrated in \cref{fig:clip_bad_examples_a} of \cref{app:other_examples} and suggests that the CLIP score is suboptimal as a metric for this task. 
+As a result, the drop in CLIP scores observed in \cref{tab:key_results} should not be viewed as a significant decrease in quality.
+Our claim is partly supported by the fact that LDM has worse samples in general but is consistently better than SD in terms of CLIP scores (see \cref{fig:clip_bad_examples_b}). Thus, designing a metric more correlated with human judgment is an important research direction.
+
+\subsection{Analysis and ablation}
+\label{subsect:ablation}
+
+Having demonstrated the advantages of DVAR, we now perform a more detailed analysis of the effect of the changes we introduce to the procedure of Textual Inversion. We aim to answer a series of research questions around our proposed criterion, the behavior of the Latent Diffusion objective with all factors of variation fixed across iterations, and a few general design decisions in the original method.
+
+\paragraph{Is it possible to observe convergence without determinism?}
+To answer this question, we conduct a series of experiments where we ``unfix'' each component responsible for the stochasticity of the training procedure one by one. For each component, we aim to find the smallest size of the batch that allows preserving the indicativity of the evaluation loss. For large batch sizes, we accumulate losses from several forward passes.
+
+\begin{figure*}[h!]
+    \centering
+    \includegraphics[width=\linewidth]{figures/figure5.pdf}
+    \vspace{-18pt}
+    \caption{Loss behavior in the semi-deterministic setup: row names correspond to inputs that are resampled for each evaluation batch.}
+    \label{fig:unfix}
+    \vspace{-10pt}
+\end{figure*}
+
+Figure~\ref{fig:unfix} shows the results of these experiments. While for some parameters, increasing the batch size leads to a more evident trend in loss, the stochasticity brought by varying $t$ on each iteration cannot be eliminated even with batches as large as 512. This can be explained by the fact that the scale of the reconstruction loss is highly dependent on the timestep of the reverse diffusion process. Thus, aggregating it over multiple different points makes it completely uninformative, as the scale of trend is by several orders of magnitude less than the average values of the loss. 
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=\linewidth]{figures/figure6.pdf}
+    \vspace{-14pt}
+    \caption{$\mathcal{L}_{det}$ behavior in the fully deterministic setup with smaller batch sizes.}
+    \label{fig:smallbatch}
+    \vspace{-12pt}
+\end{figure}
+
+\paragraph{Is it possible to use smaller batches for evaluation and still detect convergence?}
+To address this question, we ran experiments with deterministic batches of size $1$ and $2$ for multiple concepts and generally observed the same behavior (as illustrated in \cref{fig:smallbatch}).
+However, the dynamics of the objective become more dependent on the timesteps that are sampled. As a result, the early stopping criterion becomes more brittle.
+Hence, we use a batch size of 4 in our main experiments, as it corresponds to a reasonable tradeoff between stability and computational cost.
+
+\paragraph{Is it necessary to manually choose the starting token?}
+The original Textual Inversion setup requires manual selection of an initialization token that coarsely describes the concept, which prevents making it automatic.
+One way to simplify this is to iterate over the text encoder vocabulary and to calculate which embedding results in the best CLIP text-to-image similarity with the train set. Our preliminary experiments show that this method results in tokens corresponding to the concept being inverted. 
+However, this procedure increases the overall runtime by roughly 5.4 minutes for the LDM tokenizer and by 7.4 for the SD tokenizer.
+
+By contrast, one can initialize with a random token, as this does not rely on an external model and is much faster. To evaluate these three strategies, we have manually selected initialization tokens for both LDM and SD model tokenizers for 9 concepts from~\cite{textualinversion} and ran our baseline experiment with different initialization strategies.
+
+\begin{table}[t]
+\vspace{-6pt}
+\caption{Comparison of concept embedding initialization methods.}
+\label{tab:inits}
+\centering
+\begin{tabular}{cll}
+\toprule
+Init              & Stable Diffusion & Latent Diffusion \\\midrule
+Best & \underline{0.785} $\pm$ 0.07 & \textbf{0.802} $\pm$ 0.02 \\
+Manual & \textbf{0.793} $\pm$ 0.07 & \textbf{0.802} $\pm$ 0.08 \\
+Random & 0.768 $\pm$ 0.07 & 0.794 $\pm$ 0.07\\ \bottomrule
+\end{tabular}
+\vspace{-10pt}
+\end{table}
+Our results in~\cref{tab:inits} show that it is possible to automate the process of initial embedding selection without any significant loss of quality using CLIP image-text similarities. Another competitive solution (trading off quality for time) is to start with a random token from the model vocabulary.
+
+
+
+\paragraph{Is Adam the best optimizer for Textual Inversion?}
+
+One possible way to accelerate Textual Inversion is to change the optimizer, aiming for either a more efficient optimization step or fewer iterations until convergence. During our preliminary experiments, we tested several other choices: most of them either required extensive hyperparameter tuning for each training concept or converged to a much lower quality. However we find that using SAM~\cite{sam} results in higher average quality, but it comes at the cost of increased single iteration time. Results of this experiment on 9 concepts from~\cite{textualinversion} are given in Table~\ref{tab:optimizers}.
+
+\begin{table}[]
+\caption{Comparison of optimizers for Textual Inversion.}
+\label{tab:optimizers}
+\centering
+\begin{tabular}{cll}
+\toprule
+Method              & CLIP score & Time, min \\ \midrule
+\multicolumn{3}{c}{Stable Diffusion}\\ \midrule
+AdamW & 0.785 $\pm$ 0.07 & \textbf{52.6} $\pm$ 0.2 \\
+SAM & \textbf{0.794} $\pm$ 0.04 & 63.9 $\pm$ 0.1 \\
+\midrule
+\multicolumn{3}{c}{Latent Diffusion}\\ \midrule
+AdamW & 0.802 $\pm$ 0.02 & \textbf{23.4} $\pm$ 0.4 \\
+SAM & \textbf{0.835} $\pm$ 0.03 & 29.6 $\pm$ 0.7 \\
+\bottomrule
+\end{tabular}
+\end{table}
+\section{Introduction}
+\label{sect:intro}
+
+Large text-to-image models have recently attracted the attention of the research community due to their ability to generate high-quality and diverse images that correspond to the user's prompt in natural language~\cite{dalle,glide,dalle2,imagen,ldm}.
+The success of these models has driven the development of new tasks that leverage their ability to draw objects in novel environments.
+One particularly interesting task is \textit{personalization} (or \textit{adaptation}) of text-to-image models to a small dataset of images provided by the user.
+The goal of this task is to learn the precise details of a specific object or visual style captured in these images: after personalization, the model should be able to generate novel renditions of this object in different contexts or imitate the style that was provided as an input.
+
+Two prominent methods for text-to-image model personalization are Textual Inversion~\cite{textualinversion} and DreamBooth~\cite{dreambooth}: the first one trains \textit{a single token embedding} for the target dataset while keeping most of the weights unchanged, while the second one finetunes the entire model.
+Still, a major obstacle on the path to broader adoption of such methods is their computational inefficiency.
+Ideally, it should be possible to personalize models to user's images in real or close to real time.
+As finetuning the entire model with DreamBooth is unavoidably expensive and less scalable, we view parameter-efficient methods such as Textual Inversion as more promising steps in this direction. 
+However, as noted by the authors of the original paper, the training time of this method can be prohibitively long, taking up to two hours for a single concept.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\linewidth]{figures/teaser.pdf}
+    \vspace{-16pt}
+    \caption{A summary of our key findings: the quality of Textual Inversion results saturates early on, but the training loss does not indicate that. Evaluating the same loss on a batch of data fixed throughout the run makes the training dynamics much more interpretable and useful for early stopping.}
+    \label{fig:teaser}
+    \vspace{-16pt}
+\end{figure}
+
+Thus, in this work, we aim to address the following question: \textbf{is Textual Inversion inherently time-consuming and can we decrease its runtime while ensuring similar quality?}
+Focusing on the training dynamics, we observe that the CLIP~\cite{clip} image similarity scores (often used to assess image quality in such tasks) grow sharply only in the early stages of training and hardly improve after that.
+However, as shown in \cref{fig:teaser}, neither the training loss nor the gradient norm indicate the convergence of the concept embedding in the original setting, which prevents us from stopping inversion earlier.
+While it is possible to score samples from the model with CLIP during training, generating them can take quite a long time.
+
+With that in mind, we study the training objective itself and attempt to understand the reasons behind its noisy dynamics. As we demonstrate, the primary cause lies in several sources of stochasticity (e.g., diffusion time steps or VAE samples) that introduce noise to the loss function. If these random variables are sampled only once and then fixed across training iterations, the loss for these inputs gets more informative, and the trend of convergence becomes evident even when training with a fully stochastic objective.
+
+Motivated by this finding, we propose \textbf{D}eterministic \textbf{VAR}iance Evaluation (DVAR), an early stopping criterion for Textual Inversion that generates a single fixed batch of inputs at the beginning of training and evaluates the model on this batch after each optimization step. This criterion is straightforward to implement, has few interpretable hyperparameters, and correlates with the concept embedding convergence in terms of the CLIP image score.
+
+To have a meaningful quantitative evaluation both for our method and for future research in text-to-image adaptation, we repurpose a subset of ImageNet-R~\cite{imagenet-r}, a dataset for robustness research with diverse renditions of ImageNet classes.
+We validate DVAR by comparing it with a range of baselines, showing that it is possible to perform Textual Inversion much faster (up to 15x) with little to no decline in quality.
+
+Lastly, we revisit several design decisions made by~\citet{textualinversion} without altering the overall inversion procedure.
+For example, we show that it is possible to reduce manual effort by automatically choosing the starting word embedding with CLIP. Alternatively, using an embedding of a random token is a competitive and much faster option.
+Also, the choice of the optimizer matters: using Sharpness-Aware Minimization (SAM,~\citealp{sam}) can improve the inversion outputs.
+
+To summarize, our contributions are as follows:
+\begin{itemize}
+    \item We investigate the cases that make it difficult to detect the convergence of Textual Inversion from training-time metrics. As we demonstrate, the objective becomes much more interpretable across iterations if we compute it on the same batch of inputs without resampling any random variables.
+    \item We propose DVAR, a simple early stopping criterion for Textual Inversion. This criterion is easy to compute and use, does not affect the training process and correlates with convergence in terms of visual fidelity.
+    \item We compare this criterion with several baselines on two popular text-to-image models (Latent Diffusion and Stable Diffusion v1.5), evaluating all methods at scale by repurposing a subset of the ImageNet-R dataset\footnote{The code of our experiments is available at \href{https://github.com/yandex-research/DVAR}{\texttt{github.com/yandex-research/DVAR}}.}. DVAR offers a significant decrease in inversion runtime while having comparable results both with the original method and other baselines.
+    \item We suggest and evaluate several general improvements of Textual Inversion. In particular, we show that embeddings of the top word by CLIP ranking perform on par with manual choice and that using Sharpness-Aware Minimization~\cite{sam} can further improve the outcome of training.
+\end{itemize}
+
+\section{Related work}
+
+Most existing methods for text-to-image personalization concurrent to Textual Inversion achieve the goal by finetuning diffusion models. 
+While Textual Inversion only learns the embedding of the target token, DreamBooth~\cite{dreambooth} does the same with a fully unfrozen model, and Custom Diffusion~\cite{custom-diff} trains only a subset of parameters in cross-attention layers. Imagic~\cite{imagic} uses finetuning in a more complex pipeline, dividing training into two phases. In the first phase, this method optimizes the embedding in the space of texts instead of tokens, and in the second one, it trains the model separately to reconstruct the target image from the embedding. The optimized and target embeddings can then be used for image manipulation by interpolating between them.
+
+Textual Inversion can also be broadly viewed as an instance of image editing: given the caption and the image generated from it, we want to change the picture according to the new prompt. There are several methods in this field that use diffusion models and have similar problem statements. For example, Prompt-to-Prompt~\cite{prompt2prompt} solves the task by injecting the new prompt into cross-attention, and MagicMix~\cite{magicmix} replaces the guidance vector after several steps during inference. The intrinsic disadvantage of such methods is the need for an additional inversion step for editing existing images, like DDIM~\cite{ddim} or Null-text Inversion~\cite{null-text}.
+\section{Understanding Textual Inversion dynamics}
+\label{sect:study}
+
+As we explained previously, the goal of our study is to find ways of speeding up Textual Inversion without significantly degrading the quality of learned concept representations.
+To accomplish this goal, we focus on analyzing the optimization process of running inversion on a given dataset.
+
+In this section, we apply Textual Inversion to concepts released by~\citet{textualinversion}, using Stable Diffusion v1.5\footnote{We chose this checkpoint because it was given as a default in the Diffusers library example for Textual Inversion.} as the base model.
+We monitor several metrics during training:
+\begin{enumerate}
+\item First, one would hope to observe that optimizing the actual training objective would lead to its convergence, and thus we track the value of $\mathcal{L}_{LDM}$.
+\item Second, we monitor the gradient norm, which is often used for analyzing convergence in non-convex optimization. As the model converges to a local optimum, the norm of its gradient should also decrease to zero.
+\item Lastly, every 50 training iterations, we generate 8 samples from the model using the current concept embedding and score them with the CLIP pairwise image similarity score using the training set as references. In the original Textual Inversion paper, this metric is named the reconstruction score and is used for quantitative evaluation.
+\end{enumerate}
+
+Note that we do not rely on the CLIP text-image score for captions: in our preliminary experiments, we observed no identifiable dynamics for this metric when using the entire set of CLIP caption templates; writing more specific captions and choosing the most appropriate ones for each concept takes substantial manual effort; hence, we leave it out of the scope for this paper. Similarly, the principled design of human evaluation procedures for text-to-image personalization is an open research question that can be studied in future work.
+
+
+\subsection{Initial observations}
+
+First, we would like to view the training dynamics in terms of extrinsic evaluation: by measuring how the CLIP image score changes throughout training, we can at least estimate how fast the samples begin to resemble the training set.
+For this, we perform inversion of all 9 concepts released by~\cite{textualinversion}: an example of such an experiment for one concept is available in \cref{fig:convergence_example}.
+
+From these experiments, we observe that the CLIP image score exhibits sharper growth at an early point of training (often within the first 1000 iterations) and stabilizes later.
+This finding agrees with the results of our own visual inspection: the generated samples for most concepts undergo the most drastic changes at the beginning and do not improve afterward.
+Practically, this observation means that we can interrupt the inversion process much earlier without major drawbacks if we had a criterion for detecting its convergence.
+What indicators can we use to create such a criterion?
+
+\begin{figure}[t]
+    \centering\includegraphics[width=\linewidth]{figures/figure2.pdf}
+    \caption{An overview of the convergence process for Textual Inversion with an example concept. \cref{fig:more_examples} in~\cref{app:other_examples} contains more examples.} 
+    \label{fig:convergence_example}
+\end{figure}
+
+The most straightforward idea is to consider the training loss $\mathcal{L}_{LDM}$.
+Unfortunately, it is not informative in the default setting: as we also demonstrate in \cref{fig:convergence_example}, the training loss exhibits too much noise and has no trend that could indicate the model convergence.
+The gradient norm of the concept embedding is also hardly informative: in the same experiment, we can see that it actually increases during training instead of decreasing.
+As we show in~\cref{app:large_batches}, these findings hold in general even for much larger training batches, which means that the direct way of making loss less stochastic is not practical for this problem.
+Still, as reported in the original paper and shown by samples and their CLIP scores, the model successfully learns the input concepts. 
+Curiously, we see no reflection of that in the dynamics of the objective that is being optimized.
+
+Another approach to early stopping is to leverage our observations about the CLIP image score and measure it during training, terminating when the score fails to improve for a specific number of iterations. However, there are two downsides to this approach. First, frequently sampling images during training significantly increases the total runtime of the method. Second, this criterion can be viewed as directly maximizing the CLIP score, which is known to produce adversarial examples for CLIP instead of actually improving the image quality~\cite{glide}.
+
+\subsection{Investigating the sources of randomness}
+\label{subsect:randomness_study}
+
+We hypothesize that the cause of excessive noise in \cref{objective} is several factors of randomness injected at each training step, as we mentioned previously in~\cref{subsect:ldm}. Thus, we aim to estimate the influence of the following factors on the dynamics of the inversion objective:
+
+\vspace{-6pt}
+\begin{enumerate}
+    \item Input images $x$
+    \item Captions corresponding to images $y$
+    \item VAE Latent representations for images $\mathcal{E}(x)$
+    \item Diffusion time steps $t$
+    \item Gaussian diffusion noise $\epsilon$
+\end{enumerate}
+\vspace{-6pt}
+
+Now, our goal is to identify the factors of stochasticity that affect the training loss.
+Importantly, we \textbf{do not change} the \textbf{training} batches, as it alters the objective of Textual Inversion and might affect its outcome.
+Thus, we train the model in the original setting (with batches of entirely random data) but evaluate it on batches with some sources of randomness \textbf{fixed} across all iterations.
+Note that $\mathcal{E}(x)$ depends on $x$: if we resample the input images, we also need to resample their latent representations.
+
+First, we try the most direct approach of making \textit{everything} deterministic: in other words, we compute $\mathcal{L}_{det}$, which is the same as $\mathcal{L}_{LDM}$, but instead of the expectation over random data and noise, we compute it on the same inputs after each training step. Formally, we can define it as
+
+\begin{equation}
+\mathcal{L}_{det} = || \epsilon - \epsilon_{\theta}(z_t(\mathcal{E}(x), \epsilon), c(y), t) ||^2_2,
+\end{equation}
+
+with $x$, $y$, $\mathcal{E}(x)$, $t$, and $\epsilon$ sampled only once in the beginning of inversion. Essentially, this means that the only argument of this function that changes across training iterations is $c(y)$ that depends on the trained concept embedding.
+
+As we show in \cref{fig:convergence_example}, this version of the objective becomes informative, indicating convergence across a broad range of concepts.
+Moreover, it displays approximately the same behavior as the CLIP score and is much less expensive to compute, which makes $\mathcal{L}_{det}$ particularly useful as a metric for the stopping criterion.
+
+For the next step, we aim to find if any of the above sources of stochasticity have negligible impact on the noise in $\mathcal{L}_{LDM}$ or can be compensated with larger batches.
+We evaluate them separately and provide results in~\cref{subsect:ablation}.
+Our key findings are that (1) resampling \textbf{captions and VAE encoder noise} still \textbf{preserves the convergence trend}, (2) using \textbf{random images or resampling diffusion noise} reveals the training dynamics \textbf{only for large batches}, and (3) sampling \textbf{different diffusion timesteps} leads to a \textbf{non-informative training loss} regardless of the batch size. 
+Still, for the sake of simplicity and efficiency, we compute $\mathcal{L}_{det}$ on a batch of 4 inputs sampled only once at the beginning of training for the rest of our experiments.
+
+\vspace{-4pt}
+\subsection{Deterministic Variance Evaluation}
+
+The results above show that fixing all random components of the textual inversion loss makes its dynamics more interpretable.
+To achieve our final goal of decreasing the inversion runtime, we need to design an early stopping criterion that leverages $\mathcal{L}_{det}$ to indicate convergence.
+
+We propose Deterministic Variance Evaluation (DVAR), a simple variance-based early stopping criterion. It maintains a rolling variance estimate of $\mathcal{L}_{det}$ over the last $N$ steps, and once this rolling variance becomes less than $\alpha$ of the global variance estimate ($\alpha\in(0;1)$), we stop training.
+A pseudocode implementation of DVAR is available in \cref{fig:dvar_pseudocode}.
+
+\begin{figure}
+    \centering
+    \small
+    \begin{minted}{python}
+def DVAR(losses, window_size, threshold):
+    running_var = losses[-window_size:].var()
+    total_var = losses.var()
+    ratio = running_var / total_var
+    return ratio < threshold
+\end{minted}
+\vspace{-12pt}
+    \caption{An example NumPy/PyTorch implementation of DVAR. See \cref{app:full_code} for a usage example.}
+    \label{fig:dvar_pseudocode}
+    \vspace{-16pt}
+\end{figure}
+
+
+
+
+
+
+
+
+This criterion is easy to implement and has two hyperparameters that are easy to tune: the window size for local variance estimation $N$ and the threshold $\alpha$.
+In our experiments, we found $N=282$ and $\alpha=0.39$ to work relatively well for all concepts and models we evaluated.
+
+Importantly, we use this criterion while training in the \textbf{regular fully stochastic setting}: our goal is not to modify the objective, and using fixed random variables and data can affect the model's generalization capabilities.
+As we demonstrate in \cref{sect:evaluation}, our approach demonstrates significant improvements when compared to baselines, even when all sources of randomness are fixed.
+
+Along with DVAR, we consider other early stopping strategies that use $\mathcal{L}_{det}$ and are based on different notions of loss value stabilization, such as estimating the linear trend coefficient or tracking changes in the mean instead of variance. 
+As we show in Appendix~\ref{app:other_stopping_criteria}, most of them result in less reliable convergence indicators and have hyperparameters that do not transfer as well between different image collections.
+
+\subsection{Original setup improvements}
+
+Besides reducing the training time with early stopping, we would like to reevaluate several components of Textual Inversion outlined in the original work. In particular, we focus on two components listed below. We briefly overview their impact on the inversion process here and describe detailed experimental settings and results in \cref{subsect:ablation}.
+
+\textbf{Choice of the initial embedding} is one of the factors in the original method that involves manual effort for each new concept. We find that there are two ways to automatically choose the starting concept embedding. First, one can find the best initial embedding according to the CLIP score similarity between its token and images of the target concept. Alternatively, simply taking the embedding of the random token from the vocabulary of the model's text encoder has little negative impact on the runtime or results of inversion.
+
+\textbf{Choice of the optimizer:} another way to improve the inversion procedure is to change an algorithm for the corresponding optimization problem. As we show, SGD augmented by Sharpness-Aware Minimization~\cite{sam} is capable of reaching higher quality in the same number of steps at the cost of larger runtime.
+

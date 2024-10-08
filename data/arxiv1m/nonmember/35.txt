@@ -1,0 +1,124 @@
+\section{Introduction}
+Reinforcement learning (RL) is a potent paradigm for solving sequential decision making problems in a dynamically changing environment. Successful examples of its uses include game playing \citep{vinyals2019grandmaster}, drug design \citep{segler2018planning}, robotics \citep{ibarz2021train} and theoretical computer science \citep{fawzi2022discovering}. However, the generality of RL often leads to data inefficiency, poor generalisation to situations that differ from those encountered in training, and lack of safety guarantees. This is an issue especially in domains where data is scarce or difficult to obtain, such as medicine or human-in-the-loop scenarios. 
+
+Most RL approaches do not directly attempt to capture the regularities present in the environment. As an example, consider a grid-world: moving down in a maze is equivalent to moving left in the $90^{\circ}$ clock-wise rotation of the same maze.
+Such equivalences can be formalised via Markov Decision Process homomorphisms \citep{ravindran2004algebraic, ravindran2004approximate}, and while some works incorporate them \citep[e.g.][]{van2020mdp, rezaei2022continuous}, 
+most deep reinforcement learning agents would act differently in such equivalent states if they do not observe enough data. This becomes even more problematic when the number of equivalent states is large. One common example is 3D regularities, such as changing camera angles in robotic tasks.
+
+In recent years, there has been significant progress in building deep neural networks that explicitly obey such regularities, often termed geometric deep learning \citep{bronstein2021geometric}. In this context, the regularities are formalised using symmetry groups and architectures are built by composing transformations that are equivariant to these symmetry groups (e.g.\ convolutional neural networks for the translation group, graph neural networks and transformers for the permutation group).
+
+As we are looking to capture the symmetries present in an environment, a fitting place is within the framework of model-based RL (MBRL). MBRL leverages explicit world-models to forecast the effect of action sequences, either in the form of next-state or immediate reward predictions. These imagined trajectories are used to construct plans that optimise the forecasted returns. In the context of state-of-the-art MBRL agent MuZero \citep{schrittwieser2020mastering}, a Monte-Carlo tree search is executed over these world-models in order to perform action selection. 
+
+In this paper, we demonstrate that equivariance and MBRL can be effectively combined by proposing Equivariant MuZero (EqMuZero, shown in Figure \ref{fig:eqmz}), a variant of MuZero where equivariance constraints are enforced by design in its constituent neural networks. As MuZero does not use these networks directly to act, but rather executes a search algorithm on top of their predictions, it is not immediately obvious that the actions taken by the EqMuZero agent would obey the same constraints---is it guaranteed to produce a rotated action when given a rotated maze? One of our key contributions is a proof that guarantees this: as long as all neural networks are equivariant to a symmetry group, all actions taken will also be equivariant to that same symmetry group. Consequently, EqMuZero can be more data-efficient than standard MuZero, as it knows by construction how to act in states it has never seen before. We empirically verify the generalisation capabilities of EqMuZero in two grid-worlds: procedurally-generated MiniPacman and the Chaser game in the ProcGen suite.
+
+\section{Background}
+\paragraph{Reinforcement Learning}
+The reinforcement learning problem is typically formalised as a Markov Decision Process $(S, A, P, R, \gamma)$ formed from a set of states $S$, a set of actions $A$, a discount factor $\gamma\in[0, 1]$, and two functions that model the outcome of taking action $a$ in state $s$: the transition distribution $P(s'|s, a)$---specifying the next state probabilities---and the reward function $R(s, a)$---specifying the expected reward. The aim is to learn a \emph{policy}, $\pi(a|s)$, a function specifying (probabilities of) actions to take in state $s$, such that the agent maximises the (expected) cumulative reward $G(\tau)=\sum_{t=0}^{t=T}\gamma^t R(s_t, a_t)$, where $\tau=(s_0, a_0, s_1, a_1, \ldots, s_T, a_T)$ is the trajectory taken by the agent starting in the initial state $s_0$ and following the policy to decide $a_t$ based on $s_t$.
+
+\paragraph{MuZero} 
+Reinforcement learning agents broadly fall into two categories: \emph{model-free} and \emph{model-based}. The specific agent we extend here, MuZero \citep{schrittwieser2020mastering}, is a model-based agent for deterministic environments (where $P(s' | s, a) = 1$ for exactly one $s'$ for all $s\in S$ and $a\in A$). MuZero relies on several neural-network components that are composed to create a \emph{world model}. These components are: the \emph{encoder}, $E : S \rightarrow Z$, which embeds states into a latent space $Z$ (e.g.\ $Z = \mathbb{R}^k$), the \emph{transition model}, $T : Z \times A \rightarrow Z$, which predicts embeddings of next states, the \emph{reward model}, $R : Z\times A\rightarrow \mathbb{R}$, which predicts the immediate expected reward after taking an action in a particular state, the \emph{value model}, $V : Z\rightarrow \mathbb{R}$, which predicts the value (expected cumulative reward) from this state, and the \emph{policy model} $P : Z\rightarrow [0, 1]^{|A|}$, which predicts the probability of taking each action from the current state. To plan its next action, MuZero executes a Monte Carlo tree search (MCTS) over many simulated trajectories, generated using the above models.
+
+MuZero has demonstrated state-of-the-art capabilities over a variety of deterministic or near-deterministic environments, such as Go, Chess, Shogi and Atari, and has been successfully applied to real-world domains such as video compression \citep{mandhane2022muzero}. Although here we focus on MuZero for deterministic environments, we note that extensions to stochastic environments also exist \citep{antonoglou2021planning} and are an interesting target for future work.
+
+
+\paragraph{Groups and Representations} A \emph{group} $(\mathfrak{G}, \circ)$ is a set $\mathfrak{G}$ equipped with a \emph{composition} operation $\circ : \mathfrak{G} \times \mathfrak{G} \rightarrow \mathfrak{G}$ (written concisely as $\mathfrak{g}\circ \mathfrak{h} = \mathfrak{g}\mathfrak{h}$), satisfying the following axioms: \emph{(associativity)} $(\mathfrak{g}\mathfrak{h})\mathfrak{l} = \mathfrak{g}(\mathfrak{h}\mathfrak{l})$ for all $\mathfrak{g}, \mathfrak{h}, \mathfrak{l}\in\mathfrak{G}$;  \emph{(identity)} there exists a unique $\mathfrak{e}\in\mathfrak{G}$ satisfying $\mathfrak{e}\mathfrak{g}=\mathfrak{g}\mathfrak{e}=\mathfrak{g}$ for all $\mathfrak{g}\in\mathfrak{G}$; \emph{(inverse)} for every $\mathfrak{g}\in\mathfrak{G}$ there exists a unique $\mathfrak{g}^{-1}\in\mathfrak{G}$ such that $\mathfrak{g}\mathfrak{g}^{-1} = \mathfrak{g}^{-1}\mathfrak{g}=\mathfrak{e}$.
+
+Groups are a natural way to describe \emph{symmetries}: object transformations that leave them unchanged. They can be reasoned about in the context of linear algebra by using their \emph{real representations}: functions $\rho_\mathcal{V} : \mathfrak{G}\rightarrow\mathbb{R}^{N\times N}$ that give, for every group element $\mathfrak{g}\in\mathfrak{G}$, a real matrix demonstrating how this element \emph{acts} on a vector space $\mathcal{V}$. For example, for the rotation group $\mathfrak{G}=\mathrm{SO}(n)$, the representation $\rho_\mathcal{V}$ would provide an appropriate $n\times n$ rotation matrix for each rotation $\mathfrak{g}$.
+
+\paragraph{Equivariance and Invariance} As symmetries are assumed to not change the essence of the data they act on, we would like to construct neural networks that adequately represent such symmetry-transformed inputs. Assume we have a neural network $f : \mathcal{X} \rightarrow \mathcal{Y}$, mapping between vector spaces $\mathcal{X}$ and $\mathcal{Y}$, and that we would like this network to respect the symmetries within a group $\mathfrak{G}$. Then we can impose the following condition, for all group elements $\mathfrak{g}\in\mathfrak{G}$ and inputs $\mathbf{x}\in\mathcal{X}$:
+\begin{equation}
+    f(\rho_\mathcal{X}(\mathfrak{g})\mathbf{x}) = \rho_\mathcal{Y}(\mathfrak{g})f(\mathbf{x}).
+\end{equation}
+This condition is known as \emph{$\mathfrak{G}$-equivariance}---for any group element, it does not matter whether we act with it on the input or on the output of the function $f$---the end result is the same. A special case of this, \emph{$\mathfrak{G}$-invariance}, is when the output representation is trivial ($\rho_\mathcal{Y}(\mathfrak{g})={\bf I}$): 
+\begin{equation}
+  f(\rho_\mathcal{X}(\mathfrak{g})\mathbf{x}) = f(\mathbf{x}).
+\end{equation}
+In geometric deep learning, equivariance to reflections, rotations, translations and permutations has been of particular interest \citep{bronstein2021geometric}. 
+
+Generally speaking, there are three ways to obtain an equivariant model: a) data augmentation, b) data canonicalisation and c) specialised architectures. 
+Data augmentation creates additional training data by applying group elements $\mathfrak{g}$ to input/output pairs $(\mathbf{x}, \mathbf{y})$---equivariance is encouraged by training on the transformed data and/or minimising auxiliary losses such as $\|\rho_\mathcal{Y}(\mathfrak{g})f(\mathbf{x}) - f(\rho_\mathcal{X}(\mathfrak{g})\mathbf{x})\|$. Data augmentation can be simple to apply, but it results in only approximate equivariance.
+Data canonicalisation requires a method to standardise the input, such as breaking the translation symmetry for molecular representation by centering the atoms around the origin \citep{musil2021physics}---however, in many cases, such as the relatively simple MiniPacman environment we use in our experiments, such a canonical transformation may not exist.
+Specialised architectures have the downside of being harder to build, but they can guarantee exact equivariance---as such, they reduce the search space of functions, potentially reducing the number of parameters and increasing training efficiency. 
+
+
+\begin{wrapfigure}[23]{R}[0pt]{0.39\textwidth}
+\begin{minipage}{0.39\textwidth}
+    \centering
+	\includegraphics[scale=.22]{simplified-cube.png}
+	\caption{Commutative diagram of symmetries in RL\@. State transitions due to an action $a$ are back-to-front, transformations due to a symmetry $\mathfrak{g}$ are left-to-right, state encoding and decoding by the model is bottom-to-top.}
+	\label{fig:eq_cube}
+\end{minipage}
+\end{wrapfigure}
+
+\paragraph{Equivariance in RL} 
+There has been previous work at the intersection of reinforcement learning and equivariance. While leveraging multi-agent symmetries was repeatedly shown to hold promise \citep{van2021multi, muglich2022equivariant}, of particular interest to us are the symmetries emerging from the environment, in a single-agent scenario. Related work in this space can be summarised by the commutative diagram in Figure \ref{fig:eq_cube}.
+When considering only the cube at the bottom, we recover \cite{park2022learning}---a supervised learning task where a latent transition model $T$ learns to predict the next state embedding. They show that if $T$ is equivariant, the encoder can pick up the symmetries of the environment even if it is not fully equivariant by design. \citet{mondal2022eqr} build a model-free agent by combining an equivariant-by-design encoder and enforcing the remaining equivariances via regularisation losses. They also consider the invariance of the reward, captured in Figure \ref{fig:eq_cube} by taking the decoder to be the reward model and $l=1$. The work of \cite{van2020mdp} can be described by having the value model as the decoder, while the work of \cite{wang2022mathrm} has the decoder as the policy model and $l=|A|$.
+
+\begin{figure}
+    \centering
+    \includegraphics[width=.9\linewidth]{EqMZ.pdf}
+    \caption{Architecture of Equivariant MuZero, where $h$, $g$ are encoders, $\tau$ is the transition model, $\rho$ is the reward model, $v$ is the value model and $\pi$ is the policy predictor. Each colour represents an element of the $C_4$ group $\{{\bf I}, {\bf R}_{90^\circ}, {\bf R}_{180^\circ}, {\bf R}_{270^\circ}\}$ applied to the input (observation and action).}
+    \label{fig:eqmz}
+\end{figure}
+\section{Experiments and results}
+
+\paragraph{Environments}
+We consider two 2D grid-world
+environments, MiniPacman \citep{guez2019investigation} and Chaser \citep{cobbe2020leveraging}, that feature an agent navigating in a 2D maze. In both environments, the state is the grid-world map $\mathbf{X}$ and an action is a direction to move. Both of these grid-worlds are symmetric with respect to $90 ^{\circ}$ rotations, in the sense that moving down in some map is the same as moving left in the $90^\circ$ clock-wise rotated version of the same map. Hence, we take our symmetry group to be $\mathfrak{G}=C_4=\{{\bf I}, {\bf R}_{90^\circ}, {\bf R}_{180^\circ}, {\bf R}_{270^\circ}\}$, the 4-element cyclic group, which in our case represents rotating the map by all four possible multiples of $90^{\circ}$.
+
+\paragraph{Equivariant MuZero}
+In what follows, we describe how the various components of EqMuZero (Figure \ref{fig:eqmz}) are designed to obey $C_4$-equivariance. For simplicity, we assume there are only four directional movement actions in the environment ($A = \{\rightarrow, \downarrow, \leftarrow, \uparrow\}$). Any additional non-movement actions (such as the ``do nothing'' action) can be included without difficulty.
+
+To enforce $C_4$-equivariance in the encoder, we first need to specify the effect of rotations on the latent state $\mathbf{z}$. In our implementation, the latent state consists of 4 equally shaped arrays, $\mathbf{z} = ({\bf z}_1, {\bf z}_2, {\bf z}_3,{\bf z}_4)$, and we prescribe that a $90^\circ$ clock-wise rotation manifests as a cyclical permutation: $\mathbf{R}_{90^\circ}\mathbf{z} = ({\bf z}_2, {\bf z}_3, {\bf z}_4,{\bf z}_1)$. Then, our equivariant encoder embeds state $\bf X$ and action $a$ as follows:
+\begin{equation}\label{eqenc}
+    E({\bf X}, a) = (h({\bf X}) + g(a), h({\bf R}_{90^\circ}\!{\bf X}) + g({\bf R}_{90^\circ}a), h({\bf R}_{180^\circ}\!{\bf X}) + g({\bf R}_{180^\circ}a), h({\bf R}_{270^\circ}\!{\bf X}) + g({\bf R}_{270^\circ}a))
+\end{equation}
+where $h$ is a CNN and $g$ is an MLP\@. For the summation, the output of $g$ is accordingly broadcasted across all pixels of $h$'s output.
+It is easy to verify that this equation satisfies $C_4$-equivariance, that is, $E({\bf R}_{90^\circ}{\bf X}, {\bf R}_{90^\circ}a) = {\bf R}_{90^\circ}E({\bf X}, a)$.
+
+We can build a $C_4$-equivariant transition model by maintaining the structure in the latent space:
+\begin{equation}\label{eq:eqTS}
+    T({\bf z}) = (\tau({\bf z}_1), \tau({\bf z}_2), \tau({\bf z}_3), \tau({\bf z}_4)). 
+\end{equation}
+It is also possible to have a less constrained transition model that allows components of ${\bf z}$ to \emph{interact}, while still retaining $C_4$-equivariance, as follows:
+\begin{equation}\label{eq:eqT}
+    T({\bf z}) = (\tau({\bf z}_1, {\bf z}_2, {\bf z}_3,{\bf z}_4), \tau({\bf z}_2, {\bf z}_3, {\bf z}_4,{\bf z}_1), \tau({\bf z}_3, {\bf z}_4, {\bf z}_1,{\bf z}_2), \tau({\bf z}_4, {\bf z}_1, {\bf z}_2,{\bf z}_3)).
+\end{equation}
+In our experiments, we use the more constrained variant for MiniPacman, and the less constrained variant for Chaser, as more data is available for the latter. In either case, we take $\tau$ to be a ResNet.
+
+The policy model is made $C_4$-equivariant by appropriately combining state and action embeddings from all four latents in $\bf{z}$:
+\begin{equation}\label{eq:eqP}
+    P(a\,|\,{\bf z}) = \frac{\pi(a\,|\,{\bf z}_1) + \pi({\bf R}_{90^\circ}a\,|\,{\bf z}_2) + \pi({\bf R}_{180^\circ}a\,|\,{\bf z}_3) + \pi({\bf R}_{270^\circ}a\,|\,{\bf z}_4)}{4}
+\end{equation}
+where $\pi(\cdot\,|\,{\bf z}_i)$ is an MLP followed by a softmax, which produces a probability distribution over actions given the map encoded by ${\bf z}_i$. It is easy to show that $\sum_{a\in A} P(a\,|\,{\bf z}) = 1$, i.e.\ $P(\cdot\,|\,{\bf z})$ is properly normalised, and that $P({\bf R}_{90^\circ}a\,|\,{\bf R}_{90^\circ}{\bf z}) = P(a\,|\,{\bf z})$, i.e.\ it satisfies $C_4$-equivariance.
+
+Lastly, the reward and value networks ($R$, $V$), modeled by MLPs $\rho$ and $v$ respectively,  should be $C_4$-invariant. We can satisfy this constraint by \emph{aggregating} the latent space with any $C_4$-invariant function, such as sum, average or max. Here we use summation:
+\begin{equation}\label{eq:invRV}
+    R({\bf z}) = \rho({\bf z}_1 + {\bf z}_2 + {\bf z}_3 + {\bf z}_4), \qquad V({\bf z}) = v({\bf z}_1 + {\bf z}_2 + {\bf z}_3 + {\bf z}_4).
+\end{equation}
+
+Composing the equivariant components described above (Equations \ref{eqenc}--\ref{eq:invRV}), we construct the end-to-end equivariant EqMuZero agent, displayed in Figure \ref{fig:eqmz}. In appendix \ref{app:proof}, we prove that, assuming that all the relevant neural networks used by MuZero are $\mathfrak{G}$-equivariant, the proposed EqMuZero agent will select actions in a $\mathfrak{G}$-equivariant manner.
+
+\paragraph{Results}
+We compare EqMuZero with a standard MuZero that uses non-equivariant components: ResNet-style networks for the encoder and transition models, and MLP-based policy, value and reward models, following \cite{hamrick2020role}. Moreover, as the encoder and the policy of EqMuZero are the only two components which require knowledge of how the symmetry group acts on the environment, we include the following ablations in order to evaluate the trade-off between end-to-end equivariance and general applicability: Standard MuZero with an equivariant encoder, equivariant MuZero with a standard encoder and equivariant MuZero with a standard policy model.
+
+\begin{figure}
+	\centering
+	\hspace{-6pt}\includegraphics[width=\linewidth]{equivariant_muzero_minipacman_results.pdf}\\
+	\includegraphics[width=\linewidth]{equivariant_muzero_procgen_results.pdf}
+	\caption{Results on procedurally-generated MiniPacman (top) and Chaser from ProcGen (bottom).}
+	\label{fig:results}
+\end{figure}
+
+We train each agent on a set of maps, ${\bf X}$. 
+To test for generalisation, we measure the agent's performance on three, progressively harder, settings. Namely, we evaluate the agent on ${\bf X}$, with randomised initial agent position (denoted by \emph{same} in our results), on the set of rotated maps ${\bf RX}$, where ${\bf R}\in\{{\bf R}_{90^\circ}, {\bf R}_{180^\circ}, {\bf R}_{270^\circ}\}$ (denoted by \emph{rotated}) and, lastly, on a set of maps $\bf Y$, such that $ {\bf Y}  \cap {\bf X} =  \varnothing $ and $ {\bf Y}  \cap {\bf RX} = \varnothing$ (denoted by \emph{different}).
+
+Figure \ref{fig:results} (top) presents the results of the agents on MiniPacman. First, we empirically confirm that the average reward on layouts $\bf{X}$, seen during training, matches the average reward gathered on the rotations of the same mazes, $\bf{RX}$, for EqMuZero. 
+Second, we notice that changing the equivariant policy with a non-equivariant one does not significantly impact performance. 
+However, the same swap in the encoder brings the performance of the agent down to that of Standard MuZero---this suggests that the structure in the latent space of the transition model, when not combined with some explicit method of imposing equivariance in the encoder, does not provide noticeable benefits.
+Third, we notice that Equivariant MuZero is generally robust to layout variations, as the learnt high-reward behaviours also transfer to $\bf{Y}$. At the same time, Standard MuZero significantly drops in performance for both $\bf{Y}$ and $\bf{RX}$. We note that experiments on MiniPacman were done in a low-data scenario, using 5 maps of size $14 \times 14$ for training; we observed that the differences between agents diminished when all agents were trained with at least 20 times more maps.
+
+Figure \ref{fig:results} (bottom) compares the performance of the agents on the ProcGen game, Chaser, which has similar dynamics to MiniPacman, but larger mazes of size $ 64 \times 64$  and a more complex action space. Due to the complexity of the action space, we only use EqMuZero with a standard policy, rather than a fully equivariant version. We use 500 maze instances for training. Our results demonstrate that, even when the problem complexity is increased in such a way, Equivariant MuZero still consistently outperforms the other agents, leading to more robust plans being discovered. 
+
+
+

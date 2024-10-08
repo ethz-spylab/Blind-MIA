@@ -1,0 +1,680 @@
+\section{Introduction}
+Commonly, Autonomous Driving (AD) has been implemented using individual modules for perception, planning and control organized in a pipeline \cite{juniordarpa,boss_darpa,surveypipeline}.
+However, learning approaches have been on the rise, in an attempt to tackle the complexities of AD in different scenarios, in simulation or even in the real world. 
+Most of the approaches are based on Behavior Cloning (BC), which uses supervised learning on a set of expert demonstrations collected offline \cite{nvidiabc, videobc, chauffernet, codevilla2018endtoend, codevilla2019exploring}, e.g., with a human driver generating a set of input (observations) and corresponding desired output pairs. The latter approach suffers from covariate shift \cite{efficientReductions, 9156703, ross2011reduction}, since it can not teach robustly the learning agent a trajectory which does not accumulate errors.
+
+Reinforcement Learning (RL) approaches to AD can learn policies that do not present this covariate shift issue, since the agent is able to learn in interaction with the environment, considering the whole sample trajectories and not only independent observation-action samples as in BC. 
+However, RL requires the definition of a reward signal, which can be cumbersome to do it considering the complexity of a driver's behavior and its environment. Although Inverse RL can be used for imitation learning purposes
+\cite{Ng2000},
+it is expensive to run since it executes RL in a loop. Learning in IRL is computationally more expensive than just learning a policy directly from expert demonstrations.
+
+On the other hand, Generative Adversarial Imitation Learning (GAIL) \cite{Ho2016} provides a way to train agents in interaction with their environments, directly from expert demonstrations. This approach has been validated in the CARLA simulator for autonomous driving in urban scenarios previously \cite{gail_carla}, showing it can scale to large environments.
+However, in \cite{gail_carla} only fixed routes were considered. Although the agent's architecture was general enough for dynamic routes, with inputs such as the high-level command and the next point of the sparse trajectory in the vehicle's reference frame, the network had limitations for learning a general policy for dynamic routes, i.e., those that can change on the fly (turn left, right, or go straight at an intersection) from the perspective of the agent.
+
+In order to facilitate the agent learning task, intermediate sensory representations can be employed. For instance, Bird's-Eye View (BEV) representations of the road ahead of the vehicle have been used as mid-level input to trajectory generation and motor control networks in \cite{chauffernet} and \cite{roach}, respectively. 
+BEV requires access to maps in order to map frontal camera images, pedestrians and traffic lights into the required abstract BEV image.
+One of the advantages of such approach is enabling transfer to real-world by a relatively easy process: it requires mapping the real-world images to the same abstract representation used to train the agent in simulation. Besides, training agents with mid-level visual inputs such as BEV and others (e.g., optical flow, depth, semantic segmentation, and albedo) make policies learn faster, generalize better and achieve higher task performance \cite{Sax2019}. 
+Other works employ semantic segmentation for semantic driving
+\cite{Muller2018,Mousavian2019,Yang2018}, offering supporting evidence that mid-level inputs to agents are useful for realistic downstream active tasks \cite{Sax2019}.
+
+
+So far, BEV has been employed for autonomous driving in urban scenarios in \cite{roach} and \cite{chauffernet}. However, they generate BEV input by using an algorithm which has to access a known map of the city. 
+In contrast, in our work, we consider a mid-level BEV input, feeding the agent's policy, that is learned simultaneously with the policy. For that, we use Conditional Generative Adversarial Nets (GANs) \cite{pix2pix} and U-nets to map the images obtained from three frontal vehicle's cameras to the mid-level BEV input. 
+Thus, our agent's architecture is formed by two main modules: one with two GAN nets that generate the mid-level BEV input which, in turn, is fed to the other module with two GAIL networks. The latter output steer, acceleration and break signals to drive the vehicle. Thus, although our agent produces a mid-level representation, it still pertains to the class of end-to-end models.
+The GAIL module's cost function is augmented with a behavior cloning loss \cite{Jena2020} in order to stabilize the policy learning.
+Both GAN and GAIL networks learn simultaneously, though with their own cost functions, while the agent interacts with the CARLA simulation environment for urban driving. This approach ensures that both the policy and representation networks are trained using on-policy data learning from the agent's mistakes.
+
+This work contributes by:
+\begin{enumerate}
+    \item proposing an end-to-end hierarchical architecture based on both GAN and GAIL for autonomous urban driving;
+    \item extending previous work  that is applicable to fixed routes \cite{gail_carla} to a more skilled agent able to follow dynamic routes, making the vehicle able to change the route on the fly; 
+    \item generating BEV mid-level representations using GANs based on the input from the frontal camera images, sparse trajectory and high-level command, whose learning occurs simultaneously with the policy online learning.
+\end{enumerate}
+
+
+
+
+
+
+
+
+
+\section{Related Works}
+
+\subsection{Behavior Cloning}
+The authors of works \cite{codevilla2018endtoend} and \cite{codevilla2019exploring} utilized behavior cloning (BC) to learn the complex task of autonomous driving (AD) in the CARLA realistic simulator.
+A large dataset of human driving was collected and augmented using image processing techniques to train end-to-end policies conditioned on the desired route. Further advancements in BC were made in \cite{ral_prob_bc}, which used a large deep ResNet network for feature extraction and fused data from camera, LiDAR, and radar to generate feature maps. The work also incorporated a probabilistic motion planner to account for uncertainties in the trajectory.
+
+
+
+
+
+\subsection{Reinforcement Learning}
+
+Reinforcement learning (RL) offers the agent the opportunity to learn from interactions with the environment, rather than being limited to expert experience and performance. However, this also presents challenges such as the cost of interactions and the definition of a reward function to provide feedback to the agent.
+
+
+An RL agent \cite{ral_racing} was trained and tested in a 2D simulator, CARLA, and a real-world car racing task, where the vehicle needed to repeatedly complete a predefined circular trajectory. The agent was trained using a predictive world model, which substituted the environment for a 10-state horizon. The predictive world model was trained by deploying the agent to the chosen environment, reducing the necessary environment interactions for training the agent. The project highlights the potential use of auxiliary models to address the weakness of RL in needing large amounts of environment interactions.
+
+A different autonomous driving project \cite{roach} employed reinforcement learning (RL) 
+with a customized reward function to train an agent based on the mid-level BEV representation as input, during the first training phase. 
+Afterwards, using the trained agent as an online expert, they trained a second agent through apprenticeship learning, but now in an end-to-end approach with input directly from the vehicle's cameras.  
+The method was evaluated on the CARLA, surpassing the default benchmarks trained by behavior cloning.
+
+
+
+
+
+
+
+\subsection{GAIL}
+The authors in \cite{Kuefler2017} used Generative Adversarial Imitation Learning (GAIL) with simple affordance-style features as inputs to reduce cascading errors in behavior-cloned policies and make them more robust to perturbations. Raw LiDAR readings and simple road features, such as speed and lane center offset, were mapped to turn-rate and acceleration to model human highway driving behavior in a realistic highway simulator. The experiment successfully reproduced human driver behavior while reducing the risk of collisions. 
+
+In \cite{gail_av}, a hierarchical model-based GAIL was proposed to solve the autonomous driving problem in a differentiable simulator. The project used a graph-based search algorithm to generate the autonomous vehicle trajectory, which was combined with roadgraph points, traffic light signals, and other objects' trajectories to form the input for the policy and discriminator transformer-based networks. The project demonstrated the advantage of using a top-level algorithm to generate the intended trajectory and feed it to a GAIL module in a hierarchical fashion.
+
+
+
+
+
+
+
+\subsection{BEV Mid-level representation}
+
+Reinforcement learning enables an agent to be trained in a closed-loop fashion, resulting in more robust agents. However, this robustness comes with the cost of instabilities that prevent the use of very deep networks, such as ResNet \cite{resnet}. In \cite{resnet_rl}, the authors aim to decouple representation learning from the training of reinforcement learning as a solution to train agents that can process high-dimensional raw inputs, such as images from cameras.
+
+In \cite{ral_gan_intention}, a modular learning strategy is explored, producing an intention map that represents the vehicle's future trajectory.
+This future trajectory is generated by the GAN's generator, which is fed with an image from a monocular camera and a local map, cropped from an offline map using the GPS position. 
+The intention map is combined with LiDAR data to generate a potential map, which is their mid-level input representation (similar to BEV), subsequently fed to a controller module trained
+to imitate a set of demonstration trajectories. The method is evaluated on CARLA and a real vehicle. 
+
+A similar modular approach is explored in \cite{h_birdview}, which combines a predicted bird's-eye view representation
+with a pretrained trajectory of 0.5-meter resolution to serve as inputs to a mid-level policy network trained with behavior cloning. 
+The bird's-eye view is generated from raw images using a pretrained segmentation network, 
+whose output is transformed by an
+U-net into an BEV top-down perspective. 
+It is worth noting that our BEV generation is done by a Conditional GAN directly from raw camera images (and sparse trajectory, high-level command), opposed to \cite{h_birdview} which uses two networks and also exclude occluded areas (by other obstacles or vehicles) from the BEV prediction.
+
+Our work is inspired by \cite{chauffernet}, which trains an agent on CARLA to drive an autonomous vehicle using a bird's-eye view representation generated by a data renderer module as input. This bird's-eye view representation, like our own, contains a road and route representation from a top-down, agent-centered perspective. The agent learns from imitation learning, combining behavior cloning with data augmentation and auxiliary losses, but without closed-loop training. A similar work is \cite{Muller2018}, which uses the output of a scene segmentation network as a mid-level input representation.
+This enables the transfer of the agent's policy to the real world, since a similar network can be used to generate the mid-level input from  images of real scenes.
+
+
+This work is the first instance, to our knowledge, where a GAIL is trained using a mid-level input representation generated by a learning module to tackle the intricate task of autonomous driving navigation. Previous works also show that policies with mid-level representations as input can be trained on a simulator, and subsequently transferred to the real world. This is a cost-effective and safe way to perform closed-loop training of agents (since infractions during training of the agent occur in simulation only), in particular, by the GAIL method which provides an interactive learning based on expert demonstrations.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+\section{Methods}
+
+\subsection{Conditional Generative Adversarial Networks - CGAN}
+Conditional Generative Adversarial Networks are composed of two neural networks, a discriminator D and a generator G. The function of G in a CGAN \cite{pix2pix} is to translate an image $x$ into an image $y$ by mapping both $x$ and a random noise vector $z$ into an output image $G:\{x,z\} -> y$.
+Both D and C seek to optimize the same objective function:
+
+\begin{equation}
+\mathop{\mathbb{E}}_{x,y}[\log(D(x,y))] +  \mathop{\mathbb{E}}_{x,z}[\log(1-D(x,G(x,z))],
+\label{eq:cgan}
+\end{equation}
+where G tries to minimize it, while D seeks to maximize it. As in traditional GANs, D learns to classify real images from generated ones, and G uses this output of D to direct its own learning. Notice that both D and G are conditioned on the input image $x$ that must be translated.
+
+Additionally, a L1 distance loss function is added to the final objective, making the generator network G also learn from the true label $y$ as it would happen in a supervised learning task \cite{pix2pix}.
+
+
+
+The L1 loss can model the low-frequency characteristics of images, while the CGAN loss is crucial for modeling high-frequency features. By classifying local patches of the image rather than the entire image, the discriminator can better capture high-frequency correctness, as the assumption is that pixels from different patches are independent.
+
+This method, called PatchGAN \cite{pix2pix}, divides the image into multiple patches, and the discriminator classifies each patch individually. This results in a discriminator with fewer parameters and a detailed feedback for the agent
+
+The CGAN is used in our work to generate the Bird's-Eye View (BEV) image representation from the agent's sensors such as frontal cameras and GPS, to be detailed later.
+
+\subsection{Generative Adversarial Imitation Learning - GAIL}
+
+In Generative Adversarial Imitation Learning (GAIL) \cite{Ho2016}, basically, there are two components that are trained iteratively in a min-max game: a discriminative classifier $D$ is trained to distinguish between samples generated by the learning policy $\pi$ and samples generated by the expert policy $\pi_E$ (i.e., the labelled training set); and the learning policy $\pi$ is optimized to imitate the expert policy $\pi_E$. Thus, in this game, both $D$ and $\pi$ have opposite interests: $D$ feeds on state-action pair $(s,a)$ and its output seeks to detect whether $(s,a)$ comes from learning policy $\pi$ or expert policy $\pi_E$; and $\pi$ maps state $s$ to a probability distribution over actions $a$, learning this mapping by relying on $D$'s judgements on state-action samples (i.e., $D$ informs how close $\pi$ is from $\pi_E$).
+Mathematically, GAIL finds a saddle point $(\pi,D)$ of the expression:
+\begin{equation}
+\mathop{\mathbb{E}}_\pi[\log(D(s,a))] +  \mathop{\mathbb{E}}_{\pi_E}[\log(1-D(s,a))]  - \lambda H(\pi),  
+\label{eq:gail}
+\end{equation}
+where $D: S \times A \rightarrow  (0,1) $, $S$ is the state space, $A$ is the action space; $\pi_E$ is the expert policy; $H(\pi) $ is a policy regularizer controlled by  $\lambda >= 0$ \cite{Bloem2014}.
+GAIL works similarly to generative adversarial nets (GANs) \cite{Goodfellow2014}, which was first used to learn generators of natural images. Both $D$ and $\pi$ can be represented by deep neural networks. In practice, a training iteration for $D$ uses Adam gradient-based optimization \cite{Kingma2014} to increase (\ref{eq:gail}), and in the next iteration, $\pi$ is trained with any on-policy gradient method such as Proximal Policy Optimization (PPO) \cite{ppoOriginal}
+to decrease (\ref{eq:gail}).
+Formally, PPO minimizes the policy loss $\mathcal{L}_{P}$:
+\begin{equation}
+\mathcal{L}_{P} = - \mathop{\mathbb{E}}_{\pi} [ \log(\pi_\theta(a|s)) A_{\omega,\phi}(s,a) ],
+\label{eq:policyloss}
+\end{equation}
+where: $\theta$ parametrizes the policy and
+$A_{\omega,\phi}(s,a)$ is the Advantage function that depends on the parametrized discriminator and value function network:
+\begin{equation}
+\begin{split}
+ A_{\omega,\phi}(s,a) ) = & - \log(1-D_\omega(s,a)) + \\
+ & \gamma \mathbb{E}_{s' \sim  T(s'|s,a)} [V_\phi(s')] - V_\phi(s),
+\label{eq:advantage}
+\end{split}
+\end{equation}
+where $\omega$ and $\phi$ are deep networks that parametrize the discriminator $D_\omega$ and the state value function $V_\phi$, respectively; $\gamma$ is the discount factor;  $T$ is the transition function in a Markov Decision Process;
+and $- \log(1-D_\omega(s,a))$ is the reward obtained from the discriminator $D_\omega$ by reward shaping \cite{Zhang_2020}.
+Here, $V_\phi$ will be trained to output the expected sum of rewards starting from the state $s$ as input, and it functions as a variance reduction in \eqref{eq:advantage}.
+
+In terms of implementation, it is worth noting that $D_\omega(s,a)$ in \eqref{eq:advantage} assumes an sigmoid activation function, which has an image in $[0,1]$, while the activation function for $D_\omega(s,a)$ when training the discriminator corresponds to the hyperbolic tangent function with image in $[-1,1]$.
+
+\subsection{BC-augmented GAIL}
+
+\subsubsection{Wasserstein loss}
+
+Instead of the original loss function of GAIL given by (\ref{eq:gail}),
+to alleviate vanishing gradient and mode collapse problems, in this work, we employ 
+the Wasserstein distance \cite{gulrajani2017improved} between the policy 
+distribution and expert distribution, as also done in \cite{Zhang_2020,li2017infogail}.
+It measures the minimum effort to move one distribution to the place of the other,  yielding a better feedback signal than the Jensen-Shannon divergence, and is given by:
+
+
+
+\begin{equation}
+\mathop{\mathbb{E}}_{\pi_E}[D(s,a)] - \mathop{\mathbb{E}}_\pi[D(s,a)] - \lambda H(\pi) - \lambda_2 L_{gp}, 
+\label{eq:wgail2}
+\end{equation}
+where: the discriminator will try to increase (\ref{eq:wgail2}), while $\pi$ seeks to minimize it; and $L_{gp}$ is a loss that penalizes the gradient
+constraining the discriminator network to the 1-Lipschitz function space, according to \cite{gulrajani2017improved}.
+
+\subsubsection{BC augmentation}
+
+Formally, the behavior cloning loss function can be defined as:
+
+\begin{equation}
+\mathcal{L}_{BC} = -\mathop{\mathbb{E}}_{\pi_E}[\log(\pi(a|s))]
+\label{eq:bc}
+\end{equation}
+
+The BC augmentation is constructed taking a point from a line between the behavior cloning loss $\mathcal{L}_{BC}$ and the policy loss $\mathcal{L}_{P}$ (defined in \eqref{eq:policyloss}), as follows:
+
+\begin{equation}
+\alpha \mathcal{L}_{BC} + (1 - \alpha) \mathcal{L}_{P}
+\label{eq:bcgail}
+\end{equation}
+where $\alpha$ controls the participation of each term during training.  Initially, as the discriminator is yet not fully trained, the behavior cloning participation should be stronger in order to direct the agent's policy learning with more useful and informative gradients. 
+Thus, training starts with a high $\alpha$ and proceeds by decreasing its value using a fixed decay factor.
+This definition and the practical implementation follows \cite{Jena2020}.
+
+\subsection{Bird's-Eye View - BEV representation}
+The Bird's-Eye View (BEV) of a vehicle represents its position and movement in a top-down coordinate system 
+\cite{chauffernet}. The vehicle's location, heading, and speed are represented by $p_t$, $\theta_t$, and $s_t$ respectively. 
+The top-down view is defined so that the agent's starting position is always at a fixed point within an image (the center of it). 
+Furthermore, it is represented by a set of images of size $W \times H$ pixels, at a ground sampling resolution of $\phi$ meters/pixel. 
+The BEV of the environment moves as the vehicle moves, allowing the agent to see a fixed range of meters in front of it. For instance, the BEV representation for the vehicle whose three frontal cameras are shown in Fig.~\ref{fig:cameras} is given in Fig.~\ref{fig:bev}, where the desired route, drivable area and lane boundaries form a set of three images (or a three-channel image).
+
+\begin{figure*}[thpb]
+  \centering
+  {\includegraphics[scale=0.52]{images/left_rgb.png}}
+  {\includegraphics[scale=0.52]{images/central_rgb.png}}
+  {\includegraphics[scale=0.52]{images/right_rgb.png}}
+  \caption{Images from three frontal cameras located at the left, central, and right part of the vehicle, respectively. They were taken after the first few interactions of the agent in the CARLA simulation environment 
+ 
+  Each camera produces a 256x144 RGB image.
+  } 
+   
+  \label{fig:cameras}
+\end{figure*}
+
+
+\begin{figure*}[thpb]
+  \centering
+  {\includegraphics[scale=0.52]{images/desired_route.png}}
+  \quad
+  {\includegraphics[scale=0.52]{images/drivable_areas.png}}
+  \quad
+  {\includegraphics[scale=0.52]{images/lane_boundaries.png}}
+  \quad
+  {\includegraphics[scale=0.52]{images/birdview.png}}
+  \caption{The three channels of the Bird's-Eye View representation (BEV) image that our agent employs, computed at the same instant shown in Fig.~\ref{fig:cameras}. From left to right, the channels correspond to: desired route, drivable area, and lane boundaries. The last image shows all three channels combined in different colors.}
+  \label{fig:bev}
+\end{figure*}
+
+\section{Agent}
+Our agent's architecture (Fig. ~\ref{fig:hGAIL}) is based on 
+hierarchical Generative Adversarial Imitation Learning (hGAIL) for training policy and mid-level representation simultaneously. There are two main parts of hGAIL: the conditional GAN that generates the BEV representation based on input from the vehicle's frontal cameras, trajectory and high-level command; and the GAIL that learn the agent's policy by imitation learning based on input from the BEV representation generated by the first CGAN module, current vehicle's speed, and the last actuator values.
+
+\begin{figure*}[thpb]
+  \centering
+  \includegraphics[scale=0.48]{diagrams/ral_gail_carla.png}
+  \caption{Hierarchical Generative Adversarial Imitation Learning (hGAIL) for policy learning with mid-level input representation. It basically consists of chained CGAN and GAIL networks, where the first one (CGAN) generates BEV representation from the vehicle's three frontal cameras, sparse trajectory and high-level command, while the latter (GAIL) outputs the acceleration and steering based on the predicted BEV input (generated by CGAN), the current speed and the last applied actions. Both CGAN and GAIL learn simultaneously while the agent interacts to the CARLA environment. The discriminator parts of both networks are not shown for the sake of simplicity.
+  }
+  \label{fig:hGAIL}
+\end{figure*}
+
+\subsection{BEV generation with CGANs}
+
+The Conditional GAN module, used to transform the images from the frontal cameras into a top-down view representation,
+has two different networks named Discriminator and Generator, whose architectures can be seen in Fig.~\ref{fig:gan}. In this figure, all layers from both networks are presented, and the \textit{common} layers in the orange color refer to layers that exist in both networks' architectures, even though they do not share weights (parameters).
+
+\subsubsection{Input representation}
+
+The input for the CGANs corresponds to the 192x192 resolution RGB images from the three frontal cameras, totalling a 9x192x192 image, i.e., with 9 channels. The goal of the CGAN's generator is to translate this RGB image into the 3-channel BEV representation seen in Fig.~\ref{fig:bev}.
+In addition to this RGB input image, the discriminator also receives the 3x192x192 BEV image, which can come from either the generator as \textit{fake} or from the training set as \textit{real}.
+Other inputs to the generator are the 
+5 points from the sparse trajectory, one point behind the vehicle and 4 points ahead of it, and the high-level command as a 4-dimensional one-hot encoding vector ("lane follow", "left", "right", "straight").
+
+
+
+
+\subsubsection{Network Architecture}
+Both networks' architectures are seen in Fig.~\ref{fig:gan}, where the common layers in orange refer to layers existing in both the generator and the discriminator. Notice that they are separate networks which do not share parameters: the figure was made to not repeat equivalent layers when describing both networks. 
+\subsubsection*{Generator}
+It can be seen in this figure and also in Fig.~\ref{fig:hGAIL} that the CGAN's generator is a U-Net \cite{unet}, usually employed for image translation or segmentation.
+Further, while the image is processed by convolution layers, the other perceptual inputs (trajectory and command, second column in the figure) are processed by two fully connected layers followed by two transposed convolution layers which upsample their input to reach the desired resolution so that it can be merged with the last orange 256x10x10 layer in the left column.
+The next transposed convolution grey layer (256x22x22) merges information coming from the frontal cameras's RGB images (left column) and the trajectory points plus the command (right command) for the generator network.
+Its final output is 3x192x192, corresponding to the three-channels BEV translated image.
+\subsubsection*{Discriminator}
+The discriminator is also conditioned on the RGB images from the frontal cameras, which is merged to the (fake/real) BEV image, totalling 12x192x192 input to the first convolutional layer of the discriminator. The other perceptual inputs (right column) are processed similarly to the generator until it merges in a new 384x11x11 layer (in blue) with information coming from the images (256x10x10, left column). The final output corresponds to the one given by PatchGAN.
+
+\begin{figure}[thpb]
+  \centering
+  \includegraphics[scale=0.5]{diagrams/gan_architecture.png}
+  \caption{Conditional GAN architecture for generating the BEV input representation. The Generator and the Discriminator are separate networks which do not share parameters: the figure was made to not repeat equivalent layers when describing both networks. 
+  The generator corresponds to the U-net at the left side of Fig.~\ref{fig:hGAIL} and aims at translating RGB 9x192x192 images from the vehicle's frontal cameras to BEV mid-level input representation (3x192x192 images). 
+ 
+  }
+  \label{fig:gan}
+\end{figure}
+
+\subsection{Policy learning with GAIL}
+The generator in the GAIL module iteratively seeks the $\theta$ parameters of the policy $\pi_\theta(.|s)$ that minimizes
+\eqref{eq:bcgail}, while the discriminator seeks to maximize it. To assist the agent's learning, loss terms for stimulating exploration are added as described after the the representations for the input, output, and architecture are presented.
+
+\subsubsection{Input representation}
+The input $s$ to the agent's policy is a three-channels 192x192 image generated by the GAN network, corresponding to the mid-level BEV representation of the vehicle in its current position. In addition, the current vehicle's speed and the last value of the policy actuators (last acceleration and steering) are also fed as input further down in the network layers (to the first fully connected layer).
+
+\subsubsection{Output representation}
+The vehicle in CARLA has three actuators as: $
+steering \in [-1,1], throttle \in [0,1]
+$, and 
+$brake \in [0,1]$.
+Our agent's action space is $\mathbf{a} \in [-1,1]^2$, where the two components of $\mathbf{a}$ correspond to steering and acceleration. Braking occurs when acceleration is negative. In this way,  by modeling brake and throttle with one dimension, the agent is not allowed to brake and accelerate simultaneously \cite{Petrazzini2021}.
+Instead of using the Gaussian distribution for the policy's actions, common choice in model-free RL, we employ the Beta distribution $\mathcal{B}(\alpha, \beta)$ due to its bounded support, which allows us to model bounded continuous action distributions, usually found in real-world applications such as autonomous driving \cite{Petrazzini2021}, where the action space is not unbounded (i.e., the gas pedal can be actuated up to a certain limit). Besides, the policy loss $\mathcal{L}_P$ can be explicitly computed since clipping or squashing is not used to enforce input constraints (in the case of Gaussian distribution).
+Furthermore, the Beta distribution allows the policy to act in extreme situations of vehicle driving, where sharp turns and sudden braking are necessary, as its parameters $\alpha$ and $\beta$, which are defined as outputs of the policy neural network $\pi_\theta$ and 
+control the shape of the distribution, can be tuned to produce such characteristic vehicle behaviors.
+
+\subsubsection{Networks' Architectures
+}
+The agent's policy part, which corresponds to the right side of Fig.~\ref{fig:hGAIL},
+has the architecture shown in Fig.~\ref{fig:gail}. The discriminator layers are also shown, even though both network's weights are not shared, as in the previously presented CGAN architecture. The only shared part corresponds to the layers between the Generator and the value function $V_\phi(.)$ until the main branch splits into two heads: one for the actions \textit{steering} and \textit{throttle} for the generator (with 2 \textit{softplus} units that outputs the $\alpha$ and $\beta$ parameters of a Beta distribution, for each action); and another for the value of state $s$, given by a linear unit. The discriminator $D(s,a)$ receives an action $a$ in addition to the observation $s$ and maps to a linear output unit, whose output value is employed as reward when training with PPO.
+\begin{figure}[thpb]
+  \centering
+  \includegraphics[scale=0.44]{diagrams/architecture.png}
+  \caption{GAIL architecture for policy learning, corresponding to the Generator network at the right side of Fig.~\ref{fig:hGAIL} and the Discriminator responsible for producing the reward signal. The Generator, $\pi_\theta(a|s)$, receives the predicted BEV image from the GAN's generator, the last agent's actions (throttle, steer), and the current speed as input (which forms the observation $s$ of the policy), and outputs the $\alpha$ and $\beta$ parameters of the Beta distribution for both steering and action with the SoftPlus activation function. The Value function $V_\phi(s)$ shares the Generator network's layers until it branches into a separate head with more two hidden layers and a linear output unit. The Discriminator 
+  $D_\omega(s,a)$ receives the actions \textit{throttle} and \textit{steer} in addition to the observation $s$ and has a linear output unit. Notice that features from the last convolutional layer are flattened before they are merged (\textit{concat}) with other information into FC (fully connected) layers.
+  }
+  \label{fig:gail}
+\end{figure}
+
+
+
+\subsubsection{Encouraring Exploration
+}
+During training, the agent is encouraged to explore the environment through two objectives, as in \cite{roach}:
+
+\begin{equation}
+ \mathcal{L}_{\mathrm{ent}} + \mathcal{L}_{\mathrm{exp}}
+\label{eq:exploration}
+\end{equation}
+where: the first loss function corresponds to the entropy loss commonly used to promote exploration:
+\begin{equation}
+\mathcal{L}_{\mathrm{ent}} = -\lambda_{\mathrm{ent}} \cdot \mathrm{H}(\pi_\theta(.|s)),
+\label{eq:ent_loss}
+\end{equation}
+Minimizing $\mathcal{L}_{\mathrm{ent}}$ means maximizing entropy and thus uncertainty for the policy distribution $\pi_\theta$, which stimulates the agent try more diverse actions since the policy distribution for a certain state $s$ does not become too certain too quickly in the process.
+It also
+drives the action (policy) distribution towards a uniform prior (which represents maximum entropy and uncertainty) since it is equivalent to minimizing the KL-divergence to the uniform distribution defined in the support of the Beta policy $[-1,1]$:
+\begin{equation}
+\mathrm{H}(\pi_\theta) = - \mathrm{KL}(\pi_\theta || \mathcal{U}(-1,1)),
+\label{eq:ent_kl_loss}
+\end{equation}
+
+
+We can also bias the agent's learning with priors that signify meaningful behaviors for an autonomous vehicle and helps to improve and speed up the overall agent's training from scratch. 
+This is accomplished with the following exploration loss $\mathcal{L}_{\mathrm{exp}}$ \cite{roach}:
+
+\begin{equation}
+\mathcal{L}_{\mathrm{exp}} = \lambda_{\mathrm{exp}} \cdot \mathbbm{1}_{\{T-N_{z}+1,...,T\}}(k) \cdot \mathrm{KL}(\pi_\theta(.|s) \left |  \right | p_{z}),
+\label{eq:exp_loss}
+\end{equation}
+where $\mathbbm{1}$ is the indicator function and $z \in \mathcal{Z}$ is the terminal event that finishes the episode. Some examples of events in $\mathcal{Z}$ would be collision, route deviation or the car being still or blocked for too long. 
+$\mathcal{L}_{\mathrm{exp}}$ imposes a prior $p_z$ to the policy during the last $N_z$ steps of an episode ending with one of the events in $\mathcal{Z}$. The indicator function serves as a selection mechanism of the last steps in the episode. 
+This $p_z$ promotes exploration as follows:
+if $z$ is a collision, $p_z = \mathcal{B}(1,2.5)$  for the acceleration actuator, which encourages slowing down behavior; if the car is still, the acceleration prior is $p_z = \mathcal{B}(2.5,1)$, favoring increasing the vehicle's speed; if the vehicle deviates from the trajectory, a uniform prior $\mathcal{B}(1,1)$ is employed for the steering actuator \cite{roach}.
+
+Thus, uniting \eqref{eq:bcgail} and \eqref{eq:exploration}, the total loss function for policy learning through PPO for our hGAIL agent is as follows:
+\begin{equation}
+\alpha \mathcal{L}_{BC} + (1 - \alpha) \mathcal{L}_{P}
++ \mathcal{L}_{\mathrm{ent}} + \mathcal{L}_{\mathrm{exp}}
+\label{eq:bcgail_explo}
+\end{equation}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+	
+
+\section{Experimental Results}
+\label{sec:result}
+The goal of the vehicle is to navigate autonomously in the city shown in Fig. \ref{fig:town01} using the hGAIL agent's architecture with mid-level BEV input generation \footnote{The code and videos for this paper are available on Github at: https://github.com/gustavokcouto/hgail}.
+
+\subsection{Collected data}
+
+The  environment and trajectories  are  obtained from  the CARLA  Leaderboard  evaluation  platform \cite{leaderboard_2020}. In particular, the \textit{town01} environment from this platform along with ten predefined trajectories are employed to generate the expert training set.
+
+The expert dataset is constructed using a deterministic agent that navigates using a dense point trajectory and a classic PID controller \cite{chen2019learning}. The dense point trajectory provides many points at a fine resolution, whereas a sparse point trajectory consists of considerably fewer points, providing only a general sense of direction to the agent. As a result, the dense point trajectory is utilized to generate training data by the expert, whereas the sparse point trajectory is employed by the agent for more general guidance.
+
+In Fig.~\ref{fig:town01}, one of the 10 routes executed by the expert to form the labeled training set of demonstrations is shown, where the line starting in yellow and ending in red represents the desired trajectory (not observable to the agent as it is). 
+The sparse trajectory can be seen as yellow dots, generated every 50 meters traveled or when the vehicle is about to start a different movement (from \textit{straight} to \textit{turn} and vice-versa).
+
+The ten trajectories of the training set were recorded at a rate of 10 hertz, resulting in 10 observation-action pairs per second.
+For the shortest route of 1480 samples (average route of 2129 samples), it represents 2.5 minutes (3.5 minutes) of simulated driving. All the ten trajectories yielded a total of 21,287 training samples (30 GB of uncompressed data). The total set corresponds approximately to 36 minutes or 8km of driving.
+  
+\begin{figure}[thpb]
+  \centering
+  {\includegraphics[scale=0.45]{leaderboard_routes/route_00.png}}
+  \caption{\textit{Town01} environment of the agent, with one of the routes used to collect data by the expert. The highlighted path has 740 meters, 20 points in the sparse trajectory (shown as yellow dots) and 762 points in the dense point trajectory (not shown).} 
+  \label{fig:town01}
+\end{figure}
+
+\subsection{Training}
+\label{exp:training}
+
+The training was conducted using six parallel actors in a synchronous manner, with each actor running its own instance of the CARLA simulator. 
+In the simulation, each episode begins with the vehicle at zero speed at a random starting point. The episode concludes upon the occurrence of any infraction, collision, or lane invasion, and a new episode begins with the vehicle located at a random point of the map to provide diversified experiences for each policy update.
+
+
+At every $12,288$ environment interactions (steps), the agent's architecture is updated in a central computer: the parametrized policy using loss function \eqref{eq:bcgail} is trained for 20 epochs using PPO (K=20), while the GAIL's Discriminator is trained for 2 epochs on these $12,288$ samples; 
+and the CGAN's Generator for BEV with the loss function \eqref{eq:cgan} is trained for 4 epochs, while its Discriminator for 4 epochs. This process corresponds to one training cycle of the full hGAIL. A new cycle will collect the next $12,288$ samples from all the actors, and execute the training as described above again.
+As six parallel actors are used, 2,048 steps or environment interactions per actor are recorded, totalling 
+the 12,288 environment interactions.
+Thus, the episode does not have to end for a policy update to happen.
+It is important to note that at any given moment, any of the six actors may be interacting with the environment in different parts of the environment.
+Additional hyperparameters's values can be found in Tables ~\ref{tab:hyperparamsGAIL} and
+Table~\ref{tab:hyperparamsGAN} for the GAIL and GAN parts of hGAIL, respectively. 
+
+It is worth noting that the GAN part of hGAIL is not trained on a fixed set of labeled demonstrations as it would normally take place. Instead, the expert dataset for this GAN evolves with the agent's training and corresponds exactly to the batch of $12,288$ samples collected by the six parallel actors. The simulator automatically labels them with the real BEV desired output as it is able to compute the topdown view of the vehicle. This happens at every $12,288$ steps executed by all actors together and, thus, the training of the GAN for mid-level input representation follows the agent's experience in the environment, similarly to a strategy for decoupling representation learning from reinforcement learning in \cite{rl_decoupling}.
+The idea is that, once the GAN's training is turned off, the predicted BEV from the GAN could be used in a real setting where the BEV computation is not available.
+
+ \begin{table}[]
+    \centering
+        \caption{Hyperparameters for GAIL}    
+        \label{tab:hyperparamsGAIL}
+    \begin{tabular}{lc}
+    \hline
+    Description &  Value
+    \\ \hline
+    Parallel environments ($N$) & $6$
+    \\
+    Initial adam step size (lr) & $2.0 \times 10^{-5}$
+    \\
+    Adam step size exponential decay ($\lambda_{lr}$) & $0.96$
+    \\
+    Number of PPO epochs (K) & $20$
+    \\
+    Mini-batch size (m) & $256$
+    \\
+    Discount ($\gamma$) & $0.99$
+    \\
+    GAE parameter ($\lambda$) & $0.9$
+    \\
+    Clipping parameter ($\epsilon$) & $0.2$
+    \\
+    Value Function clipping parameter ($\epsilon_{vf}$) & $0.2$
+    \\
+    Value Function coefficient ($c_{1}$) & $0.5 $
+    \\
+    Entropy coefficient ($c_{2}$) & $0.01$
+    \\
+    Exploration coefficient ($c_{3}$) & $0.05$
+    \\
+    Timesteps per epoch (T) & $12288$
+    \\
+    GAIL gamma ($\gamma_{gail}$)& $0.004$
+    \\
+    GAIL gamma decay ($\lambda_{gail}$) & $1.0$
+    \\
+    Discriminator adam step size (lr) & $2.5 \times 10^{-4}$
+    \\
+    Number discriminator epochs (K) & $20$
+    \\
+    \hline
+    \end{tabular}
+\end{table}
+
+ \begin{table}[]
+    \centering
+        \caption{Hyperparameters for CGAN }    
+        \label{tab:hyperparamsGAN}
+    \begin{tabular}{lc}
+    \hline
+    Description &  Value
+    \\ \hline
+    Adam step size (lr) & $2.0 \times 10^{-4}$
+    \\
+    Number of GAN epochs (K) & $4$
+    \\
+    Mini-batch size (m) & $32$
+    \\
+    Patch size ($\gamma$) & $(10, 10)$
+    \\
+    Resize ($\lambda$) & $(192, 192)$
+    \\
+    Lambda pixel ($\epsilon$) & $100$
+    \\
+    \hline
+    \end{tabular}
+\end{table}
+
+
+\subsection{Evaluation}
+
+
+The training progress can be seen in Fig.~\ref{fig:infractionsGraph} (top plot) for hGAIL (a1), GAIL from cameras (a2), and GAIL w/ real BEV (a3) agents. The second agent is trained with input coming directly from the three frontal cameras, disregarding any birds-eye view representation, while the last one is trained directly on the real birds-eye view image computed from the simulator.
+The plot shows the average and standard deviation of the number of infractions for three runs for each agent.
+The resulting deterministic policies for each agent for all three runs are also evaluated as training evolves, as shown in the top plot of Fig.~\ref{fig:infractionsGraph} (bottom plot). For this evaluation, the number of total infractions is computed by summing the infractions committed by all six actors in a simulation of up to $12,000$ steps. If all 6 actors committed at least an infraction and each one ran for at least $3,000$ steps, the evaluations finishes. No infractions happen when all 6 actors run for the whole $12,000$ steps without any infraction.
+Here, the BC agent (a4) is also tested, which consists of basically substituting the GAIL policy for a BC policy, which receives the BEV prediction from a GAN. Both BC and its associated GAN were trained on the same set of ten demonstration trajectories in an offline manner.
+\begin{figure}[thpb]
+  \centering
+  \subfigure[Training]{
+    {\includegraphics[scale=0.52]{graphs/rollout_episodes.png}}
+  }
+  \subfigure[Evaluation]{
+    {\includegraphics[scale=0.52]{graphs/eval_episodes.png}}
+  }
+  \caption{Number of committed infractions vs. environment interactions during training (top) and evaluation (bottom). 
+  For each method (hGAIL, GAIL with real Bird's Eye View, GAIL from cameras, and Behavior Cloning), the average performance of three runs is depicted considering a stochastic policy (top plot) and a deterministic policy (bottom plot). The shaded area represents the standard deviation. The Behavior Cloning (BC) and GAIL from cameras agents fail to learn the task and keep the sum of committed infractions above zero, while the minimum of zero infractions is achieved by both hGAIL and GAIL with real BEV. BC is not shown in the top plot as its training is offline.}
+ 
+  \label{fig:infractionsGraph}
+\end{figure}
+  
+ 
+ 
+
+After training, the agent was evaluated at a given T intersection and compared to the target given by the expert. Fig.~\ref{fig:trajectories_hgail} shows the resulting trajectories, with blue and orange denoting the agent's and expert's trajectories, respectively. It is worth noting that the BC-GAIL policy from the agent receives as input only the generated (fake) BEV mid-level image, the current speed, and last applied actions for throttle and steering.
+For instance, this BEV image corresponds to the topdown image with three channels from Fig.~\ref{fig:bev}. It is important to observe that the only information denoting the desired
+movement for the agent comes from the yellow desired route in the drivable red area. This yellow route occupies the whole lane in the BEV image, which leaves open how the agent will learn to turn at certain intersections. In other words, the agent's policy can not see directly the points in the sparse trajectory, as these points are fed to the GAN part of the architecture and not to the policy. 
+This means that how we terminate the episode, with infractions and lane invasion will influence to a great extent the type of behavior the agent learns. Such an example can be seen in the turns of Fig.~\ref{fig:bev}, where the agent's trajectory does not match exactly with the expert's one. If the agent's policy would have received the point from the sparse trajectory as input, we conjecture that the generated trajectory could have been more similar to the expert's one.
+
+\begin{figure*}[thpb]
+  \centering
+
+  \subfigure[top-right]{
+    {\includegraphics[scale=0.52]{intersect_route_car/1.png}}
+  }
+  \subfigure[top-left]{
+    {\includegraphics[scale=0.52]{intersect_route_car/2.png}}
+  }
+  \subfigure[right-left]{
+    {\includegraphics[scale=0.52]{intersect_route_car/3.png}}
+  }
+  \subfigure[right-top]{
+    {\includegraphics[scale=0.52]{intersect_route_car/4.png}}
+  }
+  \subfigure[left-right]{
+    {\includegraphics[scale=0.52]{intersect_route_car/5.png}}
+  }
+  \subfigure[left-top]{
+    {\includegraphics[scale=0.52]{intersect_route_car/6.png}}
+  }
+  \caption{
+    Agent's trajectories generated by the deterministic policy after training (at epoch 110) in blue color superimposed on the expert trajectory in orange color. At the same T intersection, 6 possible movements are possible: from top to right, top to left, right to left, right to top, left to right and left to top.
+  } 
+   
+  \label{fig:trajectories_hgail}
+\end{figure*}
+
+The trained agent was also evaluated at every T intersection in the considered environment, i.e., 5 different T intersections from \textit{town01} environment, and compared to Behavior Cloning and GAIL from cameras agents. The latter corresponds to a GAIL agent with input directly from the vehicle's three frontal cameras, i.e., without the mid-level BEV input.
+The results are summarized in Table~\ref{tab:intersect_bench}, whose lines presents the results for each possible turn out of 6 in total at a given T intersection (as shown in Fig.~\ref{fig:trajectories_hgail}). Thus, each turn was evaluated in 5 different T intersections, totalling 30 experiments for each agent. The success percentage for each turn type is given in this table, where we can see that hGAIL can turn without failing in all intersections and for all turn types, while BC fails 24\% of the times, and GAIL from cameras fails to learn most of the required driving behavior, succeeding only in 8 turns out of 30. This ablation of the GAN from hGAIL (which is the GAIL from cameras) shows the need for learning the mid-level input representation to succeed in this complex task.
+
+ \begin{table*}[]
+    \centering
+        \caption{Evaluation results for 5 T Intersections and 6 type of turns}    
+        \label{tab:intersect_bench}
+    \begin{tabular}{lccc}
+    \hline 
+    Turn type & Behavior Cloning (BC) & hGAIL & GAIL from cameras
+    \\ \hline
+    Top-right & $80\% $ & $100\% $ & $0\% $
+    \\    
+    Top-left & $80\% $ & $100\% $ & $0\% $
+    \\
+    Right-left & $100\% $ & $100\% $ & $80\% $
+    \\
+    Right-top & $60\% $ & $100\% $ & $0\% $
+    \\
+    Left-right & $100\% $ & $100\% $ & $80\% $
+    \\
+    Left-top & $40\% $ & $100\% $ & $0\% $
+    \\
+    \hline
+    All types & $76\% (23) $ & $100\% (30) $ & $26\% (8) $
+    \\
+    \hline
+    \end{tabular}
+    
+\end{table*}
+
+The evolution of training for hGAIL can also be seen in Fig.~\ref{fig:trainVectorFieldImages}, where the whole trajectory throughout the city is plot at three different moments in training. Early in the training process, the infractions or errors, given by red triangles, are frequent. These infractions decrease as learning proceeds.
+
+\begin{figure*}[thpb]
+  \centering
+  \includegraphics[scale=0.9]{images/train_all.png}
+  \caption{The vehicle's trajectory, in yellow, 
+ 
+  during different moments of the training process. 
+  In the early training iterations, errors, marked in red color, are common. As training proceeds, less and less mistakes happen.
+   
+    }
+    \label{fig:trainVectorFieldImages}
+\end{figure*}
+
+
+\subsection{Mid-level representation learning}
+Here, we presents some results of the learned Birds' Eye-View representation accomplished by the GAN's generator from the hGAIL agent's architecture. The evolution of the representations from five different positions can be seen in Fig.~\ref{fig:gan_eval} at different training epochs, where each row corresponds to a different particular position of the vehicle in the \textit{town01} environment. 
+The first column corresponds to the targets, i.e., the BEV generated by the simulator, which is used to train the GAN's generator. The other columns show the mid-level representation evolving from a poor prediction at 1 epoch, to a good one after 100 epochs.
+
+\begin{figure*}[thpb]
+  \centering
+  \subfigure[target]{
+    {\includegraphics[scale=0.18]{gan_eval/birdview.png}}
+  }
+  \subfigure[1 cyc.]{
+    {\includegraphics[scale=0.18]{gan_eval/ckpt_12288.png}}
+  }
+  \subfigure[11 cyc.]{
+    {\includegraphics[scale=0.18]{gan_eval/ckpt_135168.png}}
+  }
+  \subfigure[21 cyc.]{
+    {\includegraphics[scale=0.18]{gan_eval/ckpt_258048.png}}
+  }
+  \subfigure[51 cyc.]{
+    {\includegraphics[scale=0.18]{gan_eval/ckpt_626688.png}}
+  }
+  \subfigure[101 cyc.]{
+    {\includegraphics[scale=0.18]{gan_eval/ckpt_1241088.png}}
+  }
+  \caption{BEV generation as the agent goes through training.
+  The first column shows five BEV images computed by the simulator and are considered the target output. 
+  The following columns show the BEV images generated by the GAN from the agent's architecture as it undergoes training, at: 12,288 environment steps (1 cycle), 135,168 environment steps (11 cycles), 258,048 environment steps (21 cycles), 626,688 environment steps (51 cycles) and 1,241,088 environment steps (101 cycles). One cycle is similar to the concept of epoch, and consists of the full training of hGAIL using the last 12,288 steps collected; however, each individual network of hGAIL is trained for different number of epochs in one training cycle (see Section~\ref{exp:training}).
+  }
+  \label{fig:gan_eval}
+ 
+\end{figure*}
+
+
+
+
+
+
+
+
+
+
+
+
+
+\section{Conclusion}
+\label{sec:conclusion}
+In this work, the hGAIL architecture was proposed to solve the autonomous navigation of a vehicle in an end-to-end approach, connecting sensory perceptions to low-level actions directly with neural networks (sensory-motor coupling), while learning mid-level input representations of the agent's environment.
+hGAIL is an hierarchical Adversarial Imitation Learning architecture composed of two main modules: the CGAN which generates the Bird's-Eye View (BEV) representation from the three frontal cameras of the vehicle, desired trajectory and high-level command, which is a mid-level (more abstract) input representation of the scene in front of the vehicle; and the GAIL which learns to control the vehicle based mainly on the BEV predictions from the CGAN as input.
+
+Both GAIL and CGAN in hGAIL learns simultaneously in an adversarial way to control the agent and generate the input representations, respectively. 
+The learning takes place in an urban city without pedestrians or other cars, but with dynamic routes that can change the path on the fly. Our experiments have shown that the mid-level input generated by CGAN is essential for the learning task as the GAIL exclusively from cameras (without BEV) fails to even learn the task, keeping a high-infraction rate through training. The BC agent with its associated GAN can complete some turns in the trajectories, but not consistently as hGAIL can. In fact, hGAIL, after training, was able to complete all the six type of turns in the five T intersections from the city.
+
+This work has demonstrated the usefulness of mid-level BEV input for realistic navigation scenarios, but also that this input representation can be learned concomitantly with the agent's policy training. Thus, the BEV generation is learned with the same data distribution used to train the agent's policy. In future work, we are interested in: adding dynamic obstacles such as pedestrians and other vehicles, as well as traffic lights and other weather conditions; and in testing the generalization of the policy to new cities.
+
+
+\addtolength{\textheight}{-0cm}  
+                                 
+                                 
+                                 
+                                 
+                                 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+\bibliographystyle{IEEEtran}
+

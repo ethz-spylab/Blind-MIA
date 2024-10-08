@@ -1,0 +1,521 @@
+\section{Introduction}
+Experimental biologists and clinicians seek a deeper understanding of biological processes and their link with disease phenotypes by characterizing cell behavior. Gene expression offers a fruitful avenue for insights into cellular traits and changes in cellular state.  Advances in technology that enable the measurement of RNA levels for individual cells via Single-cell RNA sequencing (scRNA-seq) significantly increase the potential to advance our understanding of the biology of disease by capturing the heterogeneity of expression at the cellular level \citep{Haque:2017}.  Gene differential expression analysis, which contrasts the marginal expression levels of genes between groups of cells, is the most commonly used mode of analysis to interrogate cellular heterogeneity. 
+By contrast, the relational patterns of gene expression have received far less attention. The most intuitive relational effect is gene co-expression, a synchronization between gene expressions, which can vary dramatically among cells. Converging evidence has revealed the importance of co-expression among genes.  When looking at a collection of highly heterogeneous cells, such as cells from multiple cell types, significant gene co-expression may indicate rich cell-level structure. Alternatively, when looking at a batch of highly homogeneous cells, gene co-expression could imply gene cooperation through gene co-regulation \citep{raj2006stochastic,Emmert-Streib:2014}.
+Biochemistry offers a complementary motivation for the advantages of studying co-expression in addition to marginal expression levels of genes. The biological system of a cell is generally described by a non-linear dynamical system in which gene expression is variable \citep{raj2006stochastic}. Therefore, the observed gene expression level varies by time and condition, even within the same cell, while the cooperation between genes is more stable over time and condition. For this reason, it can be argued that co-expression may more reliably characterize the biological system or state of the cell \citep{dai2019cell}.  scRNA-seq,
+allows us to investigate gene co-expression at different resolutions, to understand not only how genes interact with each other within different cells, but also how the interactions relate to cell heterogeneity.
+
+The recent work by \cite{dai2019cell} attempts an ambitious task: characterizing the gene co-expression at a single cell level (termed  ``cell-specific network'' CSN). Specifically, for a pair of genes and a target cell, \citet{dai2019cell} construct a 2-way $2\times2$ contingency table test by binning all the cells based on whether they are in the marginal neighborhoods of the target cell and assigning the test results as a binary indicator of gene association in the target cell. Viewed over all gene pairs, the result is a cell-specific gene network. 
+Forgoing interpretation of the detected associations, they utilize the CSN to obtain a data transformation.  Specifically, they replace the transcript counts in the gene-by-cell matrix with the degree sequence of each cell-specific network.
+Although this data transformation shows encouraging success in various downstream tasks, such as cell clustering, it remains unclear what the detected ``cell-specific'' gene association network really represents.
+The implementation details and interpretation of the results are presented at a heuristic level, making   
+it difficult for others to appreciate and generalize this line of work. 
+
+In a follow-up paper, \cite{wang2021constructing}  take the first steps to capitalize on the CSN approach by redirecting the concept to obtain an estimator of co-expression.   Specifically,
+they propose averaging the ``cell specific" gene association indicators over cells in a class to recover a global measure of gene association (avgCSN). The resulting measure performs remarkably well in certain simulations and detailed empirical investigations of brain cell data. Compared to Pearson's correlation, the avgCSN gene co-expression appears less noisy and provides more accurate edge estimation in simulations. It is also more powerful in a test to uncover differential gene networks between diseased and control brain cells. Finally, it provides biologically meaningful gene networks in developing cells. 
+
+The empirical success of avgCSN likely lies in the nature of gene expression data: often noisy, sparse and heterogeneous, meaning not all cells exhibit co-expression at all times due to cellular state and conditions. For this reason, a successful method must be robust and sensitive to local patterns of dependencies.
+{\color{black} Being an average of a series of binary local contingency table tests, the error in each entry of avgCSN is limited, meanwhile the non-negative summands ensure that local patterns are not cancelled out. By contrast, measures like Pearson's correlation can have both negative and positive summands, and therefore the final value can be small even if the dependence structure is clear for a subset of the cells.} To make the method more stable, \cite{wang2021constructing} proposed some heuristic and practical techniques to compute avgCSN, for which we would like to have more principled insights. Examples are the choice of window size in defining neighborhoods in the local contingency table test, the choice of thresholding in constructing an edge, and the range of cells to aggregate over. Many natural questions emerge: how does avgCSN relate to other gene co-expression measures and the full range of general univariate dependence measures, and why does it perform well in practice?  Through theoretical analysis and extensive experimental evaluations, we address these questions, revealing that avgCSN is an empirical estimator of a new dependency measure, which enjoys various advantages over the existing measures. 
+
+For comparison, we briefly review the related work in gene co-expression measures and general univariate dependence.
+Since the work by \citet{eisen1998cluster}, Pearson's correlation has been the most popular gene co-expression measure for its simple interpretation and fast computation. However, Pearson's correlation fails to detect non-linear relationships and is sensitive to outliers. Another class of co-expression methods is based on mutual information (MI) \citep{bell1962mutual,steuer2002mutual,daub2004estimating}. The computation of MI involves discretizing the data and tuning parameters, and the dependence measure does not have an interpretable scale.  \citet{reshef2011detecting} proposed the maximal information coefficient (MIC) as an extension of MI, but MIC was shown to be over-sensitive in practice. More comparisons of different co-expression measures and the constructed co-expression networks can be found in \cite{song2012comparison,allen2012comparing}.
+
+In the broader statistical literature, the problem of finding gene co-expression is closely related to that of detecting univariate dependence between two random variables. Specifically, for a pair of univariate random variables $X, Y$, how to measure the dependence between them has been a long-standing problem. The problem is often described as finding a function $\delta(X,Y)$, which measures the discrepancy between the joint distribution $F_{XY}$ and product of marginal distribution $F_{X}F_{Y}$. Numerous solutions to this problem have been provided: include the Renyi correlation \citep{renyi1959measures} measuring the correlation between two variables after suitable transformations; various regression-based techniques; Hoeffding’s D \citep{hoeffding1948non}, distance correlation (dCor) \citep{szekely2007measuring}, kernel-based measure like HSIC \citep{gretton2005measuring} and rank based measure like Kendall's $\tau$ and the refinement later, $\tau^\star$ \citep{bergsma2014consistent}. Most of these methods have not yet been widely adopted in genetics applications. 
+
+ Aside from avgCSN, the methods mentioned so far do not specifically target dependence relationships that are local and often assume the data are random samples from a common distribution (in contrast with a mixture distribution) in the theoretical analysis. However, real gene interactions may change as the intrinsic cellular state varies and may only exist under specific cellular conditions. Furthermore, with data integration now being a routine approach to combat the curse of dimensionality, samples from different experimental conditions or tissue types are likely to possess different gene relationships and thus create more complex situations for detecting gene interactions.  In this setting, much like avgCSN, an ideal measure accumulates subtle local dependencies, possibly only observed in a subset of the cells. A co-expression measure that aims to detect local patterns, developed by \cite{wang2014gene}, counts the proportion of matching patterns of local expression ranks as the measure of gene co-expression. Specifically, they aggregate the gene interactions across all subsamples of size $k$. However, despite its promising motivation, it has low power to detect non-monotone relationships.  MIC \citep{reshef2011detecting} and HHG \citet{heller2013consistent} are also measures that attempt to account for local patterns of dependencies.
+
+In this paper, we first give a detailed review of the related methods in \secref{aLDGintr}. Then in \secref{pop}, we show that avgCSN is indeed an empirical estimate of a valid dependence measure, which we define as averaged Local Density Gap (aLDG). In \secref{robpop} and \secref{emp}, we formally establish its statistical properties, including estimation consistency and robustness. We also investigate data-adaptive hyperparameter selection to justify and refine the heuristic choices in application in \secref{chooset}. Finally, we provide a systematic comparison of aLDG and its competitors via both simulation and real data examples in \secref{aLDGcompare}.
+
+
+\section{A brief review of dependence and association measures}\label{sec:aLDGintr}
+Before starting on the description of the various dependence measures, let us remark that \citet{renyi1959measures} proposed that a measure of dependence between two stochastic variables $X$ and $Y$, $\delta(X,Y)$, should ideally have the following properties:
+\begin{enumerate}
+    \item[(i)] $\delta(X,Y)$ is defined for any $X,Y$ neither of which is constant with probability $1$.
+    
+    \item[(ii)] $\delta(X,Y)$=$\delta(Y,X)$.
+    
+    \item[(iii)] $0\leq \delta(X,Y) \leq 1$.
+    
+    \item[(iv)] $\delta(X,Y)=0$ if and only if $X$ and $Y$ are independent.
+    
+    \item[(v)] $\delta(X,Y)=1$ if either $X=g(Y)$ or $Y=f(X)$, where $f$ anf $g$ are measurable functions.
+    
+    \item[(vi)] If the Borel-measurable functions $f$ and $g$ map the real axis in a one-to-one way to itself, then $\delta(f(X),g(Y))=\delta(X,Y)$.
+\end{enumerate}
+Particularly, a measure satisfying (iv) is called a strong dependence measure. 
+
+Apart from the above properties, there are two more properties that are particularly useful in single-cell data analysis. Single-cell data often contain a significant amount of noise, among which outliers account for a non-negligible fraction. Therefore \emph{robustness} is a desirable property in a dependence measure. Specifically, keeping with previous literature \citep{dhar2016study}, by robustness we mean that the value of the measure does not change much when a small contamination point mass, far away from the main population, is added. A formal description and corresponding evaluation metric will be described later. Another often overlooked property is \emph{locality}, which is a relatively novel concept and has not been properly defined to the best of our knowledge. Nevertheless, this concept has been catching attention over the recent decade \citep{reshef2011detecting,heller2013consistent,heller2016consistent,wang2014gene}, especially in work motivated by genetic data analysis. \emph{Locality} targets a special kind of dependence relationship that is generally restricted to a particular neighborhood in the sample space. A natural example is dependence that occurs in some, but not necessarily all of the components in a finite mixture.  Another is dependence within a moving time window in a time series. Generally speaking, the interactions change as the hidden condition varies, or only exist under a specific hidden condition. A dependence measure that is \emph{local} should be able to accumulate dependence in the local regions.  
+
+No measure has all of the properties mentioned above, as far as we know. Our new measure possesses all but properties (v) and (vi). In the following, we review a selected list of univariate dependence measures in more details.
+
+
+\subsection{Moment based measures}
+The first class of methods is based on various moment calculations. The main advantage is fast computation and minimum tuning, while the main drawback is non-robustness to outliers from their moment-based nature.
+
+\paragraph*{Pearson's correlation} The simplest measure is the classical Pearson’s correlation:
+\begin{equation}
+    \text{Pearson's}\ \rho(X,Y):= \frac{\text{Cov}(X,Y)}{\sqrt{\text{Var}(X)\text{Var}(Y)}}.
+\end{equation}
+Plugin the sample estimation of covariance and variance, consistency and asymptotic normality can be proven using law of large numbers and the central limit theorem, respectively. Pearson's $\rho$ has been, and probably still is, the most extensively employed measure in statistics, machine learning, and real-world applications, due to its simplicity. However, it is known to detect only linear relationships. Also, as is the case for regression, it is well known that the product-moment estimator is sensitive to outliers: even just a single outlier may have substantial impact on the measure. 
+
+\paragraph*{Maximal correlation} 
+The maximal correlation (MC) is based on Pearson's $\rho$. It is constructed to avoid the problem that Pearson's $\rho$ can easily be zero even if there is strong dependence. \citet{gebelein1941statistische} first propose MC as
+\begin{equation}
+    \text{MC}(X,Y) := \sup_{f,g} \rho(f(X),g(X)).
+\end{equation}
+Here the supremum is taken over all Borel-measurable functions $f,g$ with finite and positive variance for $f(X)$ and $g(Y)$. The measure MC can detect non-linear relationships, and in fact, it is a strong dependence measure. However, often MC cannot be evaluated explicitly except in special cases, because there does not always exist functions $f_0$ and $g_0$ such that $\text{MC} = \rho(f_0(X), g_0(Y))$. Also, it has been found to be overly ``sensitive'', i.e. it gives high value for distributions arbitrarily ``close'' to independence in practice.
+
+
+\paragraph*{Distance correlation} A recent surge of interests has been placed on using distance metrics to achieve consistent independence testing against all dependencies. A notable example is the distance correlation (dCor) proposed by \citet{szekely2007measuring}:  
+\begin{align}
+    \text{dCor} (X,Y)& := \frac{V(X,Y)}{\sqrt{V(X,X)V(Y,Y)}}, \\
+    & \quad \text{where } V(X,Y)=\mathbb{E}{|X-X'||Y -Y'|}
++ \mathbb{E}{|X - X'|}\mathbb{E}{|Y - Y'|}\\
+& \quad \quad \quad \quad \quad \quad \quad \quad \quad 
+- 2\mathbb{E}_{X,Y}\Big[{\mathbb{E}_{X'}|X-X'| \mathbb{E}_{Y'}|Y - Y'|}\Big], \nonumber
+\end{align}
+with $(X',Y')$ an i.i.d copy of $(X,Y)$. The distance correlation enjoys universal consistency against any joint distribution of finite second moments; however, in practice, it does not work well for non-monotone relationship \citep{shen2020distance}. Also, it is not robust from its moment based nature, as proven by \citet{dhar2016study}. 
+
+
+\paragraph*{HSIC} Recall the definition and formula for the maximal correlation, about which we mentioned it is difficult to compute since it requires the supremum of the correlation $\rho(f(X),g(Y))$ taken over Borel-measurable $f$ and $g$. In the framework of reproducing kernel Hilbert spaces (RKHS), it is possible to pose this problem and compute an analogue of MC quite easily. A state-of-the-art method in this direction is the so-called Hilbert-Schmidt Independence Criterion (HSIC) \citep{gretton2005measuring}. Denote the support of $X$ and $Y$ as $\mathcal{X}$ and $\mathcal{Y}$ respectively, HSIC considers $f,g$ to be in RKHS $\mathcal{F}$ and $\mathcal{G}$ of functionals on sets $\mathcal{X}$ and $\mathcal{Y}$ respectively. Then HSIC is defined to be the Hilbert-Schmidt (HS) norm of a Hilbert-Schmidt operator. We refer the reader to \cite{gretton2005measuring} for detailed description.  What might be of interest is that, in many cases, HSIC is equivalent to dCor.
+
+\subsection{Rank based measure}
+Another line of work based on ordinal statistics is developed in parallel to the moment-based methods. A random variable $X$ is called ordinal if its possible values have an ordering, but no distance is assigned to pairs of outcomes. Ordinal data methods are often applied to data in order to achieve robustness. 
+
+\paragraph*{Spearman's $\rho_S$, Kendall's $\tau$ and $\tau^\star$} The two most popular measures of dependence for ordinal random variables $X$ and $Y$ are Kendall’s $\tau$ and Spearman’s $\rho_S$. Both Kendall's $\tau$ and Spearman's $\rho_S$ are proportional to sign versions of the ordinary covariance, which can be seen from the following expressions for the covariance:
+\begin{align*}
+    \text{Cov}(X,Y) &= \frac12\EE{(X - X')(Y - Y')} \propto \text{Kendall} \\
+       & =\EE{(X' -X'')(Y' -Y''')} \propto \text{Spearman},
+\end{align*}
+where $(X',Y'), (X'',Y''), (X''', Y''')$ are i.i.d replications of $(X,Y)$. Note that Kendall's $\tau$ is simpler than Spearman's $\rho_S$ in the sense that it can be defined using only two rather than three independent replications of $(X, Y)$, so often Kendall's $\tau$ is preferred. A concern from certain applications is that Kendall's $\tau$ and Spearman's $\rho_S$ are not \emph{strong} dependence measures, so tests based on them are inconsistent for the alternative of a general dependence. In fact, it is often observed that they have difficulty detecting nonmonotone relationship. Later, an extension $\tau^\star$ \citep{bergsma2014consistent} mitigates such deficiency by modifying Kendall's $\tau$ to a strong measure. 
+
+\paragraph*{Hoeffding's D and BKR}
+Related to the ordinal statistics-based methods, another class of methods start from the cumulative distribution function (CDF), some of which are equivalent to ordinal forms due to the relationship between CDF and ranks. The oldest example is the Hoeffing's D proposed by \citet{hoeffding1948non}:
+\[
+\text{Hoeffing's D} := \mathbb{E}_{X,Y} \Big[(F_{X,Y} - F_{X}F_{Y})^2\Big],
+\]
+where $F_X$, $F_Y$, $F_{X,Y}$ are the CDF of $X$, $Y$, $(X,Y)$ respectively. Still, Hoeffing's D is not a strong measure, while its modified version BKR \citep{blum1961distribution}:
+\[
+\text{BKR} := \mathbb{E}_{X}\mathbb{E}_{Y} \Big[(F_{X,Y} - F_{X}F_{Y})^2\Big]
+\]
+is. It turns out Hoeffding's D belongs to a more general family of coefficients, which can be formulated as
+\[
+\text{C}_{gh} := \int g(F_{X,Y} - F_{X}F_{Y}) d h(F_{XY})
+\]
+for some $g$ and $h$. We will abbreviate Hoeffding's D as HoeffD in the figures in the remainder of paper.
+
+
+\subsection{Dependence measures aware of local patterns}
+
+Most of the methods mentioned so far do not specifically target dependence relationships that can be local in nature. In the following, we describe a few measures that were designed to capture complex relationships, whether local or not. 
+
+\paragraph*{Maximal Information Coefficient} The idea behind the Maximal Information Coefficient (MIC,\cite{reshef2011detecting} statistic consists in computing the mutual information locally over a grid in the data set and then take as statistic the maximum value of these local information measures over a suitable choice of grid. However, several examples were given in \citet{simon2014comment} and \citet{gorfine2012comment} where MIC is clearly inferior to dCor.
+
+\paragraph*{HHG}
+\citet{heller2013consistent} pointed out another way to account for local patterns: that is, looking at dependence locally and then aggregating the dependence over the local regions. The local regions is simply defined as bins via partitioning the sample space.
+Additionally, HHG takes a multi-scale approach: multiple sample space partitions are conducted, and results are aggregated over all of them. This results in a provably consistent permutation test. However, the cost of implementation is significantly longer computation time than its competitors: it takes $O(n^3)$ computation time while its competitors normally take at most $O(n^2)$.
+
+\paragraph*{Matching ranks} Another method that developed specifically for accounting local pattern 
+is proposed by \citep{wang2014gene}. Given $n$ pair of observations of $(X,Y)$, $\{(x_i,y_i)\}_{i=1}^n$, they propose to count the number of size $k$ subsequences $(x_{i_1}, x_{i_2}, \dots x_{i_k})$ and $(y_{i_1}, y_{i_2}, \dots y_{i_k})$ such that their rank is matched. We refer to this measure as MR (Matching Ranks).  Specifically, we write the scaled version of MR such that it is in range [0,1]:
+\begin{align*}
+    \text{MR} :=   \frac{1}{2{n\choose k}}\sum_{1\leq i_1<i_2\dots<i_k \leq n} & \Big(\mathbf{1}\{ rank(x_{i_1}, x_{i_2}, \dots x_{i_k}) = rank(y_{i_1}, y_{i_2}, \dots y_{i_k})\} \\
+    & + \mathbf{1}\{ rank(x_{i_1}, x_{i_2}, \dots x_{i_k}) = rank(-y_{i_1}, -y_{i_2}, \dots -y_{i_k})\}\Big),
+\end{align*}
+where $rank(a_1,\dots,a_k) = (r(a_1),\dots,r(a_k))$ where $r(a_i)$ is the rank of element $a_i$ within the sequences $(a_1,\dots,a_k)$, and the equality inside the indicator function applies element-wisely. Though claimed to be able to detect complex relationship, this measure is inferior to others in some non-monotone dependence case like quadratic relationship. 
+
+
+
+
+
+\section{Our method: averaged Local Density Gap}\label{sec:aLDGdef}
+
+
+First, we elaborate on the origin of our work, which was inspired by gene co-expression analysis using single-cell data. In the context of gene co-expression analysis, the pair of random variables $X,Y$ represents the expression level of a pair of genes, and the goal is to find the relationship between them. Pearson's correlation is one commonly used metric for this task. In light of the many shortcomings of this global measure of dependence, \citet{dai2019cell} proposed to characterize the gene relationships for every cell. Their method takes the following approach: for the gene pair $(X,Y)$, and a target cell $j$, partition the $n$ samples based on whether $|X_{\cdot} - X_j| < h_x$ and $|Y_{\cdot} - Y_j| < h_y$, where $h_x$ and $h_y$ are predefined window sizes. This partition can be summarized as a  $2 \times 2$ contingency table (\tabref{contingency}). Then evidence against independence in this $2\times 2$ table can be quantified by a general contingency table test statistic. \citet{dai2019cell} uses 
+\begin{equation}
+    S_{X,Y}^{(j)} := \frac{ \sqrt{n} \left(n_{x,y}^{(j)}n  - n_{x,\cdot}^{(j)} n_{\cdot,y}^{(j)}\right)}{\sqrt{n_{x,\cdot}^{(j)} n_{y}^{(j)} (n-n_{x,\cdot}^{(j)}) (n-n_{\cdot,y}^{(j)})}},
+\end{equation}
+and conducts a one-sided $\alpha$ level test based on its asymptotic normality, that is
+\begin{equation}\label{contingency_test}
+    I_{XY}^{(j)}:= \mathbb{I}\{S_{X,Y}^{(j)} > \Phi^{-1}
+(1-\alpha)\}.
+\end{equation}
+
+\begin{table}[H]
+\centering
+    \begin{tabular}{c|c|c|c}
+                   &  $|Y_{\cdot} - Y_j| \leq h_y$ &  $|Y_{\cdot} - Y_j| > h_y$ &   \\  \hline
+     $|X_{\cdot} - X_j| \leq h_x$   &      $n_{x,y}^{(j)} $     &   & $n_{x,\cdot}^{(j)}$   \\  \hline
+       $|X_{\cdot} - X_j| > h_x$   &            &  &    \\  \hline
+      &  $n_{\cdot,y}^{(j)}$  &   & $n$
+    \end{tabular}
+    \caption{The $2\times 2$ contingency table based on distance from $j$-th sample.}
+    \label{tab:contingency}
+\end{table}
+{\color{black} \citet{dai2019cell} claim that  $I_{XY}{(j)}$ indicates whether or not gene pairs $X$ and $Y$ are dependent in cell $j$, and refer to the detected dependence as \emph{local dependence}. Though interesting as a novel concept, it lacks rigor and interpretability. Alternatively we propose to define $X$ and $Y$ as being \emph{locally independent} at position $(x,y)$ as 
+\begin{equation}
+    f_{XY}(x,y) = f_{X}(x)f_{Y}(y),
+\end{equation}
+then $I_{XY}$ provides a way of assessing \emph{local independence}.
+Specifically, as a one-sided test, $I_{XY}(j)$ assesses whether or not $f_{XY}(x,y) > f_{X}(x)f_{Y}(y)$, at position $(x,y)$ marked by cell $j$.  To assess global independence, aggregation, as proposed by \citet{wang2021constructing}, is needed. Their empirical measure can be formally written as:
+\begin{equation}\label{avgcsn}
+    \text{avgCSN} := \frac{1}{n} \sum_{i=1}^n I_{XY} ^{(j)}.
+\end{equation}
+}
+{\color{black}Some simple approximations gives us a population correspondence of avgCSN.} Assume the variables $X,Y$ have joint density $f_{XY}$, and marginal densities, $f_{X}$ and $f_{Y}$, that have common support.  Let $\widehat{f}_{XY}, \widehat{f}_{X}, \widehat{f}_{Y}$ be the estimated densities given observations of $(X,Y)$. 
+Under the assumption that the bandwidth $h_x, h_y\to 0$ and $ \sqrt{h_x h_y n}\to\infty$, with some simple algebra (see \appref{derive} for detailed derivation), we see that
+\begin{align}\label{deriveavgcsn}
+    \text{avgCSN} &\approx \frac{1}{n} \sum_{i=1}^n \mathbf{1}\left\{ \frac{\widehat{f}_{X,Y}(x_{i}, y_{i}) - \widehat{f}_{X}(x_{i}) \widehat{f}_{Y}(y_{i}) }{\sqrt{ \widehat{f}_{X}(x_{i})\widehat{f}_{Y}(y_{i})}} \geq t_n \right\},\quad \text{where } t_n = \frac{\Phi^{-1}(1-\alpha)}{\sqrt{n h_x h_y}},
+\end{align}
+and $\alpha\in[0,1]$ is some hyperparameter related to the test level of the local contingency test (usually $\alpha$ is set to 0.05 or 0.01). Because $t_n \downarrow 0$ as $n$ goes to infinity, we naturally think of the following population dependence measure:
+\begin{equation*}
+  \text{Pr}_{X,Y}\left\{ \frac{f_{X,Y}(X,Y) - f_X(X) f_{Y}(Y)}{\sqrt{f_{X}(X)f_{Y}(Y)}} > 0\right\}.
+\end{equation*}
+
+In the remainder of this section, we formally define a generalized version of this measure in \secref{pop}, along with its properties on the population level. Then we discuss consistent and robust estimation in \secref{emp} and provide guidance on hyper-parameter selection in \secref{chooset}. Finally, we comment on the relationship between our measure and some of the previous work in \secref{relation}. 
+
+
+
+
+
+\subsection{Definition and basic properties}\label{sec:pop}
+\begin{definition}(averaged Local Density Gap)
+Consider a pair of random variables $X,Y$ whose joint and marginal densities both exist, and denote $f_{XY}, f_{X}, f_{Y}$ as their joint and marginal densities. The averaged Local Density Gap (aLDG) measure is then defined as 
+\begin{equation}
+    \text{aLDG}_t := \text{Pr}_{X,Y}\left\{ T(X,Y) > t\right\}, \quad \text{where } T(X,Y):= \frac{f_{X,Y}(X,Y) - f_X(X) f_{Y}(Y)}{\sqrt{f_{X}(X)f_{Y}(Y)}}
+\end{equation}
+and $t\geq 0$ is a tunable hyper-parameter.
+\end{definition}
+
+\noindent
+From the definition, one can immediately realize the following lemma.
+\begin{lemma}\label{lem:simpleprop}
+For a pair of random variables $X,Y$ whose joint and marginal densities both exist, we have
+\begin{enumerate}
+    \item $X \perp Y  \Longleftrightarrow \text{aLDG}_0 =0 $;
+    
+    \item  if $t>0$, then  $X \perp Y \Longrightarrow \text{aLDG}_t =0$;
+
+    \item $\text{aLDG}_t \text{ is non-increasing with regard  } t$ for all $t \geq 0$;
+    
+    \item $\text{aLDG}_t \in [0,1]$;
+    
+    \item $\text{aLDG}_t(X,Y) = \text{aLDG}_t(Y,X)$;
+\end{enumerate}
+\end{lemma}
+As a concrete example of the $\text{aLDG}$ measure, the left plot of \figref{aLDGpop} displays $\text{aLDG}$, given different $t$ for a bivariate Gaussian with different choices of correlation. We can see that (1) $\text{aLDG}_t$ is non-increasing with regard $t$ as our \lemref{simpleprop} suggests; (2) $\text{aLDG}_t$ equals zero at independence for all $t\geq 0$, while $\text{aLDG}_0$ equals zero if and only if there is no dependence, as our \lemref{simpleprop} suggests; (3) $\text{aLDG}_t$ increases with the dependency level, indicating that it is a sensible dependence measure.
+
+
+Note that, from \lemref{simpleprop}, $\text{aLDG}_0$ is a \emph{strong}\footnote{Recall that a measure of dependence between a pair of random variable $X,Y$ is \emph{strong} if it equals zero if and only if $X$ and $Y$ are independent.} measure of dependence. While being strong is a desirable feature of a dependence measure, for $\text{aLDG}$ type of measure, we find that it comes with the sacrifice of robustness under independence (\propref{indeprob}). On the other hand, setting $t>0$ could result in insensitivity under weak dependence, but with a provable guarantee of robustness (\thmref{aLDGrobpop}). In summary, the hyper-parameter $t$ serves as a trade-off between robustness and sensitivity. In \secref{chooset} we will discuss the practical choice of $t$ in more detail. For now, we treat it as a predefined non-negative constant.
+
+\subsection{Robustness analysis}\label{sec:robpop}
+In the following, we present a formal robustness analysis. An important tool to measure the robustness of a statistical measure is the influence function (IF). It measures the influence of an infinitesimal amount of contamination at a given value on the statistical measure. The Gross Error Sensitivity (GES) summarizes IF in a single index by measuring the maximal influence an observation could have. 
+\begin{definition}[Influence function (IF) and Gross Error Sensitivity (GES)] Assume that the bivariate random variable $(X,Y)$ follows a distribution $F$, the influence function of a statistical functional $R$ at $F$ is defined as
+\begin{align}\label{if}
+    \text{IF}\big((x,y), R, F\big) := \lim_{\epsilon \to 0} \frac{R\big((1-\epsilon) F + \epsilon \delta_{(x,y)}\big) - R(F)}{\epsilon}
+\end{align}
+where $\delta_{(x,y)}$ is a Dirac measure putting all its mass at $(x,y)$. The Gross Error Sensitivity (GES) summarizes IF in a single index by measuring the maximal influence over all possible contamination locations, which is defined as
+\begin{equation}
+    \text{GES}(R, F) := \sup_{(x,y)} \mid \text{IF}\big((x,y), R, F\big)\mid.
+\end{equation}
+An estimator is called $B$-robust if its GES is bounded. 
+\end{definition}
+
+Among the related work we have mentioned, only the robustness of $\tau$, $\tau^\star$, and $\text{dCor}$ have been theoretically investigated to the best of our knowledge. \citet{dhar2016study} proved that $\text{dCor}$ is not robust while $\tau$ and $\tau^\star$ are. Their evaluation criteria is a bit different from ours. We investigate the limit of the ratio when the contamination mass goes to zero. They investigate the ratio limit when the contamination position goes far away, given fixed contamination mass. We argue that our analysis aligns better with the main statistical literature. In the following, we show that $\text{aLDG}_t$ with $t>0$ is $B$-robust, under some reasonable regularity conditions.
+
+\begin{theorem}\label{thm:aLDGrobpop}
+Consider $t>0$, and a bivariate distribution $F$ of variable $(X,Y)$ whose joint and marginal densities exist as $f_{XY}$, $f_{X}$, $f_{Y}$, and satisfy
+\begin{equation}
+    f_{\text{max}}:=||\sqrt{f_{X}f_{Y}}||_{\infty} <\infty; \quad \quad  |\text{aLDG}_{t - \epsilon} - \text{aLDG}_{t}| \leq L\epsilon,\ \forall \ \epsilon >0;
+\end{equation}
+then we have
+\begin{equation}
+    \text{GES}(\text{aLDG}_t, F) \leq L f_{\text{max}} +1 < \infty.
+\end{equation}
+\end{theorem}
+
+The proof of \thmref{aLDGrobpop} is in \appref{aLDGrobpop}.
+The first assumption about the boundness of density is common in density based statistical analysis. The second assumption about the $\text{aLDG}_{t}$ smoothness may look less familiar, however after a transformation, it is no more than a CDF-smoothness assumption: recall that $T(X,Y) := \frac{f_{XY}(X)-f_{X}(X)f_{Y}(Y)}{\sqrt{f_{X}(X)f_{Y}(Y)}}$, then 
+\begin{align}
+     |\text{aLDG}_{t-\epsilon} - \text{aLDG}_{t}|< L\epsilon \Longleftrightarrow \mathbb{P}\{|T(X,Y)-t|\leq \epsilon\} \leq L\epsilon,
+\end{align}
+that is, the CDF of random variable $T(X,Y)$ is L-lipschitz around $t$ for $t>0$. In \figref{smooth} we show the empirical density of $T(X,Y)$ for bivariate Gaussian of different correlation, which is generally bounded by some constant $L$ at positive values.
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=1\linewidth]{plots/densityT.pdf}
+    \caption{The empirical density of statistics $T$. The underlying bivariate distribution is Gaussian, and the value of $T$ is calculated using the true Gaussian density. We can see that, as the correlation increases, the density of $T$ near zero (annotated by the red dashed line) is smaller.}
+    \label{fig:smooth}
+\end{figure}
+In the following, we show that $\text{aLDG}_0$ is not robust under independence. 
+\begin{proposition}\label{prop:indeprob}
+For any distribution $F$ over a pair of independent random variables $(X,Y)$ whose joint and marginal density exists and are smooth almost everywhere, we have
+\begin{equation}
+    \text{GES}(\text{aLDG}_0, F) = \infty
+\end{equation}
+if and only if X is independent of Y.
+\end{proposition}
+The proof of \propref{indeprob} is in \appref{indeprob}. 
+The right plot in \figref{aLDGpop} provides some empirical evidence of the non-robustness of $\textnormal{aLDG}_0$ under independence. Specifically, we plot the population value of the ratio inside limitation \eqref{if}, under bivariate Gaussian with small enough contamination proportion $\epsilon$, to approximately show that the IF value of $\textnormal{aLDG}_t$ at independence indeed goes to infinity as $t$ goes to zero. 
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\linewidth]{plots/popvalue.pdf}
+    \caption{\textbf{(Left)} The true $\textnormal{aLDG}_t$ value for bivariate Gaussian with different levels of correlation under different choices of $t$. \textbf{(Right)} The influence function value approximated by setting the contamination proportion very small ($\epsilon = 10^{-6}$).}
+    \label{fig:aLDGpop}
+\end{figure}
+
+
+
+
+\subsection{Consistent and robust estimation}\label{sec:emp}
+In this section we investigate estimation of $\text{aLDG}_t$ given finite samples. One natural way to estimate $\text{aLDG}_t$ is using the following plug-in estimator: recall that $\widehat{f}_{XY}, \widehat{f}_{X}, \widehat{f}_{Y}$ are the estimated joint and marginal densities, then given $n$ observations $\{(x_1,y_1),\dots,(x_n,y_n)\}$ of $(X,Y)$, $\text{aLDG}_t$ can be estimated by 
+\begin{align}
+\label{eq:aLDGemp}
+    \widehat{\text{aLDG}}_t & := \frac{1}{n}\sum_{i=1}^n \mathbf{1}\left\{ \widehat{T}(x_i,y_i) \geq t \right\},\quad \text{where } \widehat{T}(x_i,y_i):=\frac{\widehat{f}_{X,Y}(x_{i}, y_{i}) - \widehat{f}_{X}(x_{i}) \widehat{f}_{Y}(y_{i}) }{\sqrt{ \widehat{f}_{X}(x_{i})\widehat{f}_{Y}(y_{i})}}
+\end{align}
+In the following, we establish the non-asymptotic high probability bound of the estimation error using the above simple plug-in estimator $\widehat{\text{aLDG}}_t$. The error rate is determined by the density estimation error for variable $X, Y$, as well as the probability estimation error for $T(X,Y)$. 
+\begin{theorem}\label{thm:aLDGconsist}
+Consider $t>0$, and a bivariate distribution $F$ of variable $(X,Y)$ whose joint and marginal densities exist as $f_{XY}$, $f_{X}$, $f_{Y}$, and satisfy
+\begin{align*}
+&\inf_{x,y}f_{XY}(x,y),\  \inf_{x}f_X(x) \inf_{y}f_Y(y) \geq c_{\min},\\
+& \sup_{x,y}f_{XY}(x,y),\  \sup_{x}f_X(x) \sup_{y}f_Y(y) \leq c_{\max},
+\end{align*}
+and for some $\eta_n$ with $\lim_{n\to\infty}\eta_n \to 0$, with probability at least $1-\frac{1}{n}$ 
+\begin{equation}
+  ||\widehat{f}_{XY}-f_{XY}||_{\infty}, ||\widehat{f}_{X}-f_{X}||_{\infty}, ||\widehat{f}_{Y}-f_{Y}||_{\infty} \leq \eta_n; 
+\end{equation} 
+and for some constant $0<L<\infty$, 
+\begin{equation}
+    |\text{aLDG}_{t-\epsilon}-\text{aLDG}_t| \leq L\epsilon\quad  \text{for all} \ \epsilon>0.
+\end{equation}
+Then we have, with probability at least $1-\frac{2}{n}$, we have
+\begin{equation}
+    \left|\widehat{\text{aLDG}}_t - \text{aLDG}_t\right| \leq  LC\eta_n + \sqrt{\frac{2\log{n}}{n}},
+\end{equation}
+where $C$ depends only on $c_{\min}, c_{\max}$.
+\end{theorem}
+\thmref{aLDGconsist} is flexible in the sense that one can plug-in any kind of density estimator and its error rate to obtain the error rate of the corresponding $\widehat{\text{aLDG}}$ estimator. The proof of \thmref{aLDGconsist} is in \appref{pfconsist}. Though \thmref{aLDGconsist} was for fixed $t$, we also provide similar result that holds true uniformly over all possible $t$ in \appref{uniform}.
+
+As for a concrete example, we provide explicit results for a special class of bivariate density and a simple density estimator. Specifically, we consider the true marginal density $f_X$, $f_Y$ that are L-Lipschitz, and the joint density $f_{XY}$ that are simply the product of $f_X$, $f_Y$; we also consider the following density estimator\footnote{The density estimator used here is not chosen to be minimax optimal. We instead design it to align the best with the practical methods \citet{dai2019cell} and \citet{wang2021constructing}, such that we can better justify and refine their heuristic choices of hyperparameter by theory.}:
+\begin{align}\label{densest}
+    &\widehat{f}_{X}(\cdot) = \frac{1}{n} \sum_{j=1}^n K_{h_n}(\cdot, x_j) , \quad \widehat{f}_{Y}(\cdot) = \frac{1}{n} \sum_{j=1}^n K_{h_n}(\cdot, y_j), \nonumber\\
+    & \quad \widehat{f}_{XY}(\cdot, \cdot) = \frac{1}{n} \sum_{j=1}^n K_{h_n}(\cdot, x_j)K_{h_n}(\cdot, y_j),
+\end{align}
+where $K_{h_n}(\cdot,u):=\mathbf{1}\{|\cdot-u|\leq h_n\}/(2 h_n)$ is one-dimensional boxcar kernel smoothing function with bandwidth $h_n$. From \propref{densest} in \appref{densest}, the uniform estimation error rate $\eta_n$ in this setting is $O(n^{-1/6}\sqrt{\log{n}})$, given the asymptotic near-optimal bandwidth $h = O(n^{-1/6})$. Therefore, applying \thmref{aLDGconsist} gives us estimation error rate of $O(n^{-1/6}\sqrt{\log{n}})$ for $\textnormal{aLDG}_t$. 
+
+
+We also include robustness analysis of $\widehat{\text{aLDG}}_t$ in \appref{emprob}. Specifically, we consider an empirical contamination model that is commonly encountered in single-cell data analysis: a small proportion of the sample points are replaced by ``outliers'' far away from the rest samples. We show that $\widehat{\text{aLDG}}_t$ with and without outliers are close as long as the outlier proportion is small. This suggests that the estimator of $\text{aLDG}_t$ preserves its robust nature.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+\subsection{Selection of hyper-parameter $t$}\label{sec:chooset}
+In this section, we propose two methods for selecting $t$, each of which has merit. We also provide guidance on which one is preferable in different practice settings.
+
+\paragraph*{Uniform error method} From the results in the previous section, we learn that $\text{aLDG}_0$ is not robust under independence. To prevent $\widehat{\text{aLDG}}_t$ from approaching $\text{aLDG}_0$ under independence, it is sufficient to make sure that the estimation error of $T$ under independence is uniformly dominated by $t$ with high-probability. To compute the uniform estimation error of $T$ under independence, we first manually construct the independence case via random shuffle. Given $n$ samples $\{(x_i,y_i)\}_{i=1}^n$ of $(X,Y)$, denote the corresponding empirical joint distribution as $\widehat{F}_{XY}$, and marginal joint distribution as $\widehat{F}_{X}$ and $\widehat{F}_{Y}$. Applying the random shuffle function $\pi$ on indices of one dimension (i.e. $Y$), we have 
+\begin{equation}
+    \{(x_i,y_{\pi(i)})\}_{i=1}^n \sim \widehat{F}_{X}\widehat{F}_{Y},
+\end{equation}
+that is the shuffled samples  $\{(x_i,y_{\pi(i)})\}$ now come from a different joint distribution where $(X,Y)$ are independent. 
+
+We can then use the shuffled samples to compute the uniform estimation error of $T$ under independence. Note that $T$ under independence is exactly zero, therefore its uniform estimation error is just the uniform upper bound of its estimation. To stabilize the estimation of such upper bound, we use the median of estimated upper bound from $\max\{\lfloor 1000/n \rfloor, 5\}$ different random shuffles as the final estimation. We call this $t$ selection method the \emph{uniform error} method. 
+
+
+
+
+\paragraph*{Asymptotic norm method} When using $\textnormal{aLDG}_t$ in large-scale data analysis, choosing $t$ using the above data-dependent choice may be undesirable because it requires additional computations. In extensive simulations we observe that a simple alternative also performs fine in terms of maintaining consistency, power and robustness:
+\begin{equation}\label{choosetnorm}
+    t = \Phi^{-1}\left(1-\frac{1}{n}\right)\Big/\left(\sqrt{\sigma_{X}\sigma_Y} n^{1/3}\right).
+\end{equation} 
+ This choice is motivated by the following heuristic. Recall our derivation of aLDG statistics from avgCSN around \eqref{deriveavgcsn}: as the sample size $n$ goes to infinity, and $h_x, h_y \to 0$, $h_xh_yn\to\infty$, the empirical estimation of $\text{aLDG}_t$ using the boxcar kernel cioncide with avgCSN. Therefore, $t_n$ in \eqref{deriveavgcsn} could serve as a natural choice for $t$, but one need to be extra careful about $\alpha$, which is the test level of local contingency test \eqref{contingency_test} in definition towards avgCSN. We specically modify $\alpha$ to decrease with $n$ instead of a fixed value like $0.05$ since we desire consistency: i.e. $\text{aLDG}_t$ under independence should goes to zero as $n$ goes to infinity. Finally, plugging in our choice of bandwidth $h_x = \sigma_X n^{-1/6}$, $h_y = \sigma_Y n^{-1/6}$ together with the new $\alpha_n$ in place of $\alpha$ into $t_n$ \eqref{deriveavgcsn}, we get \eqref{choosetnorm}.  We call this $t$ selection method the \emph{asymptotic norm} method. 
+ 
+Empirically we find that the \emph{asymptotic norm} method is often too conservative given the small sample size (which is expected since it is based on the asymptotic normality of a contingency table test statistic). In practice, we recommend people use \emph{uniform error} over \emph{asymptotic norm} when the sample size is not too big (e.g., no bigger than 200). When the sample size is big enough (e.g., bigger than 200), and the computation budget is limited, we recommend the \emph{asymptotic norm} method. In the rest of the paper, we use the \emph{uniform error} method when the sample size is no bigger than 200 and the \emph{asymptotic norm} method when the sample size is bigger than 200. We admit that there could be other promising ways of selecting $t$, for example, a geometry way we provided in \appref{chooset}. Here we only present the methods that we found working the best after a careful evaluation (see \appref{chooset}).  
+
+
+
+
+
+
+
+
+
+
+\subsection{Relationships to HHG}\label{sec:relation}
+The method that is most similar to aLDG is HHG (\cite{heller2013consistent}).
+Like aLDG, HHG \citep{heller2013consistent} is based on aggregation of multiple contrasts between the local joint and marginal distributions 
+\begin{align*}
+   HHG := \sum_{i\neq j} M(i,j),\quad M(i,j) := (n-2) \frac{\Big(p_{XY}(B_{XY}^{i,j})-p_{X}(B_{X}^{i,j})p_{Y}(B_Y^{ij})\Big)^2}{p_{X}(B_{X}^{i,j})\Big(1-p_{X}(B_{X}^{i,j})\Big)p_{Y}(B_Y^{ij})\Big(1-p_{Y}(B_Y^{ij})\Big)},
+\end{align*}
+with $B_{X}^{i,j} = \{x: |x-x_i|\leq |x_i - x_j|\}$, $B_{Y}^{i,j} = \{y: |y-y_i|\leq |y_i - y_j|\}$ and $B_{XY}^{i,j} = B_{X}^{i,j}  \otimes B_{Y}^{i,j} $, $p_{XY}, p_X, p_Y$ are joint probability function for $(X,Y)$ and marginal probability function for $X$ and $Y$ respectively. While the two measures appear quite similar, they differ in two critical aspects.
+
+\paragraph*{The efficiency of single scale bandwidth}  One notable difference between HHG and aLDG is that the former relies on a multi-scale choice of bandwidth for each sample point.  Specifically, it  utilizes multiple ($O(n)$) bandwidths for each data point. This results in a provably consistent permutation test; however, the cost of implementation is significantly longer computation time than its competitors. aLDG takes a single-scale approach, which considerably improves the computation efficiency.  Moreover, the aLDG formulation provides a direct analogy to a density functional, which allows us to exploit existing work in density estimation to determine an appropriate bandwidth. This single-scale approach, though may not optimal, achieves comparable power to HHG, as shown in the upcoming simulation studies.
+
+\paragraph*{The merit of thresholding} Another difference is that empirically aLDG aggregates over thresholded summands, see \eqref{eq:aLDGemp}. It turns out thresholding brings implicit robustness to noise. By contrast, consider the non-thresholded version of aLDG:
+\begin{equation}
+    \text{aLDG}_{non}:= \EE{T(X,Y)}.
+\end{equation}
+Even with slight departures from independence, $\text{aLDG}_{non}$ can go to infinity.  For example, consider the following joint and marginal distribution that admits a kernel product density mixture:
+\begin{align*}
+    & f_{XY}(x,y) = \alpha k_{0,r}(x)k_{0,r}(y) + (1-\alpha)k_{0,1}(x)k_{0,1}(y),\\
+    & f_{X}(x) = \alpha k_{0,r}(x) + (1-\alpha)k_{0,1}(x), \quad f_{Y}(y) = \alpha k_{0,r}(y) + (1-\alpha)k_{0,1}(y)
+\end{align*}
+where $\alpha \in (0,1)$, $0<r\ll1$ and  $k_{\mu,r}(\cdot):=\frac{1}{r}k(\frac{\cdot-\mu}{r})$, with $k$ as the density of 1-dim uniform distribution supported on $[-1,1]$. 
+
+Note that as $\alpha\to0$ and $r\to 0$, the model is essentially an independence case contaminated with a small point mass.  Additionally with $\alpha/r \to \infty$, we can show that (see \appref{thred} for details)
+\begin{equation}\label{nonthred}
+   \EE{T(X,Y)} \approx \frac{\alpha}{r} \to \infty,
+\end{equation}
+that is the non-thresholded version of $\text{aLDG}$ is very large under such simple case of small departure from independence, therefore is problematic.  With thresholding, however, $\text{aLDG}$ is guaranteed to be approximately $\alpha$, which goes to zero for small perturbations, as one would desire.
+
+
+\section{Empirical evaluation}\label{sec:aLDGcompare}
+
+\subsection{Single-cell data application}\label{sec:real}
+In this section, we evaluate aLDG among the other measures using scRNA-seq data from two studies. 
+
+
+\paragraph*{Chu dataset} This dataset \citep{chu2016single} contains 1018 cells
+of human embryonic stem cell-derived lineage-specific progenitors. The seven cell types, including H1 embryonic stem cells (H1), H9 embryonic stem cells (H9), human foreskin fibroblasts (HFF), neuronal progenitor cells (NPC), definitive endoderm cells (DEC), endothelial cells (EC), and trophoblast-like cells (TB), were identified by fluorescence-activated cell sorting (FACS) with their respective markers. On
+average, 9600 genes are measured per cell. In the following, we show some special gene pairs that exhibit strong, weak, or no relational patterns and the corresponding dependence values produced by different measures. We find that only aLDG gives a high value for strong relational patterns no matter how complex the pattern composition is; maintains near-zero values for known independent cases; and avoids a spurious relationship skewed by technical noise and sparsity (Figure \ref{fig:realbi}).
+
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8
+    \linewidth]{plots/newrealpair.pdf}
+    \caption{Example of gene pair scatter plots from the Chu dataset, which has 1018 cells from 7 cell types. Gene expression is recorded as counts per million (CPM) and $\log_2$ transformed. In each plot, we show the scatter plot of $\log_2(\text{CPM}+1)$ for a pair of genes and provide the corresponding estimated dependence values using different methods to the right of the plots.  \textbf{(a)} aLDG gives a much higher value than the others in these scenarios which appear to illustrate a strong mixture dependence pattern, even when the signal is predominantly in one cell type. \textbf{(b)} aLDG produces a high value for the obvious three mixture relationship in the first subplot. By contrast, in the second subplot, the cell identity are randomly shuffled for each gene pair, resulting in a constructed case of independence. Most measures, including aLDG, give near-zero values in this setting. The exception is MIC, which gives a misleadingly high value.  \textbf{(c)} This example illustrate performance when there is a high level of sparsity: MIC and the moment-based methods like Pearson, dCor, and HSIC provide estimates that are greatly overestimated, while aLDG, TauStar, and Hoeffding's D are not influenced by this phenomenon.   \textbf{(d)} This gene pair combines the challenge of sparsity with considerable noise: aLDG is still able to capture the less noisy, local cluster pattern in the upper left corner. }
+    \label{fig:realbi}
+\end{figure}
+
+
+
+\paragraph*{Autism Spectrum Disorder (ASD) Brain dataset}
+\citet{velmeshev2019single} includes scRNA-seq data
+from an ASD study that collected 105 thousand nuclei from cortical samples taken from 22 ASD and 19 control samples. Samples were matched for age, sex, RNA integrity number, and postmortem interval. In the following, we compare control and ASD groups by testing for differences in their gene co-expression matrices using the sparse-Leading-Eigenvalue-Driven (sLED) test \citep{zhu2017testing}. sLED takes the gene co-expression matrices for both control and ASD groups as input, and outputs a $p$-value indicating the significance of their difference. This method is particularly designed to detect differential signals attributable to a small fraction of the genes. To emphasize the contrast with differentially expressed genes, \cite{wang2021constructing} call these differential network genes.  
+
+Here we compare the power of the test for various co-expression measures. We use cells classified as L2/3 excitatory neurons (414 cells from ASD samples and 358 from control samples) and a set of 50 genes chosen randomly among the top 500 genes deferentially expressed between ASD and control samples. In addition, we manually add noise by randomly swapping 10\% of the control and ASD labels in the original data to see which measures detect the signal in the presence of greater noise. We omit HHG for this task as it requires too much computation time. Boxplots of $p$-values from sLED test across 10 independent trials (different random swapping each trial) are shown for all the remaining measures (\figref{vel23power}). Among the remaining measures, we find that HSIC, $\tau^\star$, Hoeffding's D, MIC, and aLDG perform well compared to Pearson, Spearman, Kendall, MRank and dCor. A visualization of the corresponding control versus ASD co-expression differences is displayed in \figref{vel23}, showing that the winners produce difference matrices with a few dominating entries, which is favored by the sLED test, while the others produce relatively flat and noisy patterns. 
+
+
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.6\linewidth]{plots/newpval.pdf}
+    \caption{The estimated $p$-values obtained using sLED permutation tests for different dependency measures. We manually added noise by randomly swapping 10\% of the control and ASD labels in the original data to see which measures detect the signal in the presence of greater noise. Boxplots show the results from 10 independent repetitions. }
+    \label{fig:vel23power}
+\end{figure}
+
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\linewidth]{plots/newrealcormat.png}
+    \caption{Estimated co-expression differences matrices (i.e. the absolute differences of the dependency matrices for control samples and ASD samples) obtained for different dependency measures.}
+    \label{fig:vel23}
+\end{figure}
+
+
+\subsection{Simulation results}\label{sec:simu}
+ In this section, we consider simulations that resembling  single-cell data to gain insights underlying the behavior of aLDG relative to the other methods. Specifically, we investigate scenarios where the bivariate relationship is (1) finite mixture; (2) linear or nonlinear; (3) monotone or non-monotone. See \figref{data} for all the synthetic data distributions we considered. We evaluate each dependence measure from the following perspective: (1) ability to capture complex relationship; (2) ability to accumulate subtle local dependence; (3) interpretation of strength of dependence in common sense; (4) power as an independence test; and (5) computation time. In the following, we focus on one perspective in each subsection, showing selective examples that inform our conclusions, relegating other examples to supplementary materials.
+
+
+\paragraph
+{Detecting nonlinear, non-monotone relationships} By construction, aLDG is expected to detect any non-negligible deviation from independence. Though many existing measures, such as HSIC, Hoeffding's D, dCor, $\tau^\star$, claim to be sensitive to nonlinear, non-monotone relationships, some approaches are known to perform poorly under certain circumstances.  By contrast, aLDG outperforms most of its competitors in the following standard evaluation experiment.  \figref{nonlinear} illustrates three points: (1) at independence, except for dCor, HHG, and MIC, most measures produce negligible values, as desired; (2) for linear and monotone relationship, all measures produce high values as expected; and (3) for nonlinear non-monotone relationships only aLDG, dCor, HHG and MIC produce high values consistently. In conclusion, only aLDG can effectively detect various types of dependency relationships while maintaining near-zero value at independence. dCor, HHG, and MIC are known to be sensitive to small, artificial deviations from independence, and these simulations reveal that they are indeed too sensitive as they often produce high values at independence.  A big portion of scRNA-seq data are collected over time; therefore, nonlinear, non-monotone and specifically oscillatory relationships are expected to happen. Therefore it is desirable to have a measure that is sensitive to dependence while remaining near zero of true independence, even under small perturbations.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\linewidth]{plots/value.pdf}
+    \caption{Empirical dependency estimates obtained for different data distributions for a variety of relationships between a pair of variables. For the visualization of different data distributions, see \figref{data}. Here we show the corresponding dependence level given by different measures using 200 samples (averaged over 50 trials).}
+    \label{fig:nonlinear}
+\end{figure}
+
+
+\paragraph
+{Accumulating subtle local dependencies} aLDG detects the subset of the sample space that shows a pattern of dependence. In \figref{mix}, we simulated data as a bivariate Gaussian mixture consisting of three components with a varying proportion of highly dependent components and estimated the corresponding dependence level.  We find that aLDG, together with other dependence measures designed to capture local dependence (HHG and MIC)  increase with the proportion of highly correlated components, indicates that these global dependence measures can also detect subtle local dependence structure. Similar results are obtained for Negative Binomial mixtures \figref{nbmix}. As the finite mixture relationship is a common choice of model for scRNA-seq data, this suggests that measures able to accumulate dependencies across individual components could considerably benefit scRNA-seq data analysis. 
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\linewidth]{plots/valuemix_gauss.pdf}
+    \caption{Empirical aLDG value for Gaussian mixtures. In each plot we show the dependence level given by different measures for 200 samples (averaged over 50 trials). The data are generated as a three-component Gaussian mixture. From left to right, there are 0, 1, 2 and 3 out of 3 components with correlation of 0.8, while the remaining components have correlation 0, i.e., the dependence level increases from left to right. For the visualization of these different data distributions, see \figref{data}.
+   
+    }
+    \label{fig:mix}
+\end{figure}
+
+
+\paragraph
+{Degree of dependencies} While it is hard to define the relative dependence level in general, we argue that when one random variable is a function of the other,  $Y=h(X)$, then the pair should be regarded as having the perfect dependence (and be assigned of dependence level $1$). Moreover, the dependence level should decrease as independent noise is added. That is, for $Y_\epsilon = h(X) + \epsilon$, where $\epsilon \perp X$, one should expect the dependence measure $\delta$ to satisfy  $\delta(Y_{\epsilon},X) < \delta(Y,X)$.  We checked this monotonicity property by simulating data with several bivariate relationships and varying levels of noise (\figref{mono}).   Specifically, we simulate the noise $\epsilon$ to be standard normal, and $Y = h(X) + c\epsilon$ where $c\in[0,1]$ indicates the noise level. We find that aLDG, HSIC, MIC, dCor, and HHG all show a clear decreasing pattern as the noise level increases; however, aLDG shows the most consistent monotonic drop from perfect dependence as the noise level increased. 
+
+
+\begin{figure}[H]
+    \includegraphics[width=1\linewidth]{plots/mono.pdf}
+    \caption{Empirical dependence measure versus noise levels for different bivariate relationships. For the visualization of different data distributions, see \figref{data}. The results are shown for 100 samples (averaged over 50 trials). We claim that the higher the noise level is, the lower the estimated degree of dependence should be. Compared with other measures, aLDG decreases significantly as the noise level increases, and hence correctly infers the relative degree of dependence. }
+    \label{fig:mono}
+\end{figure}
+
+
+\paragraph
+{Power as an independence test} Dependence measures are natural candidates for tests of independence. In this context, most existing dependence measures rely on bootstrapping or permutation to determine significance; hence we adopt this practice for all the dependence measures under comparison. \figref{non-linearpower} shows the empirical power under test level 0.05 for various types of data distribution and sample size, where we do 200 repetitions of permutations to estimate the null distribution. We observe the following outcomes: (1) almost all tests have controlled type-I error under independence; (2) Pearson's $\rho$, Spearman's $\rho_S$ and Kendall's $\tau$ are powerless for testing nonlinear and non-monotone relationships; (3) aLDG, HHG, and HSIC are consistently among the top three most powerful approaches for testing both linear and nonlinear, monotone and non-monotone relationships. Similar observations can be made for tests based on Gaussian mixtures \figref{gaussmixpower} and Negative Binomial mixtures \figref{nbmixpower}.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\linewidth]{plots/power.pdf}
+    \caption{The empirical power of permutation test at level 0.05, based on different dependency measures under different data distributions and sample sizes. For the visualization of different data distributions, see \figref{data}. The power is estimated using 50 independent trials.}
+    \label{fig:non-linearpower}
+\end{figure}
+
+
+
+
+\paragraph
+{Computational comparisons}
+Theoretically speaking, aLDG requires $O(n^2)$ in time of computation (where $n$ is the number of samples), which is comparable to reported requirements for most dependence measures that can detect complex relationships. This empirically confirmed in a comparison of the computation time of aLDG with all its competitors. In \figref{time} we plot the time of computation versus sample size $n$ for different dependence measures\footnote{The time include some constant wrapper function loading time, therefore, might be longer than a direct function call; however, the relative scale is still correct.}. In previous evaluations, we saw that HHG as a method motivated from capturing local dependence structure, was indeed a strong competitor to aLDG: it has high power as an independence test across almost all the data distribution we considered; however, it requires $O(n^3)$ time of computation, and \figref{time} shows this large discrepancy from all the other methods, which normally takes $O(n^2)$ time. 
+
+
+
+\section{Conclusion and Discussion}
+
+In this paper,  we formalize the idea of 
+averaging the \emph{cell-specific gene association} \citep{dai2019cell,wang2021constructing} under a general statistical framework. We show that this approach produces a novel univariate dependence measure, called aLDG, that can detect nonlinear, non-monotone relationships between a pair of variables. We then develop the corresponding theoretical properties of this estimator, including robustness and consistency.  We also provide several hyper-parameter choices that are more justifiable and effective. Extensive simulations, motivated by expected scRNA-seq gene co-expression relationships and real data applications, show that this measure outperforms existing independence measures in various aspects: (1) it accumulates subtle local dependence over sub-populations; (2) it successfully interprets the relative strength of a monotonic function of dependence in the presence of noise better than many other measures that arose from independence test; (3) it is sensitive to complex relationships while robustly maintaining near-zero value at true independence, while several other measures are often overly sensitive to slight perturbations from independence and noise; (4) it computes comparatively rapidly compared to other dependence measures designed to capture complex relationships.  Other measures perform well in some settings but fail in others that are highly relevant to the single-cell setting. For instance, MIC performed well as part of the sLED test for differences in co-expression matrices, but this measure tends to produce a high estimate of dependence even when the variables are independent, or nearly so (Figure \ref{fig:nonlinear} and Figure \ref{fig:mono}). The moment-based methods like Pearson, dCor, and HSIC perform poorly when the expression values are sparse, producing false indications of correlation (Figure \ref{fig:realbi}), and yet sparsity is the norm in most single cell data. Our method is implemented in the R package aLDG\footnote{\url{https://github.com/JINJINT/aLDG}}, where we also include all the other methods that we have compared with. 
+
+
+The aLDG method does have some practical challenges: as a measure based on density estimation, the hyperparameter choices such as bandwidth can affect the performance of the measure. Though we provide some asymptotically optimal choices of those hyperparameters, in practice, they can fail due to the small sample size. For any given setting, the hyperparameters can be adjusted based on realistic simulations of the actual data and a solid understanding of the scRNA-seq data distribution. Similarly, due to the reliance on density estimation, it is hard to extend this measure to a multivariate setting. The sample size required for accurate estimation grows exponentially with the dimension. In practice, this limitation has little practical importance because gene co-expression studies focus on bivariate relationships.   
+
+
+\paragraph{Acknowledgments}
+The authors would like to thank Xuran Wang for helpful comments. 
+
+
+\paragraph{Funding}
+This project is funded by National Institute of Mental Health (NIMH) grant R01MH123184 and NSF DMS-2015492.
+
+
+	
+\bibliographystyle{unsrtnat}

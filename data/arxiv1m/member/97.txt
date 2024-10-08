@@ -1,0 +1,771 @@
+
+
+
+\subsection{Heterogeneous graph}
+\label{sec:preliminaries:hg}
+Heterogeneous graphs are an important abstraction for modeling the relational data of multi-modal systems. 
+Formally, a heterogeneous graph is defined as $\mathcal{G} = (\mathcal{V}, \mathcal{E}, \mathcal{T}, \mathcal{R})$ where
+the node set $\mathcal{V}: = \{1,\ldots,|\mathcal{V}|\}$; 
+the edge set $\mathcal{E}$ consisting of ordered tuples $e_{ij}:=(i, j)$ with $i, j\in\mathcal{V}$, where $e_{ij}\in\mathcal{E}$ iff an edge exists from $i$ to $j$; 
+the set of node types $\mathcal{T}$ with associated map $\tau:\mathcal{V}\mapsto\mathcal{T}$; the set of relation types $\mathcal{R}$ with associated map $\phi:\mathcal{E}\mapsto\mathcal{R}$.
+This flexible formulation allows directed, multi-type edges. 
+We additionally assume the existence of a node feature vector $x_i\in\mathcal{X}_{\tau(i)}$ for each $i\in\mathcal{V}$, where $\mathcal{X}_{t}$ is a feature space specific to nodes of type $t$ . 
+This allows $\mathcal{G}$ to represent nodes with different feature modalities such as images, text, locations, or booleans.
+Note that these modalities are not necessarily exclusive (e.g.\ two node types $s,t$ might share the same feature space, $\mathcal{X}_s = \mathcal{X}_t$).
+
+\begin{figure*}[t!]
+ 	\centering
+ 	\vspace{-4mm}
+ 	\subfigure[Toy graph]
+ 	{
+ 	\label{fig:toy:hg}
+ 	\includegraphics[width=0.15\linewidth]{FIG/Toy_HG.png}
+ 	}
+ 	\hspace{10mm}
+ 	\subfigure[Gradient path for feature extractor $f_s(\cdot)$]
+ 	{
+ 	\label{fig:toy:source_cg}
+ 	\includegraphics[width=.26\linewidth]{FIG/Toy_CG_source.png}
+ 	}
+ 	\hspace{10mm}
+ 	\subfigure[Gradient path for feature extractor $f_t(\cdot)$]
+ 	{
+ 	\label{fig:toy:target_cg}
+ 	\includegraphics[width=.26\linewidth]{FIG/Toy_CG_target.png}
+ 	}
+ 	\caption
+ 	{
+ 	    Illustration of a toy heterogeneous graph and the gradient paths for feature extractors $f_s$ and $f_t$. We see that the same HGNN nonetheless produces different feature extractors for each feature domain $\mathcal{X}_s$ and $\mathcal{X}_t$. Colored arrows in figures (b) and (c) show the gradient paths for feature domains $\mathcal{X}_s$ and $\mathcal{X}_t$, respectively.
+ 	     Note the over-emphasis of the respective gradients in the (b) source and (c) target feature extractors, which can lead to poor generalization.
+ 	}
+ 	\label{fig:toy}
+ \end{figure*}
+ 
+ \begin{figure*}[t!]
+ 	\centering
+ 	\subfigure[Test accuracy across various feature extractors]
+ 	{
+ 	\label{fig:toy_exp:accuracy}
+ 	\includegraphics[width=0.32\linewidth]{FIG/Micro_accuracy.png}
+ 	}
+ 	\hspace{5mm}
+ 	\subfigure[L2 norms of gradients of $W_{\tau(\cdot)}^{(l)}$]
+ 	{
+ 	\label{fig:toy_exp:transform_w}
+ 	\includegraphics[width=.28\linewidth]{FIG/Transform_w.png}
+ 	}
+ 	\hspace{5mm}
+ 	\subfigure[L2 norms of gradients of $M_{\phi(\cdot)}^{(l)}$]
+ 	{
+ 	\label{fig:toy_exp:message_w}
+ 	\includegraphics[width=.28\linewidth]{FIG/Message_w.png}
+ 	}
+ 	\caption
+ 	{
+ 	    HGNNs trained on a source domain underfit a target domain and perform poorly on a ``nice" heterogeneous graph.   	     
+ 	    Our theoretically-induced version of \textsc{HGNN-KTN}\xspace adapts the model to the target domain successfully.
+ 	    In (a) we see performance on the simulated heterogeneous graph, for 4 kinds of feature extractors; (\textit{source}: source extractor $f_s$ on source domain,
+ 	    \textit{target-src-path}:  $f_s$ on target domain, 
+ 	    \textit{target-org-path}: target extractor $f_t$ on target domain, 
+ 	    and \textit{theoretical-KTN}: $f_t$ on target domain using \textsc{HGNN-KTN}\xspace.)
+ 	    In (b-c), here L2 norms of gradients of parameters $W_{\tau(\cdot)}$ and $M_{\phi(\cdot)}$ in HGNN models.
+ 	}
+ 	\label{fig:toy_exp}
+ \end{figure*}
+
+\subsection{Heterogeneous GNNs}
+\label{sec:preliminaries:hgnn}
+A graph neural network (GNN) can be regarded as a graph encoder which uses the input graph data as the basis for the neural network's computation graph \cite{chami2020machine}.
+At a high-level, for any node $j$, the embedding of node $j$ at the $l$-\emph{th} GNN layer is obtained with the following generic formulation:
+\begin{equation}\label{eq:gnn}
+    \small
+    h_j^{(l)} = \textbf{Transform}^{(l)}\left(\textbf{Aggregate}^{(l)}(\mathcal{E}(j))\right)
+\end{equation}
+where $\mathcal{E}(j) = \{(i, k)\in\mathcal{E}: i,k\in\mathcal{V}, k = j\}$ denotes all the edges which connect (directionally) to $j$. 
+HGNNs are a recently-introduced class of GNNs for modeling heterogeneous graphs.
+For HGNNs, the above operations typically involve type-specific parameters to exploit the inherent multiplicity of modalities in heterogeneous graphs.
+
+We now define the commonly-used versions of \textbf{Aggregate} and \textbf{Transform} for HGNNs, which we use throughout this paper. 
+First, we define a linear \textbf{Message} function
+\begin{equation}
+\label{eq:message}
+\small
+\textbf{Message}^{(l)}(i, j) = M_{\phi((i, j))}^{(l)}\cdot \left(h_i^{(l-1)}\mathbin\Vert h_j^{(l-1)}\right)
+\end{equation}
+where $M_r^{(l)}$ are the specific message passing parameters for each $r\in\mathcal{R}$ and each of $L$ GNN layers. 
+Then defining $\mathcal{E}_r(j)$ as the set of edges of type $r$ pointing to node $j$, our HGNN \textbf{Aggregate} function mean-pools messages by edge type, and concatenates:
+\begin{equation}\label{eq:aggregate}
+\small
+\textbf{Aggregate}^{(l)}(\mathcal{E}(j)) = \underset{r \in\mathcal{R}}{\mathbin\Vert}\tfrac{1}{|\mathcal{E}_r(j)|}\sum_{e\in\mathcal{E}_r(j)}\textbf{Message}^{(l)}(e)
+\end{equation}
+Finally, \textbf{Transform} maps the message into a type-specific latent space:
+\begin{equation}\label{eq:transform}
+\small
+\textbf{Transform}^{(l)}(j) = \alpha(W_{\tau(j)}\cdot\textbf{Aggregate}^{(l)}(\mathcal{E}(j)))
+\end{equation}
+
+The above formulation of HGNNs allows for full handling of the complexities of a real-world heterogeneous graph.
+By stacking HGNN blocks for $L$ layers, each node aggregates a larger proportion of nodes --- with different types and relations --- in the full graph, which generates highly contextualized node representations.
+The final node representations can be fed into another model to perform downstream heterogeneous network tasks, such as node classification or link prediction.
+
+
+ 
+
+\subsection{Feature extractors for a toy heterogeneous graph}\label{sec:motivation:feature_extractor}
+We first reason intuitively about the differences between $f_s(x_i)$ and $f_t(x_j)$ when $s\ne t$, using a toy heterogeneous graph shown in Figure~\ref{fig:toy:hg}. In that graph, consider nodes $v_1$ and $v_2$, noticing that $\tau(1)\ne \tau(2)$. Using Equations~\eqref{eq:message}-\eqref{eq:transform} from Section \ref{sec:preliminaries:hgnn}, for any $l\in\{0, \ldots, L-1\}$ we have
+\begin{equation}\label{eq:tpynode1}
+    \small
+    h_1^{(l)} = W_s^{(l)}\left[M_{ss}^{(l)}\left(h_3^{(l-1)}\mathbin\Vert h_1^{(l-1)}\right)\mathbin\Vert M_{ts}^{(l)}\left(h_2^{(l-1)}\mathbin\Vert h_1^{(l-1)}\right)\right]
+\end{equation}
+and
+\begin{equation}\label{eq:tpynode1}
+    \small
+    h_2^{(l)} = W_t^{(l)}\left[M_{st}^{(l)}\left(h_1^{(l-1)}\mathbin\Vert h_2^{(l-1)}\right)\mathbin\Vert M_{tt}^{(l)}\left(h_4^{(l-1)}\mathbin\Vert h_2^{(l-1)}\right)\right],
+\end{equation}
+where $h_j^{(0)} = x_j$. From these equations, we see that the features of nodes $v_1$ and $v_2$, which are of different types, are extracted using \emph{disjoint} sets of model parameters at each layer. In a 2-layer HGNN, this creates unique gradient backpropagation paths between the two node types, as illustrated in Figures~\ref{fig:toy:source_cg}-\ref{fig:toy:target_cg}. In other words, even though the same HGNN is applied to node types $s$ and $t$, the feature extractors $f_s$ and $f_t$ have different computational paths. Therefore they project node features into different latent spaces, and have different update equations during training. We study the consequences of this next.
+
+\subsection{Empirical gap between $f_s$ and $f_t$}
+\label{sec:motivation:experiments}
+
+Here we study the experimental consequences of the above observation via simulation. 
+We first construct a synthetic graph extending the 2-type graph in Figure~\ref{fig:toy:hg} to have multiple nodes per-type, and multiple classes. 
+Next, we include well-separated classes in both the graph and feature space, where  edges and Euclidean node features are well-clustered within-type and within-class 
+(more details available in Appendix~\ref{appendix:graph-generator:toy}).
+
+On such a well-separated graph, without considering the observation in Section~\ref{sec:motivation:feature_extractor}, there may seem to be no need for domain adaptation from $f_t$ to $f_s$. However, when we train the HGNN model solely on $s$-type nodes, as shown in Figure~\ref{fig:toy_exp:accuracy} we find the test accuracy for $s$-type nodes to be high ($90\%$) and the test accuracy for $t$-type nodes to be quite low ($25\%$). 
+Now if instead we make the $t$-type nodes use the source feature extractor $f_s$, much more transfer learning is possible (${\sim}65\%$, orange line). 
+This shows the performance drop mainly comes from the different feature extractors present in the HGNN model, and so domain adaptation on it can not be solved by simply matching data distributions.
+
+To analyze this phenomenon at the level of backpropagation, in Figures~\ref{fig:toy_exp:transform_w}-\ref{fig:toy_exp:message_w} we show the magnitude of gradients passed to parameters of source and target node types. As we intuited in Section~\ref{sec:motivation:feature_extractor}, and as illustrated in Figures~\ref{fig:toy:source_cg}-\ref{fig:toy:target_cg}, we find that the final-layer \textbf{Transform} parameter $W^{(2)}_t$ for type-$t$ nodes have zero gradients (Figure~\ref{fig:toy_exp:transform_w}), and similarly for the final-layer \textbf{Message} parameters (Figure~\ref{fig:toy_exp:message_w}). Additionally, those same parameters in the first-layer for $t$-type nodes have much smaller gradients than their $s$-type counterparts: $W^{(1)}_{t}$ (blue line in Figure~\ref{fig:toy_exp:transform_w}), $M^{(1)}_{st}$ and $M^{(1)}_{tt}$ (blue and orange lines in Figure~\ref{fig:toy_exp:message_w}) appear below than other lines. This is because they contribute to $f_s$ less than $f_t$
+
+
+\subsection{Relationship between feature extractors in HGNNs}
+\label{sec:motivation:theoretical_analysis}
+
+The case study introduced in Section~\ref{sec:motivation:experiments} shows that even when an HGNN is trained on a relatively simple, balanced, and class-separated heterogeneous graph, a model trained only on the source domain node type cannot transfer to the target domain node type. Here, to rigorously describe this phenomenon and the intuition behind it, we derive a strict transformation between $f_s$ and $f_t$, which will motivate the core domain adaptation component of \textsc{HGNN-KTN}\xspace. The following theorem assumes an HGNN as in Equations \eqref{eq:message}-\eqref{eq:transform} without skip-connections, a simplification which we define and explain along with the proof in the Appendix:
+
+\begin{theorem}\label{theorem}
+Given a heterogeneous graph $\mathcal{G} = \{\mathcal{V}, \mathcal{E}, \mathcal{T}, \mathcal{R}\}$. For any layer $l>0$, define the set of $(l-1)$-\emph{th} layer HGNN parameters as
+\begin{equation}
+\label{eq:thm}
+    \small
+    \mathcal{Q}^{(l-1)} = \{M_r^{(l-1)}: r\in\mathcal{R}\}\cup\{W_t^{(l-1)}: t\in\mathcal{T}\}.
+\end{equation}
+
+Let $A$ be the total $n\times n$ adjacency matrix. Then for any $s,t\in\mathcal{T}$ there exist matrices $A_{ts}^\ast = a_{ts}(A)$ and $Q_{ts}^\ast = q_{ts}(\mathcal{Q}^{(l-1)})$ such that
+\begin{equation}
+\label{eq:relationship}
+    \small
+    H_s^{(l)} = A_{ts}^\ast H_t^{(l)} Q_{ts}^\ast
+\end{equation}
+where $a_{ts}(\cdot)$ and $q_{ts}(\cdot)$ are matrix functions that depend only on $s,t$.
+\end{theorem}
+The full proof of Theorem 1 can be found in Appendix \ref{appendix:theorem1}.  Notice how in Equation~\ref{eq:relationship}, $Q_{ts}^{\ast}$ acts as a macro- $\textbf{Message}/\textbf{Transform}$ operator that maps $H^{(L)}_t$ into the source domain, then $A_{ts}^{\ast}$ aggregates the mapped embeddings into $s$-type nodes. 
+To examine the implications of Theorem~\ref{theorem}, we run the same experiment as described in Section~\ref{sec:motivation:experiments}, while this time mapping the target features $H^{(L)}_t$ into the source domain by multiplying with $Q_{ts}^{\ast}$ in Equation~\ref{eq:relationship} before passing over to a task classifier.
+We see via the red line in Figure~\ref{fig:toy_exp:accuracy} that, with this mapping, the accuracy in the target domain becomes much closer to the accuracy in the source domain (${\sim}70\%$).  Thus, we use this theoretical transformation as a foundation for our trainable HGNN domain adaptation module, introduced in the following section.
+
+\subsection{Algorithm}
+\label{sec:matching_loss:algorithm}
+
+We minimize a classification loss $\mathcal{L}_{\text{CL}}$ and a transfer loss $\mathcal{L}_{\text{KTN}}$ jointly with regard to a HGNN model $\textbf{f}$, a classifier $\textbf{g}$, and a knowledge transfer network $\textbf{t}_{\text{KTN}}$ as follows:
+\begin{align*}
+    \small
+    \underset{\textbf{f},~\textbf{g},~\textbf{t}_{\text{KTN}}}{min}\mathcal{L}_{\text{CL}}(\textbf{g}(\textbf{f}(X_{s})), Y_{s}) + \lambda \left\|\textbf{f}(X_{s}) - \textbf{t}_{\text{KTN}}(\textbf{f}(X_{t}))\right\|_{2}
+\end{align*}
+where $\lambda$ is a hyperparameter regulating the effect of  $\mathcal{L}_{\text{KTN}}$.
+Algorithm~\ref{alg:train} describes a training step with a minibatch.
+After computing the node embeddings $H^{(L)}_s, H^{(L)}_t$ using a HGNN model $\textbf{f}$, we map $H^{(L)}_t$ to the source domain using $\textbf{t}_{\text{KTN}}$ and compute $\mathcal{L}_{\text{KTN}}$.
+Finally, we update the models using gradients of $\mathcal{L}_{\text{CL}}$ and $\mathcal{L}_{\text{KTN}}$.
+Algorithm~\ref{alg:test} describes the test phase on the target domain.
+After we get node embeddings $H^{(L)}_t$ from the trained HGNN model $\textbf{f}$, we map $H^{(L)}_t$ into the source domain using the trained transformation matrix $T_{ts}$.
+Finally we pass the transformed target embeddings $H^{*}_t$ into the classifier $\textbf{g}$ which was trained on the source domain.
+
+\noindent \textbf{Indirect Connections}
+We note that in practice, the source and target node types can be indirectly connected in heterogeneous graphs via other node types.
+Appendix~\ref{appendix:indirect} describes how we can easily extend \textsc{HGNN-KTN}\xspace to cover domain adaption scenarios  in this case.
+
+
+
+
+\subsection{Datasets}
+\label{sec:experiments:dataset}
+
+\noindent \textbf{Open Academic Graph (OAG).}~ A dataset introduced in  \cite{zhang2019oag} composed of five types of nodes: papers, authors, institutions, venues, fields and their corresponding relationships.
+Paper and author nodes have text-based attributes, while institution, venue, and field nodes have text- and graph structure-based attributes.
+Paper, author, and venue nodes are labeled with research fields in two hierarchical levels, L1 and L2.
+To test the generalization of the proposed model, we construct three field-specific subgraphs from OAG: computer
+science, computer networks, and machine learning academic graphs. \vspace{-5pt}
+
+\noindent \textbf{PubMed.} A network of genes, diseases, chemicals, and species  \citep{yang2020heterogeneous}, which has 11 types of edges.
+Gene and chemical nodes have graph structure-based attributes, while disease and species nodes have text-based attributes.
+Each gene or disease is labeled with a set of diseases they belong to or cause. \vspace{-5pt}
+
+\noindent \textbf{Synthetic heterogeneous graphs.} We generate stochastic block models \citep{abbe2017community} with multiple classes and multiple node types. We control within-type edge signal-to-noise ratio by within/between-class edge probabilities, and multivariate Normal feature signal-to-noise ratio by within/between-class variance. We also control \emph{between}-type edge signal-to-noise ratio by allowing nodes of the different types to connect if they are in the same class. A complete definition of the generative model is given in Appendix~\ref{appendix:graph-generator}.
+
+\subsection{Baselines}
+\label{sec:experiments:baseline}
+
+We compare \textsc{HGNN-KTN}\xspace with two MMD-based DA methods (DAN~\cite{long2015learning}, JAN~\cite{long2017deep}), three adversarial DA methods (DANN~\cite{ganin2016domain}, CDAN~\cite{long2017conditional}, CDAN-E~\cite{long2017conditional}), one optimal transport-based method (WDGRL~\cite{shen2018wasserstein}), and two traditional graph mining methods (LP and EP~\cite{zhu2005semi}).
+For DA methods, we use a HGNN model as their feature extractors.
+More information of each method is described in Appendix~\ref{appendix:baseline}.
+
+\begin{table*}[]
+    \caption{
+	\textbf{Open Academic Graph on Computer Network field}
+	}
+	\label{tab:oag:cn}
+	\centering
+    \small
+\begin{tabular}{l|l|c|cc|ccc|c|cc|r}
+\toprule\hline
+\textbf{Task}                      & \textbf{Metric} & \textbf{Source} & \textbf{DAN}   & \textbf{JAN}   & \textbf{DANN}  & \textbf{CDAN} & \textbf{CDAN-E} & \textbf{WDGRL} & \textbf{LP} & \textbf{EP} & \textbf{KTN (gain)}        \\ \hline\midrule
+\multirow{2}{*}{\textbf{P-A (L2)}} & \textbf{NDCG}   & 0.331           & 0.344          & o.o.m          & 0.335          & o.o.m         & o.o.m           & 0.287          & 0.221       & 0.270       & \textbf{0.382 (16$\%$)} \\
+                                   & \textbf{MRR}    & 0.250           & 0.277          & o.o.m          & 0.280 & o.o.m         & o.o.m           & 0.199          & 0.130       & 0.270       & \textbf{0.360 (44$\%$)}         \\ \hline
+\multirow{2}{*}{\textbf{A-P (L2)}} & \textbf{NDCG}   & 0.313           & 0.290          & o.o.m          & 0.250          & 0.234         & 0.168           & 0.266          & 0.114       & 0.319       & \textbf{0.364 (17$\%$)} \\
+                                   & \textbf{MRR}    & 0.250           & 0.233          & o.o.m          & 0.130          & 0.116         & 0.051           & 0.212          & 0.038       & 0.296       & \textbf{0.368 (47$\%$)}          \\ \hline
+\multirow{2}{*}{\textbf{A-V (L2)}} & \textbf{NDCG}   & 0.539           & 0.521          & 0.519          & 0.510          & 0.467         & 0.362           & 0.471          & 0.232       & 0.443       & \textbf{0.567 (5$\%$)}  \\
+                                   & \textbf{MRR}    & 0.584           & 0.528          & 0.461          & 0.510          & 0.293         & 0.294           & 0.365          & 0.000       & 0.406       & \textbf{0.628 (8$\%$)}  \\ \hline
+\multirow{2}{*}{\textbf{V-A (L2)}} & \textbf{NDCG}   & 0.256           & 0.343          & 0.345 & 0.265          & 0.328         & 0.316           & 0.263          & 0.133       & 0.119       & \textbf{0.348 (33$\%$)} \\
+                                   & \textbf{MRR}    & 0.117           & 0.296 & 0.286          & 0.151          & 0.285         & 0.275           & 0.147          & 0.000       & 0.000       & \textbf{0.296 (141$\%$)}        \\ \hline \bottomrule
+\end{tabular}
+\normalsize
+\end{table*}
+
+
+\begin{table*}[]
+    \caption{
+	\textbf{Open Academic Graph on Machine Learning field}
+	}
+	\label{tab:oag:ml}
+	\centering
+    \small
+\begin{tabular}{l|l|c|cc|ccc|c|cc|r}
+\toprule\hline
+\textbf{Task}                      & \textbf{Metric} & \textbf{Source} & \textbf{DAN} & \textbf{JAN} & \textbf{DANN} & \textbf{CDAN} & \textbf{CDAN-E} & \textbf{WDGRL} & \textbf{LP} & \textbf{EP} & \textbf{KTN (gain)}  \\ \hline\midrule
+\multirow{2}{*}{\textbf{P-A (L2)}} & \textbf{NDCG}   & 0.268           & 0.290        & o.o.m        & 0.291         & o.o.m         & 0.249           & 0.232          & 0.272       & 0.215       & \textbf{0.318 (19$\%$)}  \\
+                                   & \textbf{MRR}    & 0.134           & 0.220        & o.o.m        & 0.222         & o.o.m         & 0.095           & 0.098          & 0.195       & 0.143       & \textbf{0.269 (102$\%$)} \\ \hline
+\multirow{2}{*}{\textbf{A-P (L2)}} & \textbf{NDCG}   & 0.261           & 0.225        & o.o.m        & 0.234         & 0.228         & 0.241           & 0.241          & 0.119       & 0.267       & \textbf{0.319 (22$\%$)}  \\
+                                   & \textbf{MRR}    & 0.207           & 0.127        & o.o.m        & 0.155         & 0.152         & 0.095           & 0.182          & 0.035       & 0.214       & \textbf{0.287 (39$\%$)}  \\ \hline
+\multirow{2}{*}{\textbf{A-V (L2)}} & \textbf{NDCG}   & 0.465           & 0.493        & 0.463        & 0.477         & 0.408         & 0.422           & 0.393          & 0.224       & 0.424       & \textbf{0.538 (16$\%$)}  \\
+                                   & \textbf{MRR}    & 0.469           & 0.542        & 0.537        & 0.519         & 0.412         & 0.240           & 0.213          & 0.001       & 0.391       & \textbf{0.632 (35$\%$)}  \\ \hline
+\multirow{2}{*}{\textbf{V-A (L2)}} & \textbf{NDCG}   & 0.252           & 0.293        & 0.292        & 0.237         & 0.242         & 0.255           & 0.250          & 0.137       & 0.119       & \textbf{0.302 (20$\%$)}  \\
+                                   & \textbf{MRR}    & 0.131           & 0.212        & 0.199        & 0.086         & 0.085         & 0.129           & 0.118          & 0.000       & 0.000       & \textbf{0.227 (73$\%$)}  \\ \hline\bottomrule
+\end{tabular}
+\normalsize
+\end{table*}
+
+
+
+
+
+\subsection{Zero-shot domain adaptation}
+\label{sec:experiments:zero-shot}
+
+We run $18$ different zero-shot domain adaptation tasks across three OAG and PubMed graphs.
+Each heterogeneous graph has node classification tasks for both source and target node types.
+Only source node types have labels, while target node types have none during training.
+The performance is evaluated by NDCG and MRR --- widely adopted ranking metrics~\cite{hu2020heterogeneous, hu2020gpt}.
+
+In Tables~\ref{tab:oag:cs},~\ref{tab:pubmed},~\ref{tab:oag:cn}, and~\ref{tab:oag:ml}, our proposed method \textsc{HGNN-KTN}\xspace consistently outperforms all baselines on all tasks and graphs by up to $73.3\%$ higher in MRR (P-A(L1) task in OAG-CS, Table \ref{tab:oag:cs}).
+When we compare with the original accuracy possible using the model pretrained on the source domain without any domain adaptation ($3$rd column, \textit{Source}), the results are even more impressive.
+Here we see our method \textsc{HGNN-KTN}\xspace provides relative gains of up to $340\%$ higher MRR without using any labels from the target domain.
+These results show the clear effectiveness of \textsc{HGNN-KTN}\xspace on zero-shot domain adaptation tasks on a heterogeneous graph.
+
+We note that in OAG graphs, the paper and author node types have different modalities (text and graph embeddings), and in the PubMed graph, disease and gene node types have different modalities (text and graph embeddings).
+In all cases, \textsc{HGNN-KTN}\xspace still transfers knowledge successfully while all baselines show poor performance even between domains of the same modalities (as they do not consider different feature extractors in HGNN models).
+Finally, we mention that venue and author node types are not directly connected in the OAG graphs (Figure~\ref{fig:schema1:oag}), but \textsc{HGNN-KTN}\xspace successfully transfer knowledge by passing the intermediate nodes.
+
+\noindent \textbf{Baseline Performance.}
+\label{sec:experiments:zero-shot-analysis}
+Among baselines, MMD-based models (DAN and JAN) outperform adversarial based methods (DANN, CDAN, and CDAN-E) and optimal transport-based method (WDGRL), unlike results reported in~\cite{long2017conditional, shen2018wasserstein}.
+These reversed results are a consequence of HGNN's unique feature extractors for source and target domains.
+DANN and CDAN define their adversarial losses as a cross entropy loss ($\mathbb{E}[log\textbf{f}_s(x_s)] - \mathbb{E}[log\textbf{f}_t(x_t)]$) where gradients of the subloss $\mathbb{E}[log\textbf{f}_s(x_s)]$ computed from the source feature extractor $f_s(x_s)$ are passed only back to $\textbf{f}_s(x_s)$, while gradients of the subloss $\mathbb{E}[log\textbf{f}_t(x_t)]$ computed from the target feature extractor $\textbf{f}_t(x_t)$ are passed only back to $\textbf{f}_t(x_t)$.
+Importantly, source and target feature extractors do not share any gradient information, resulting in divergence.
+This did not occur in their original test environments where source and target domains share a single feature extractor.
+Similarly, WDGRL measures the first-order Wasserstein distance as an adversarial loss, which also brings the same effect as the cross-entropy loss we described above, leading to divergent gradients between source and target feature extractors.
+On the other hand, DAN and JAN define a loss in terms of higher-order MMD between source and target features.
+Then the gradients of the loss passed to each feature extractor contain both source and target feature information, resulting in a more stable gradient estimation.
+This shows again the importance of considering different feature extractors in HGNNs.
+More analysis can be found in Appendix~\ref{appendix:analysis}
+
+\begin{figure}[t!]
+ 	\centering
+ 	\includegraphics[width=0.7\linewidth]{FIG/synthetic-legend.png} \\
+ 	\subfigure[Edge probability (easy)]
+ 	{
+ 	\label{fig:2-type-simple:edge}
+ 	\includegraphics[width=0.47\linewidth]{FIG/2type-simple-edge.png}
+ 	}
+ 	\subfigure[Feature distribution (easy)]
+ 	{
+ 	\label{fig:2-type-simple:feat}
+ 	\includegraphics[width=.47\linewidth]{FIG/2type-simple-feat.png}
+ 	}
+ 	\subfigure[Edge probability (hard)]
+ 	{
+ 	\label{fig:2-type-hard:edge}
+ 	\includegraphics[width=0.47\linewidth]{FIG/2type-hard-edge.png}
+ 	}
+ 	\subfigure[Feature distribution (hard)]
+ 	{
+ 	\label{fig:2-type-hard:feat}
+ 	\includegraphics[width=.47\linewidth]{FIG/2type-hard-feat.png}
+ 	}
+ 	\caption
+ 	{
+ 	    Effects of edge probabilities and feature distributions across classes and types in $2$-node type heterogeneous graphs.
+ 	}
+ 	\label{fig:2-type}
+ \end{figure}
+
+
+\subsection{Sensitivity analysis}
+\label{sec:experiments:sensitivity}
+
+\newcommand{\sigma_e}{\sigma_e}
+\newcommand{\sigma_f}{\sigma_f}
+Using our synthetic heterogeneous graph generator described in Section \ref{sec:experiments:dataset}, we generate non-trivial 2-type heterogeneous graphs to examine how the feature and edge distributions of heterogeneous graphs affect the performance of \textsc{HGNN-KTN}\xspace and other baselines.
+We generate a \emph{range} of test-case scenarios by manipulating (1) signal-to-noise ratio $\sigma_e$ of within-class edge probability and (2) signal-to-noise ratio $\sigma_f$ of within-class feature distributions (details in Appendix~\ref{appendix:graph-generator}) across all of the (a) source-source ($s\leftrightarrow s$), (b) target-target ($t\leftrightarrow t$), and (c) source-target ($s\leftrightarrow t$) relationships. A higher signal-to-noise ratio for a particular data dimension (edges vs features) across a particular relationship $r\in \{s\leftrightarrow s,\ t\leftrightarrow t,\ s\leftrightarrow s\}$ means that classes are more \emph{separable} in that data dimension, when comparing within $r$, and hence easier for HGNNs. Note that while tuning one $\sigma$ on the range $[1.0, 10.0]$ for one of the six $(\sigma, r)$ pairs, the $\sigma$ in all five other pairs are held at $10.0$. Additionally, we vary $\sigma$ across two scenarios: (I) ``easy": source and target node types have same number of classes and same feature dimensions, (II) ``hard" source and target node types have different number of classes and feature dimensions. At each unique value of $\sigma$ across the six ($\sigma, r$) pairs, we generate 5 heterogeneous graphs, train HGNN-KTN and other DA baselines using source class labels, and test using target class labels.
+
+The findings from our synthetic data study are shown in Figure~\ref{fig:2-type}. Figures~\ref{fig:2-type-simple:edge} and \ref{fig:2-type-hard:edge} show results from changing $\sigma_e$ across the three relation types. We see that \textsc{HGNN-KTN}\xspace is affected only by $\sigma_e$ across the $s\leftrightarrow t$ relationship, which accords with our theory, since \textsc{HGNN-KTN}\xspace exploits the between-type computation (adjacency) matrix. Surprisingly, as seen in Figures~\ref{fig:2-type-simple:feat} and \ref{fig:2-type-hard:feat}, we do not find a similar dependence of \textsc{HGNN-KTN}\xspace on $\sigma_f$, which shows that \textsc{HGNN-KTN}\xspace is robust by learning purely from edge homophily in the absence of feature homophily. This robustness is a result of our theoretically-motivated formulation of KTN, allowing the full expressivity of HGNNs within the transfer-learning task.
+
+Regarding the performance of other baselines, EP shows similar tendencies as \textsc{HGNN-KTN}\xspace --- only affected by cross-type $\sigma_e$ --- because EP also relies on cross-type propagation along edges. However, its accuracy is bounded above due to the fact that it does not model or propagate the (unlabelled) target features.
+DAN and DANN, which do not exploit cross-type edges, are not affected by cross-type $\sigma_e$.
+However, they show either low or unstable performance across different scenarios.
+DAN shows especially poor performance in the ``hard" scenarios (Figure~\ref{fig:2-type-hard:edge} and~\ref{fig:2-type-hard:feat}), failing to deal with different feature spaces for source and target domains.
+
+\begin{table}[]
+    \caption{
+	\textbf{Different types of HGNNs:}
+	sharing more parameters does not improve domain adaptation.
+	}
+	\label{tab:hgnn-type}
+	\centering
+    \small
+    \begin{tabular}{l|l|ll|ll}
+    \toprule \hline
+    \multirow{2}{*}{\textbf{Task}} & \multirow{2}{*}{\textbf{Model}} & \multicolumn{2}{c|}{\textbf{NDCG}} & \multicolumn{2}{c}{\textbf{MRR}}  \\
+    & & \textbf{Source}  & \textbf{Target} & \textbf{Source} & \textbf{Target} \\ \hline
+    \multirow{3}{*}{\textbf{\begin{tabular}[c]{@{}l@{}}P-A\\ (L1)\end{tabular}}} & HGNN-v1 & 0.634            & 0.564           & 0.604           & 0.519           \\
+                                                                             & HGNN-v2                      & 0.794            & 0.613           & 0.788           & 0.617           \\
+                                                                             & HGNN                            & 0.792            & 0.623           & 0.785           & 0.629           \\ \hline
+    \multirow{3}{*}{\textbf{\begin{tabular}[c]{@{}l@{}}A-V\\ (L1)\end{tabular}}} & HGNN-v1                             & 0.675            & 0.568           & 0.690           & 0.543           \\
+                                                                             & HGNN-v2                      & 0.69             & 0.669           & 0.695           & 0.687           \\
+                                                                             & HGNN                            & 0.689            & 0.671           & 0.693           & 0.698           \\ \hline
+    \bottomrule
+    \end{tabular}
+    \normalsize
+\end{table}
+
+\subsection{Different types of HGNNs}
+\label{sec:experiments:hgnn-types}
+
+Using different parameters for each node and edge types in HGNNs result in different feature extractors for source and target node types.
+By sharing more parameters among node/edge types, could we see domain adaptation effect?
+Here, we design two variants of HGNNs.
+HGNN-v1 provides node-wise input layer that maps different modalities into the shared dimension then shares all the remaining parameters across nodes and layers.
+HGNN-v2 provides node-wise transformation matrices and edge-wise message matrices, but sharing them across layers.
+In Table~\ref{tab:hgnn-type}, HGNN-v1 shows lower accuracy for both source and target node types.
+More parameters specialized to each node/edge types, HGNN models show higher accuracy on source domain, thus higher performance could be transferred to target domain.
+Regardless of HGNN model types, \textsc{HGNN-KTN}\xspace transfers knowledge between source and target node types consistently.
+
+
+\subsection{Effect of trade-off coefficient $\lambda$}
+\label{sec:experiments:lambda}
+
+We examine the effect of $\lambda$ on the domain adaptation performance.
+In Table~\ref{tab:lambda}, as $\lambda$ decreases, target accuracy decreases as expected.
+Source accuracy also sees small drops since $\mathcal{L}_{\text{KTN}}$ functions as a regularizer; by removing the regularization effect, source accuracy decreases.
+When $\lambda$ becomes large, both source and target accuracy drop significantly.
+Source accuracy drops since the effect of $\mathcal{L}_{\text{KTN}}$ becomes bigger than the classification loss $\mathcal{L}_{\text{CL}}$.
+Even the effect of transfer learning become bigger by having bigger $\lambda$, since the source accuracy which will be transferred to the target domain is low, the target accuracy is also low. 
+Thus we set $\lambda$ to $1$ throughout the experiments.
+
+
+
+
+\begin{table}[]
+    \caption{
+	\textbf{Effect of $\lambda$}
+	}
+	\label{tab:lambda}
+	\centering
+    \small
+\begin{tabular}{l|cccc}
+    \toprule \hline
+    \multicolumn{1}{c|}{\textbf{Task}}   & \multicolumn{4}{c}{\textbf{P-A (L1)}}                                                      \\ \hline
+    \multicolumn{1}{c|}{\textbf{Metric}} & \multicolumn{2}{c|}{\textbf{NDCG}}                     & \multicolumn{2}{c}{\textbf{MRR}}  \\ \hline
+    $\lambda$                               & \textbf{source} & \multicolumn{1}{c|}{\textbf{target}} & \textbf{source} & \textbf{target} \\ \hline \midrule
+    \textbf{$10^{-4}$}                        & 0.780           & \multicolumn{1}{c|}{0.587}           & 0.772           & 0.595           \\
+    \textbf{$10^{-2}$}                        & 0.788           & \multicolumn{1}{c|}{0.58}            & 0.779           & 0.576           \\
+    \textbf{$1$}                        & 0.792           & \multicolumn{1}{c|}{0.621}           & 0.788           & 0.633           \\
+    \textbf{$10^{2}$}                      & 0.75            & \multicolumn{1}{c|}{0.617}           & 0.757           & 0.623           \\
+    \textbf{$10^{4}$}                   & 0.143           & \multicolumn{1}{c|}{0.177}           & 0.007           & 0.031           \\ \hline \midrule
+    \multicolumn{1}{c|}{\textbf{Task}}   & \multicolumn{4}{c}{\textbf{A-V (L1)}}                                                      \\ \hline
+    \multicolumn{1}{c|}{\textbf{Metric}} & \multicolumn{2}{c|}{\textbf{NDCG}}                     & \multicolumn{2}{c}{\textbf{MRR}}  \\ \hline
+    \textbf{$\lambda$}                      & \textbf{source} & \multicolumn{1}{c|}{\textbf{target}} & \textbf{source} & \textbf{target} \\ \hline \midrule
+    \textbf{$10^{-4}$}                        & 0.689           & \multicolumn{1}{c|}{0.626}           & 0.690           & 0.642           \\
+    \textbf{$10^{-2}$}                        & 0.687           & \multicolumn{1}{c|}{0.654}           & 0.689           & 0.677           \\
+    \textbf{$1$}                        & 0.689           & \multicolumn{1}{c|}{0.67}            & 0.692           & 0.696           \\
+    \textbf{$10^{2}$}                      & 0.654           & \multicolumn{1}{c|}{0.644}           & 0.659           & 0.668           \\
+    \textbf{$10^{4}$}                   & 0.411           & \multicolumn{1}{c|}{0.432}           & 0.373           & 0.421          \\ \hline \bottomrule
+\end{tabular}
+\normalsize
+\end{table}
+
+
+
+
+\subsection{Proof of Theorem 1}\label{appendix:theorem1}
+The proof of Theorem \ref{theorem} is below. As stated in the assumptions of the theorem, we adopt a simplified version of our message-passing function that ignores the skip-connection:
+\begin{equation}
+    \small
+    \textbf{Message}^{(l)}(i, j) = M_{\phi(i,j)}^{(l)}h_i^{(j)}.
+\end{equation}
+This lets the Theorem match the experimental results shown in Figure \ref{fig:toy_exp}, as the HGNN trained in that experiment does not use skip-connections and hence represents an ``idealized" HGNN without skip-connections, and with a theoretically-exact KTN component. In the real experiments, we use (1) skip-connections, exploiting their usual benefits~\cite{hamilton2017inductive}, and (2) the trainable version of KTN.
+
+\begin{proof}
+Without loss of generality, we prove the result for the case where $\mathcal{R} = \{(s, t): s,t\in\mathcal{T}\}$, meaning the type of an edge is identified with the (ordered) types of the neighbor nodes. In other words, there is only one edge modality possible, such as a social networks with multiple node types (e.g.\ ``users", ``groups") but only one edge modality (``friendship"). In the case of multiple edge modalities (e.g. ``friendship" and ``message"), the result is extended trivially (though with more algebraically-dense forms of $a_{ts}$ and $q_{ts}$).
+
+Throughout this proof, we use the following notation for the set of all $j$-adjacent edges of relation type $r$:
+\begin{equation}
+    \small
+    \mathcal{E}_r(j):=\{(i,j): i\in\mathcal{V}, (i,j) = r\}.
+\end{equation}
+We write $A_{x_1x_2}$ to denote the sub-matrix of the total $n\times n$ adjacency matrix $A$ corresponding to node types $x_1,x_2\in\mathcal{T}$, and $\bar{A}_{x_1x_2}$ to denote the same matrix divided by its sum. $H_x^{(l)}$ is the (row-wise) $n_x\times d_l$ embedding matrix of $x$-type nodes at layer $l$.
+
+To begin, we first compute the $l$-\emph{th} output $g_j^{(l)}$ of the $\textbf{Aggregate}$ step defined for HGNNs in Equation \eqref{eq:aggregate}, for any node $j\in\mathcal{V}$ such that $\tau(j) = s$. The output of \textbf{Aggregate} is in fact a concatenation of edge-type-specific aggregations (see Equation~\ref{eq:aggregate}). Note that at most $T = |\mathcal{T}|$ elements of this concatenation are non-zero, since the node $j$ only participates in $T$ out of $T^2$ relation types in $\mathcal{R}$. Thus we can write $g_j^{(l)}$ as 
+\begin{align*}
+    \small
+    g_j^{(l)} &= \underset{r\in\mathcal{R}}{\mathbin\Vert}\tfrac{1}{|\mathcal{E}_r(j)|}\sum_{e\in\mathcal{E}_r(j)}\textbf{Message}^{(l)}(e)\\
+    &= \underset{x\in\mathcal{T}}{\mathbin\Vert}\tfrac{1}{|\mathcal{E}_{xs}(j)|}\sum_{e\in\mathcal{E}_{xs}(j)}\textbf{Message}^{(l)}(e)\\
+    &=\underset{x\in\mathcal{T}}{\mathbin\Vert}\tfrac{1}{|\mathcal{E}_{xs}(j)|}\sum_{(i,j)\in\mathcal{E}_{xs}(j)}M_{xs}^{(l)}h_i^{(l-1)}\\
+    &=\underset{x\in\mathcal{T}}{\mathbin\Vert}\tfrac{1}{|\mathcal{E}_{xs}(j)|}M_{xs}^{(l)}\sum_{(i,j)\in\mathcal{E}_{xs}(j)}h_i^{(l-1)}\\
+    &=\underset{x\in\mathcal{T}}{\mathbin\Vert}M_{xs}^{(l)}\left(H_x^{(l-1)}\right)'\bar{A}_{xs}^{(j)},
+\end{align*}
+where $\bar{A}_{xs}^{(j)}$ denotes the $j$-\emph{th} column of $\bar{A}_{xs}$. Notice that
+\begin{equation}
+    \small
+    h_j^{(l)} = \textbf{Transform}^{(l)}(j) = W_s^{(l)}g_j^{(l)},
+\end{equation}
+and (again) at most $T$ elements of the concatenation $g_j^{(l)}$ are non-zero. Therefore let $W_{xs}^{(l)}$ be the columns of $W_s^{(l)}$ that select the concatenated element of $g_j^{(l)}$ corresponding to node type $x$. Then we can write
+\begin{equation}
+    \small
+    h_j^{(l)} = \sum_{x\in\mathcal{T}}W_{xs}^{(l)}M_{xs}^{(l)}\left(H_x^{(l-1)}\right)'\bar{A}_{xs}^{(j)}.
+\end{equation}
+
+
+\begin{algorithm}[t!]
+    \caption{Test step for a target domain (indirect version)}
+    \label{alg:test-extend}
+\begin{algorithmic}[1]
+\small
+    \REQUIRE pretrained HGNN $\textbf{f}$, classifier $\textbf{g}$, \textsc{HGNN-KTN}\xspace $\textbf{t}_{\text{KTN}}$
+    \ENSURE target node label matrix $Y_t$
+    \STATE $H^{(L)}_t = \textbf{f}(H^{(0)} = X, \mathcal{G})$, $H^{*}_{t} = \textbf{0}$
+    \FOR{each meta-path $p = t \rightarrow s$}
+    \STATE $x = t$, $Z = H^{(L)}_t$
+    \FOR{each node type $y \in p$}
+    \STATE $X = ZT_{xy}$
+    \STATE $x = y$
+    \ENDFOR
+    \STATE $H^{*}_{t} = H^{*}_{t} + Z$
+    \ENDFOR
+    \RETURN $\textbf{g}(H^{*}_{t})$
+\normalsize
+\end{algorithmic}
+\end{algorithm}
+
+
+Defining the operator $Q_{xs}^{(l)} := \left(W_{xs}^{(l)}M_{xs}^{(l)}\right)'$, this implies that
+\begin{align*}
+    \small
+    &H^{(l)}_s = \sum_{x\in\mathcal{T}}\bar{A}_{xs}H_x^{(l-1)}Q_{xs}^{(l)} \\
+    &= [\bar{A}_{x_{1}s},\ldots,\bar{A}_{x_{T}s}]
+    \begin{bmatrix}
+        H^{(l-1)}_{x_1} & 0 & 0\\
+        0 & \ldots & 0\\
+        0 & 0 & H^{(l-1)}_{x_T}
+    \end{bmatrix}
+    \begin{bmatrix}
+        Q_{x_1s}^{(l-1)}\\
+        \ldots\\
+        Q_{x_Ts}^{(l-1)}
+   \end{bmatrix}
+   \\
+   & = \bar{A}_{\cdot s}H_{\cdot}^{(l-1)}Q_{\cdot s}^{(l-1)}
+\end{align*}
+Similarly we have $H^{(l)}_t = \bar{A}_{\cdot t}H_{\cdot}^{(l-1)}Q_{\cdot t}^{(l-1)}$. Since $H^{(l)}_s$ and $H^{(l)}_t$ share the term $H_\cdot^{(l-1)}$, we can write
+\begin{equation}
+\label{eq:thoretical}
+    \small
+    H_s^{(l)} = \bar{A}_{\cdot s}\bar{A}^{-1}_{\cdot t} H^{(l)}_{t} (Q_{\cdot t}^{(l-1)})^{-1}Q_{\cdot s}^{(l-1)},
+\end{equation}
+where $X^{-1}$ denotes the pseudo-inverse. This proves the result.
+\end{proof}
+
+
+\subsection{Indirectly Connected Source and Target Node Types}
+\label{appendix:indirect}
+
+When source and target node types are indirectly connected by another node type $x$, we can simply extend $\textbf{t}_{\text{KTN}}(H^{(L)}_{t})$ to $(A_{xs}(A_{tx}H^{(L)}_{t}T_{tx})T_{xs})$ where $T_{tx}T_{xs}$ becomes a mapping function from target to source domains.
+Algorithm~\ref{alg:train-extend} and~\ref{alg:test-extend} show how \textsc{HGNN-KTN}\xspace is extended.
+For every step ($x \rightarrow y$) in a meta-path ($t \rightarrow \cdots \rightarrow s$) connecting from target node type $t$ to source node type $s$, we define a transformation matrix $T_{xy}$, run a convolution operation with an adjacency matrix $A_{xy}$, and map the transformed embedding to the source domain.
+We run the same process for all meta-paths connecting from target node type $t$ to source node type $s$, and sum up them to match with the source embeddings.
+In the test phase, we run the same process to get the transformed target embeddings, but this time, without adjacency matrices.
+We run Algorithm~\ref{alg:train-extend} and~\ref{alg:test-extend} for domain adaptation tasks between author and venue nodes which are indirectly connected by paper nodes in OAG graphs (Figure~\ref{fig:schema1:oag}).
+As shown in Tables~\ref{tab:oag:cs},~\ref{tab:oag:cn}, and~\ref{tab:oag:ml}, we successfully transfer HGNN models between author and venue nodes (A-V and V-A) for both L1 and L2 tasks.
+
+Which meta-path between source and target node types should we choose? 
+Will lengths of meta-paths affect the performance?
+We examine the performance of \textsc{HGNN-KTN}\xspace varying the length of meta-paths.
+In Table~\ref{tab:meta-path}, accuracy decreases with longer meta-paths.
+When we add additional meta-paths than the minimum path, it also brings noise in every edge types.
+Note that author and venue nodes are indirectly connected by paper nodes; thus the minimum length of meta-paths in the A-V (L1) task is $2$.
+The accuracy in the A-V (L1) task with a meta-path of length $1$ is low because \textsc{HGNN-KTN}\xspace fails to transfer anything with a meta-path shorter than the minimum.
+Using the minimum length of meta-paths is enough for \textsc{HGNN-KTN}\xspace.
+
+
+\subsection{Analysis for Baselines in Section~\ref{sec:experiments:zero-shot}}
+\label{appendix:analysis}
+JAN, CDAN, and CDAN-E often show out of memory issues in Tables~\ref{tab:oag:cs},~\ref{tab:oag:cn}, and~\ref{tab:oag:ml}.
+These baselines consider the classifier prediction whose dimension is equal to the number of classes in a given task.
+That is why JAN, CDAN, and CDAN-E fail at the L2 field prediction tasks in OAG graphs where the number of classes is $17,729$.
+
+LP performs worst among the baselines, showing the limitation of relying only on graph structures.
+LP maintains a label vector with the length equal to the number of classes for each node, thus shows out-of-memory issues on tasks with large number of classes on large-size graphs (L2 tasks with $17,729$ labels on the OAG-CS graph).
+EP performs moderately well similar to other DA methods, but lower than \textsc{HGNN-KTN}\xspace up to $60\%$ absolute points of MRR, showing the limitation of not using target node attributes.
+
+
+\begin{table}[]
+    \caption{
+	\textbf{Meta-path length in \textsc{HGNN-KTN}\xspace:}
+	increasing the meta-path longer than the minimum does not bring significant improvement to \textsc{HGNN-KTN}\xspace.
+	Note that the minimum length of meta-paths in the A-V (L1) task is $2$.
+	}
+	\label{tab:meta-path}
+	\centering
+    \small
+\begin{tabular}{c|llll}
+    \toprule \hline
+    \textbf{Task}                                                    & \multicolumn{2}{c}{\textbf{P-A (L1)}}             & \multicolumn{2}{c}{\textbf{A-V (L1)}} \\ \hline
+    \textbf{\begin{tabular}[c]{@{}c@{}}Meta-path\\ length\end{tabular}} & \textbf{NDCG} & \multicolumn{1}{l|}{\textbf{MRR}} & \textbf{NDCG}      & \textbf{MRR}     \\ \hline \midrule
+    \textbf{1}                                                       & 0.623         & \multicolumn{1}{l|}{0.621}        & 0.208              & 0.010            \\
+    \textbf{2}                                                       & 0.627         & \multicolumn{1}{l|}{0.628}        & 0.673              & 0.696            \\
+    \textbf{3}                                                       & 0.608         & \multicolumn{1}{l|}{0.611}        & 0.627              & 0.648            \\
+    \textbf{4}                                                       & 0.61          & \multicolumn{1}{l|}{0.623}        & 0.653              & 0.671            \\
+    \hline \bottomrule
+\end{tabular}
+\normalsize
+\end{table}
+
+\subsection{Synthetic Heterogeneous Graph Generator}
+\label{appendix:graph-generator}
+
+Our synthetic heterogeneous graph generator is based on attributed Stochastic Block Models (SBM)~\cite{tsitsulin2020graph,tsitsulin2021synthetic}, using clusters (blocks) as the node classes.
+In the attributed SBM, graphs exhibit \emph{within-type} cluster homophily at the \emph{edge-level} (nodes most-frequently connect to other nodes in their cluster), and at the \emph{feature-level} (nodes are closest in feature space to other nodes in their cluster). 
+To produce heterogeneous graphs, we additionally introduce \emph{between-type} cluster homophily, which allows us to model real-world heterogeneous graphs in which knowledge can be shared across node types. 
+
+The first step in generating a heterogeneous SBM is to decide how many clusters will partition each node type. Assume within-type cluster counts $k_1, \ldots, k_T$. We allow for cross-type homophily with a $K_T:=\min_t\{k_t\}$-partition of clusters such that each cluster group has at least one cluster from each node type.
+
+Secondly, edge-level homophily is controlled by signal-to-noise ratios $\sigma_e = p/q$ where nodes within-cluster are connected with probability $p$ and nodes between-cluster are connected with probability $q$. Additionally, nodes within the same cluster group across-types (see previous paragraph) can generate between-edges with some $\sigma_e>1.0$. In Section \ref{sec:experiments:sensitivity} we describe the manipulation of multiple $\sigma_e$ parameters within-and-across types.
+
+Finally, node attributes are generated by a multivariate Normal mixture model, using the cluster partition as the mixture groups.
+Thus feature-level homophily is controlled by increasing the variance of the cluster centers $\sigma_f$, while keeping the within-cluster variance fixed. Note that features of different types are allowed to have different dimensions, as we generate different mixture-model cluster centers for each cluster \emph{within each type}. Cross-type feature homophily is not necessary, since HGNN-KTN learns a transformation function between the type feature spaces.
+
+
+
+\subsubsection{Toy Heterogeneous Graph in Section~\ref{sec:motivation:experiments}}
+\label{appendix:graph-generator:toy}
+
+Using the synthetic graph procedure described above, we used the following hyperparameters to simulate the toy heterogeneous graph shown in Figure~\ref{fig:toy_exp}.
+We generate the graph with two node types and four edge types as described in Figure~\ref{fig:toy:hg}, then we divide each node type into $4$ classes of $400$ nodes.
+To generate an easy-to-transfer scenario, signal-to-noise ratio $\sigma_f$ between means of feature distributions are all set to $10$.
+The ratio $\sigma_e$ of the number of intra-class edges to the number of inter-class edges is set to $10$ among the same node types and across different node types.
+The dimension of features is set to $24$ for both node types.
+
+\subsubsection{Sensitivity test in Section~\ref{sec:experiments:sensitivity}}
+\label{appendix:graph-generator:sensitivity}
+
+Figure~\ref{fig:schema2} shows the structures of graphs we used in Section~\ref{sec:experiments:sensitivity}.
+The dimension of features are set to $24$ for both node types for the ``easy" scenario and, and $32,48$ for types $s$ and $t$ (respectively) for the ``hard" scenario. Additionally, for the ``hard" scenario, we divide the $t$ nodes into 8 clusters instead of 4.
+The other hyperparameters $\sigma_e$ and $\sigma_f$ are described in Section~\ref{sec:experiments:sensitivity}.
+
+
+\begin{table*}[t!]
+    \caption{
+	\textbf{Statistics of Open Academic Graph}
+	}
+	\label{tab:oag:statistics}
+	\centering
+\small
+\begin{tabular}{l|l|l|l|l|l|l}
+    \toprule\hline
+    \textbf{Domain}           & \textbf{\#papers} & \textbf{\#authors} & \textbf{\#fields} & \textbf{\#venues} & \textbf{\#institues} &                \\ \hline\midrule
+    \textbf{Computer Science} & 544,244           & 510,189            & 45,717            & 6,934             & 9,097                &                \\
+    \textbf{Computer Network} & 75,015            & 82,724             & 12,014            & 2,115             & 4,193                &                \\
+    \textbf{Machine Learning} & 90,012            & 109,423            & 19,028            & 3,226             & 5,455                &                \\ \hline
+    \textbf{Domain}           & \textbf{\#P-A}    & \textbf{\#P-F}     & \textbf{\#P-V}    & \textbf{\#A-I}    & \textbf{\#P-P}       & \textbf{\#F-F} \\ \hline\midrule
+    \textbf{Computer Science} & 1,091,560         & 3,709,711          & 544,245           & 612,873           & 11,592,709           & 525,053        \\
+    \textbf{Computer Network} & 155,147           & 562,144            & 75,016            & 111,180           & 1,154,347            & 110,869        \\
+    \textbf{Machine Learning} & 166,119           & 585,339            & 90,013            & 156,440           & 1,209,443            & 163,837        \\ \hline\bottomrule
+\end{tabular}
+\normalsize
+\end{table*}
+
+\begin{table*}[t!]
+    \caption{
+	\textbf{Statistics of PubMed Graph}
+	}
+	\label{tab:pubmed:statistics}
+	\centering
+\small
+\begin{tabular}{p{1.5cm}|p{1.5cm}|p{1.5cm}|p{1.5cm}|p{1.5cm}}
+\toprule\hline
+\textbf{\#gene} & \textbf{\#disease} & \textbf{\#chemicals} & \textbf{\#species} &                \\ \hline\midrule
+13,561           & 20,163             & 26,522                & 2,863               &                \\ \hline
+\textbf{\#G-G}  & \textbf{\#G-D}     & \textbf{\#D-D}       & \textbf{\#C-G}     & \textbf{\#C-D} \\ \hline\midrule
+32,211           & 25,963              & 68,219                & 31,278              & 51,324          \\ \hline
+\textbf{\#C-C}  & \textbf{\#C-S}     & \textbf{\#S-G}       & \textbf{\#S-D}     & \textbf{\#S-S} \\ \hline\midrule
+124,375          & 6,298               & 3,156                 & 5,246               & 1,597          \\ \hline\bottomrule
+\end{tabular}
+\normalsize
+\end{table*}
+
+\subsection{Real-world Dataset}
+\label{appendix:dataset}
+
+\paragraph{Open Academic Graph (OAG)}~\cite{sinha2015overview, tang2008arnetminer, zhang2019oag} is the largest publicly available heterogeneous graph.
+It is composed of five types of nodes: papers, authors, institutions, venues, fields and their corresponding relationships.
+Papers and authors have text-based attributes, while institutions, venues, and fields have text- and graph structure-based attributes.
+To test the generalization of the proposed model, we construct three field-specific subgraphs from OAG: the Computer
+Science (OAG-CS), Computer Networks (OAG-CN), and Machine Learning (OAG-ML) academic graphs. 
+
+Papers, authors, and venues are labeled with research fields in two hierarchical levels, L1 and L2.
+OAG-CS has both L1 and L2 labels, while OAG-CN and OAG-ML have only L2 labels (their L1 labels are all "computer science").
+Domain adaptation is performed on the L1 and L2 field prediction tasks between papers, authors, and venues for each of the aforementioned subgraphs.
+Note that paper-author (P-A) and paper-venue (P-V) are directly connected, while author-venue (A-V) are indirectly connected via papers.
+
+The number of classes in the L1 task is $275$, while the number of classes in the L2 task is $17,729$.
+The graph statistics are listed in Table~\ref{tab:oag:statistics}, in which P–A, P–F, P–V, A–I, P–P, and F-F denote the edges between paper and author, paper and field, paper and venue, author and institute, the citation links between two papers, the hierarchical links between two fields.
+The graph structure is described in Figure~\ref{fig:schema1:oag}.
+
+For paper nodes, features are generated from each paper's title using a pre-trained XLNet~\cite{wolf2020transformers}.
+For author nodes, features are averaged over features of papers they published.
+Feature dimension of paper and author nodes is $769$.
+For venue, institution, and field node types, features of dimension $400$ are generated from their heterogeneous graph structures using metapath2vec~\cite{dong2017metapath2vec}.
+
+\begin{figure}[t!]
+ 	\centering
+ 	\includegraphics[width=0.36\linewidth]{FIG/Synthetic_2.png}
+ 	\caption
+ 	{
+ 	    Schema of synthetic heterogeneous graphs used in the sensitivity test in Section~\ref{sec:experiments:sensitivity}.
+ 	}
+ 	\label{fig:schema2}
+ \end{figure}
+ 
+\begin{figure}[t!]
+ 	\centering
+ 	\subfigure[OAG]
+ 	{
+ 	\label{fig:schema1:oag}
+ 	\includegraphics[width=0.55\linewidth]{FIG/oag.png}
+ 	}
+ 	\subfigure[PubMed]
+ 	{
+ 	\label{fig:schema1:pubmed}
+ 	\includegraphics[width=.39\linewidth]{FIG/Pubmed.png}
+ 	}
+ 	\caption
+ 	{
+ 	    Schema of real-world heterogeneous graphs
+ 	}
+ 	\label{fig:schema1}
+ \end{figure}
+ 
+\paragraph{PubMed}~\cite{yang2020heterogeneous} is a novel biomedical network constructed through text mining and manual processing on biomedical literature.
+PubMed is composed of genes, diseases, chemicals, and species.
+Each gene or disease is labeled with a set of diseases (e.g., cardiovascular disease) they belong to or cause.
+Domain adaptation is performed on a disease prediction task between genes and disease node types. 
+
+The number of classes in the disease prediction task is $8$.
+The graph statistics are listed in Table~\ref{tab:pubmed:statistics}, in which G, D, C, and S denote genes, diseases, chemicals, and species node types.
+The graph structure is described in Figure~\ref{fig:schema1:pubmed}.
+
+For gene and chemical nodes, features of dimension $200$ are generated from related PubMed papers using word2vec~\cite{mikolov2013distributed}.
+For diseases and species nodes, features of dimension $50$ are generated based on their graph structures using TransE~\cite{bordes2013translating}.
+
+
+\subsection{Baselines}
+\label{appendix:baseline}
+
+Zero-shot domain adaptation can be categorized into three groups --- MMD-based methods, adversarial methods, and optimal-transport-based methods.
+MMD-based methods~\cite{long2015learning, sun2016return, long2017deep} minimize the maximum mean discrepancy (MMD)~\cite{gretton2012kernel} between the mean embeddings of two distributions in reproducing kernel Hilbert space.
+DAN~\cite{long2015learning} enhances the feature transferability by minimizing multi-kernel MMD in several task-specific layers.
+JAN~\cite{long2017deep} aligns the joint distributions of multiple domain-specific layers based on a joint maximum mean discrepancy (JMMD) criterion.
+
+Adversarial methods~\cite{ganin2016domain, long2017conditional} are motivated by theory in~\cite{ben2007analysis, ben2010theory} suggesting that a good cross-domain representation contains no discriminative information about the origin of the input.
+They learn domain invariant features by a min-max game between the domain classifier and the feature extractor.
+DANN~\cite{ganin2016domain} learns domain invariant features by a min-max game between the domain classifier and the feature extractor.
+CDAN~\cite{long2017conditional} exploits discriminative information conveyed in the classifier predictions to assist adversarial adaptation.
+CDAN-E~\cite{long2017conditional} extends CDAN to condition the domain discriminator on the uncertainty of classifier predictions, prioritizing the discriminator on easy-to-transfer examples.
+
+Optimal transport-based methods~\cite{shen2018wasserstein} estimate the empirical Wasserstein distance~\cite{redko2017theoretical} between two domains and minimizes the distance in an adversarial manner
+Optimal transport-based method are based on a theoretical analysis~\cite{redko2017theoretical} that Wasserstein distance can guarantee generalization for domain adaptation.
+WDGRL~\cite{shen2018wasserstein} estimates the empirical Wasserstein distance between two domains and minimizes the distance in an adversarial manner.
+
+\subsection{Experimental Settings}
+\label{appendix:experiment-setting}
+
+All experiments were conducted on the same p2.xlarge Amazon EC2 instance.
+Here, we describe the structure of HGNNs used in each heterogeneous graph.
+
+\paragraph{Open Academic Graph:}
+We use a $4$-layered HGNN with transformation and message parameters of dimension $128$ for \textsc{HGNN-KTN}\xspace and other baselines.
+Learning rate is set to $10^{-4}$.
+
+\paragraph{PubMed:}
+We use a single-layered HGNN with transformation and message parameters of dimension $10$ for \textsc{HGNN-KTN}\xspace and other baselines.
+Learning rate is set to $5 \times 10^{-5}$.
+
+\paragraph{Synthetic Heterogeneous Graphs:}
+We use a $2$-layered HGNN with transformation and message parameters of dimension $128$ for \textsc{HGNN-KTN}\xspace and other baselines.
+Learning rate is set to $10^{-4}$.
+
+We implement LP, EP and \textsc{HGNN-KTN}\xspace using Pytorch.
+For the domain adaptation baselines (DAN, JAN, DANN, CDAN, CDAN-E, and WDGRL), we use a public domain adaptation library ADA~\footnote{\url{https://github.com/criteo-research/pytorch-ada}}.
+
+
+\section{Introduction}
+\label{sec:introduction}
+\input{001introduction.tex}
+
+\section{Related Work}
+\label{sec:related_work}
+\input{002related_work.tex}
+
+\section{Preliminaries}
+\label{sec:preliminaries}
+\input{003preliminaries.tex}
+
+\section{Cross-Type Transformations in HGNNs}
+\label{sec:motivation}
+\input{004motivation.tex}
+
+\section{Method: \textsc{HGNN-KTN}\xspace}
+\label{sec:matching_loss}
+\input{005matching_loss.tex}
+
+\section{Experiments}
+\label{sec:experiments}
+\input{006experiments.tex}
+
+\section{Conclusion}
+\label{sec:conclusion}
+\input{007conclusion.tex}
+
+\section*{Acknowledgement}
+\label{sec:ackonwledgement}
+\input{008acknowledgement.tex}
+

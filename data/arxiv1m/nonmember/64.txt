@@ -1,0 +1,563 @@
+
+\section{Approach}\label{sec:approach}
+
+In this section, we describe our approach and also establish the notation that we use throughout the rest of the paper. Fig.~\ref{fig:approach} shows an overview of our approach.
+\textit{QAssist} takes as input a question ($q$) posed in NL by the user and an SRS. 
+In step 1, \textit{QAssist} retrieves the most relevant document ($d$) to $q$ from an external domain-specific corpus ($\mathcal{D}$).
+In step~2, \textit{QAssist} generates a list of text passages ($\mathcal{T}$) by splitting the input SRS and $d$. 
+\textit{QAssist} then finds in step~3 the top-$k$  text passages ($\mathcal{R} \subset \mathcal{T}$) that are most relevant to $q$. 
+In step~4, \textit{QAssist} extracts a likely answer from each text passage retrieved in step~3. 
+\textit{QAssist} finally returns as output the relevant text passages from step~3 alongside the answers extracted in step~4. 
+As explained in Section~\ref{sec:background}, the pipeline for an open-domain QA system like \textit{QAssist} is made up of two phases: (i)~IR-based (spanning steps~1 -- 3) and (ii)~MRC-based (step~4).
+In phase~(i), we apply \emph{two} \textsc{retrievers}, one for retrieving $d \in \mathcal{D}$ in step~1 (\textit{document retriever} -- for short \textsc{retriever}$_D$) and another for finding $\mathcal{R}$ in step~3 (\textit{passage retriever} -- for short \textsc{retriever}$_T$). 
+Next, we elaborate each step of \textit{QAssist}. 
+
+\subsection{Step~1: Document Retrieval}\label{subsec:dRetrieval}
+As a prerequisite for applying \textsc{retriever}$_D$ in this step, a corpus $\mathcal{D}$ should be available. 
+When $\mathcal{D}$ is absent, it can be automatically generated using existing corpus-extraction methods~\cite{Milne:06,Cui:08,ferrari:17,Ezzini:21,Saxena:21,Ezzini2022wikidominer}. \textit{QAssist}'s ability to incorporate an external corpus of knowledge into the QA process is important as a way to enrich the output with domain knowledge. 
+In this step, \textsc{retriever}$_D$ mines $\mathcal{D}$ to find a document $d$ that is most relevant to $q$. 
+In particular, \textsc{retriever}$_D$ computes first the relevance between $q$ and each document in $\mathcal{D}$, and then ranks these documents according to relevance scores. 
+From the resulting ranked list, \textit{QAssist} selects as the result of step~1 the \hbox{most relevant document ($d \in \mathcal{D}$).}
+Note that, while unnecessary for our purposes in this paper, the number of most relevant documents to retrieve from $\mathcal{D}$ can be configured to a value $c > 1$. In that case, the output $d$ from step~1 would be the sequential combination of the top-$c$ retrieved documents.
+
+\subsection{Step~2: Splitting}\label{subsec:partitioning} 
+This step takes two documents as input: the SRS under analysis as well as the most relevant corpus document $d$ retrieved in step~1. \textit{QAssist} automatically generates two lists $\mathcal{T}_S$ and $\mathcal{T}_D$ of text passages by splitting the given SRS~and~$d$, respectively. 
+To do so, we employ a simple NLP pipeline that consists of \textit{tokenization} and \textit{sentence splitting}, breaking the input text (SRS and $d$) into tokens and sentences. 
+Using the annotations from this NLP pipeline, we iterate over each document to identify the text passages. 
+
+Recall from Section~\ref{sec:background} that LM-based \textsc{readers} (which we apply in step~4) typically limit passage length to 512 tokens. 
+\textcolor{black}{Accordingly, we define a \textit{text passage} as a paragraph, unless the paragraph is too long (i.e., has more than 512 tokens) and thus cannot be processed by LMs in its entirety. Long paragraphs are split with one sentence of overlap to preserve context.
+}
+\textcolor{black}{Concretely, we} apply the following procedure to split \textcolor{black}{long paragraphs} into coherent passages.
+
+
+Assume that a given paragraph has a sequence of $n$  sentences, $s_1, \ldots, s_n$. We put consecutive sentences $s_1, \ldots, s_i$ into one passage, such that the length of the resulting passage is less than or equal to 512 tokens. In the next iteration, we start at $s_i$, i.e., the last sentence of the previous passage. To create the next passage, we take consecutive sentences $s_i, \ldots, s_j$ subject to the 512-token length constraint. This process is repeated until all the sentences in the paragraph have been covered.
+The rationale for a one-sentence overlap between adjacent passages from the same paragraph is to help maintain flow continuity in the passages. 
+
+The output from step~2 ($\mathcal{T}_S$ and $\mathcal{T}_D$) is passed to step~3. 
+
+\subsection{Step~3: Passage Retrieval}\label{subsec:cRetrieval}
+In this step, we apply \textsc{retriever}$_T$ to find the $k$ most relevant text passages to $q$ from each $\mathcal{T}_S$ and $\mathcal{T}_D$. We denote the set of resulting passages by $\mathcal{R}_S \subset \mathcal{T}_S$ and $\mathcal{R}_D \subset \mathcal{T}_D$, respectively. 
+In a similar manner to step~1, \textsc{retriever}$_T$ computes and assigns relevance scores to each text passage in $\mathcal{T}_S$ and $\mathcal{T}_D$. The passages in each $\mathcal{T}_S$ and $\mathcal{T}_D$ are sorted in descending order of relevance  and the top-$k$ passages are picked. 
+In Section~\ref{sec:evaluation}, we empirically assess the implications of the value of $k$ for practice. 
+$\mathcal{R}_S$ and \hbox{$\mathcal{R}_D$ constitute the input to step~4.}
+
+\subsection{Step~4: Answer Extraction}\label{subsec:answer}
+In the last step of \textit{QAssist}, we apply a \textsc{reader} to extract a likely answer to $q$ from each text passage in $\mathcal{R}_S$ and $\mathcal{R}_D$. The likely answers are highlighted in and presented together with $\mathcal{R}_S$ and $\mathcal{R}_D$ as the output of \textit{QAssist}.
+Which \textsc{reader} technology yields the best results is a question that we  investigate empirically in Section~\ref{sec:evaluation}.
+
+\section{Question Generation from Requirements}\label{sec:nlg}
+Though many QA datasets are publicly available, none of them is tailored to address the needs of RE community. Therefore, as a prerequisite to developing a QA assistant to requirements engineers, we had to first create a dataset. We will refer to our dataset as \emph{JAWAB}, standing for ``Joint question-AnsWer pairs for Acquiring Background''. 
+In this section, we first outline the goals for JAWAB, and then the method we used to generate different types of \emph{question-answer (i.e., q-a) pairs} in JAWAB.
+
+\subsection{Desiderata}
+
+To create a dataset that enables developing a QA assistance for requirements engineers, we posit the following desiderata specific to JAWAB: 
+
+\noindent (1) Content-based q-a pairs. Unlike existing datasets in RE which cover questions related to RE tasks, e.g., change impact analysis, JAWAB covers content-based questions, i.e., clarification questions that can be useful for the engineer to acquire necessary background or missing details.
+
+
+\noindent (2) RS snippets triggering questions should not necessarily contain the answer. To  provide a meaningful assistance, the answers to the questions raised by the requirements engineers are expected to be in distant parts of the same documents, i.e., outside the range of the engineer's current review, or outside the document, e.g., definitions or further details related to domain knowledge but not explicitly mentioned in the RS. Unlike conventional reading comprehension datasets, JAWAB does not cover q-a pairs originating from snippets that have no relatedness to any other snippet in the RS. 
+
+\noindent (3) Domain-based questions should be possible.  JAWAB covers domain-based questions, i.e., questions whose answers are not in the RS. Assuming that a domain-specific corpus is available for each RS, we generate questions from the RS whose answers are mined in the corpus. 
+
+
+\subsection{Dataset Creation}
+
+\subsubsection{Document-based QG}
+\begin{figure*}
+  \centering
+  \includegraphics[width=0.8\textwidth]{figs/question-generation.pdf}
+  \caption{Document-based Question Generation Method}
+  \label{fig:qg-overview}
+\end{figure*}
+
+\sectopic{Preprocessing} 
+In the first step we preprocess the input RS applying a standard NLP pipeline (e.g., tokenizer, lemmatizer, NER), and dismissing irrelevant parts and sections (Introduction, Table of contents, Titles, sub-titles, etc).
+
+\sectopic{Context Selection}
+We define the context as paragraphs of maximum length of 512 tokens (if a paragraph is longer than the max context size, then it is split into multiple contexts while keeping a one sentence overlap to ensure context continuity). In requirements engineering we are interested to generate questions where the answer if found in other contexts rather then having a question that can only be asked and answered from the same context. So in order to filter out isolated and disconnected context we drop contexts that does not have any cross-context similarity.
+
+\sectopic{Answer Selection}
+In case of multi-choice questions, the answer is is selected using a combination of different approaches. Names entities and noun phrases are the most popular solutions for answer selection \cite{Ch:18}, but instead of selecting all noun phrases we select top-K frequent ones. We also use key phrases extraction and ranking \cite{Willis:19,Awan:21}. The extracted answer-sets (name entities, noun phrases and key phrases) are then passed to pair-wise similarity filter to remove isolated and out-of-the-context instances.
+For full-sentence answer style we select all tokenized sentences from the context.
+
+\sectopic{Question Generation}
+Next, we apply multiple pretrained QG models trained on different datasets to generate different answer styles (i.e., Boolean, Multi-Choice, and Full Sentence). Then they generate multiple questions from the input context-answer pairs, the output can be considered as context-question-answer triplets.
+
+The QG models we use are variants of T5-based sequence-to-sequence question generator that takes a context-answer pair as input and generates a question as an output. The models are trained on different QA datasets namely Quora Question pairs~\cite{Quora:18}, RACE~\cite{RACE:17}, CoQA~\cite{CoQA:19}, BoolQ~\cite{BoolQ:19}, SQUAD~\cite{SQUAD:16}, and MSMarco~\cite{MSMarco:16}.
+
+
+\sectopic{Q-A Pair Evaluator}
+To ensure the quality of our generated data, we evaluate the question-answer pairs using a dedicated classification model. This evaluation model is trained to rank question-answer pairs based on their quality.
+For each input document we set the desired number of questions (n). This number is then split between the question-answer styles (e.g., $n = f + m + b$. The evaluation model selects top k-ranked questions from each type filling the fixed numbers.
+
+We use two selection methods for Boolean questions. In the first one, we simply select top k-ranked Boolean generated questions using the QA evaluator. The second method consists of using unsupervised learning to get more diversified questions. The set of Boolean questions is then clustered into k-cluster (k is the desired number from this phase) and the top ranked question is selected from each cluster. In our work, we take the union for both methods' results.
+
+
+
+\subsubsection{Domain-based QG}
+
+\sectopic{Natural Language Processing (NLP) Pipeline. }
+In our work, we apply an NLP pipeline composed of seven modules: 
+(1)~\textit{tokenizer} for splitting the text into tokens; (2)~\textit{sentence splitter} for breaking up the text into individual sentences; (3)~\textit{part-of-speech (POS) tagger} for assigning a POS tag, e.g., noun, verb or pronoun, to each token in each sentence; (4)~\textit{lemmatizer} for identifying the canonical form (lemma) of each token, e.g., the lemma for ``playing'' is ``play''; (5)~\textit{constituency parser} for identifying the structural units of sentences, e.g., NPs; and  (6)~\textit{named entity recognizer} for identifying the named entities in sentences. (7)~\textit{stop-words remover} to remove the most common English words.
+
+\sectopic{Domain-specific keywords extraction}
+We extract name entities and noun phrases from the input documents. These keywords are then ranked using term frequency–inverse domain frequency (TFIDmF) and. 
+
+
+Batch-2
+find keywords using TF IDF for domain specific
+
+use Top-k
+
+query Wikipedia - matching title with a sim value > X
+
+After collecting articles (corpus generation) - we filter out the non-relevant content wise (sim value > Y) 
+
+generate definition questions
+
+we focused on summary paragraphs
+
+Batch-3
+
+Partition each article in Wikipedia 
+
+Keep the contexts (partitions) in Wikipedia articles that contain at least one keyword
+
+feed this in to QA generator and generate other type of questions 
+
+\section{Introduction}\label{sec:introduction}
+ 
+A software requirements specification (SRS) is a pivotal artifact in Requirements Engineering (RE). An SRS lays out
+the desired characteristics, functions, and qualities of a proposed system~\cite{vanLamsweerde:09}. 
+SRSs are frequently analyzed by requirements engineers as well as by other stakeholders to ensure the quality of the requirements~\cite{Pohl:10}. 
+To enable the creation of a shared understanding among stakeholders from different backgrounds, e.g., product managers, domain experts, and developers, requirements are most often written in natural language (NL)~\cite{Zhao:20}. 
+Despite its numerous advantages, NL is highly prone to issues such as ambiguity~\cite{Ferrari:19, Ezzini:21}, incompleteness~\cite{Dalpiaz:18,Arora:19} and inconsistency~\cite{Hadar:19}. 
+Manually screening for such issues in a lengthy SRS with tens or hundreds of pages is time-consuming, since such screening requires domain knowledge for accurately interpreting the requirements. Evoking domain knowledge is not always quick or easy for humans.  
+
+\begin{figure*}
+  \includegraphics[width=0.95\textwidth]{figs/example.pdf}
+  \caption{\protect\hbox{Example -- from left to right: passages from SRS; posed questions; passages from external domain-specific corpus.}}
+  \label{fig:example}
+
+\end{figure*}
+
+
+Question answering (QA), i.e., mechanisms to instantly obtain answers to questions posed in NL~\cite{Jurafsky:20}, would be useful as a way to make requirements quality assurance more efficient. 
+To illustrate, consider the example requirements in Fig.~\ref{fig:example}. These requirements originate from an SRS in the aerospace domain. To facilitate illustration, the requirements in the figure are prefixed with identifiers. For simplicity, we further assume that each requirement  in our example is one text passage. In practice, a passage, as we elaborate in Section~\ref{sec:approach}, can be made up of multiple consecutive sentences, potentially covering multiple requirements. 
+
+While analyzing requirement \textbf{DR-13} in Fig.~\ref{fig:example}, the developer implementing the computations related to the ``wet mass'' of a spacecraft might come up with question Q1, also shown in Fig.~\ref{fig:example}. Q1 could be prompted by the developer having doubts about the concept of ``wet mass'' or them wanting to verify their interpretation. A challenge here is that the answer to a posed question may be absent from the SRS. This happens to be the case for Q1. Since the presence of a requirements glossary cannot be taken for granted either~\cite{Arora:17}, to answer Q1, one may need to consult external domain resources. These resources could be other SRSs from the same domain, or when such SRSs are non-existent or sparse, a domain-specific corpus extracted from a general source such as Wikipedia. On the right side of Fig.~\ref{fig:example}, we show excerpts of a domain-specific corpus automatically extracted from Wikipedia using an existing open-source corpus extractor~\cite{Ezzini2022wikidominer}. As seen from the figure, just like the SRS being examined, the corpus is made up of passages. These passages may nonetheless be dispersed across multiple documents in the corpus. An answer to Q1 can be found in the extracted corpus. This answer can guide analysts toward making the SRS more complete by providing additional \hbox{information in the SRS about the concept of ``wet mass''.}
+
+In Fig.~\ref{fig:example}, we provide two further questions, Q2 and Q3, that can tip analysts to potential quality problems in our example SRS. Automated QA will find \textbf{DR-27} and more specifically the highlighted segment in that requirement to be an answer to Q2. Upon examining this answer and not finding the exact frequency of wet-mass computations, the analysts will likely conclude that the SRS is incomplete. For a final example, consider Q3. In response to this question, QA identifies several likely answers both in the SRS as well as in the extracted corpus. Among the answers are segments from requirements \textbf{SCIR-20} and \textbf{MISS-29}. Reviewing these two requirements side by side (rather than encountering them potentially many pages apart in the SRS) provides the analysts with a much better chance of noticing the inconsistency between what the two requirements expect of the ``navigation camera system''. The answers from the domain-specific corpus and the passages where these answers are located provide additional useful information for the review process.
+
+In this paper, we propose \textit{QAssist} -- standing for Question Answering Assistance for Improved Requirements Analysis. 
+\textit{QAssist} builds on \emph{open-domain QA}, which is the task of finding in a collection of documents the answer to a given question~\cite{Zhu:21}. 
+\textit{QAssist} takes as input a question posed in NL and returns as output a list of text passages that likely contain the answer to the question. \textit{QAssist} further demarcates a possible answer (text segment) within each retrieved passage. 
+Given questions such as Q1, Q2 and Q3 in Fig.~\ref{fig:example}, we are interested in two sets of text passages: one obtained from the SRS under analysis (left side of Fig.~\ref{fig:example}) and the other obtained by mining a domain-specific knowledge resource (right side of Fig.~\ref{fig:example}). These passages and the answers found within them provide a focused view, helping analysts better understand the requirements and more effectively pinpoint quality problems.  
+
+
+
+\sectopic{Contributions. }
+Our contributions are as follows: 
+
+(1) We devise \textit{QAssist}, an AI-based QA approach aimed at providing assistance with requirements analysis. Given a question posed in NL about the requirements in an SRS, \textit{QAssist} employs Natural Language Processing (NLP) to retrieve two lists of relevant text passages: one from the SRS and one from a domain-specific corpus. In each passage, the likely answer to the posed question is highlighted. When a domain-specific corpus does not exist, \textit{QAssist} automatically builds one, using the phrases appearing in the given SRS as seed terms.
+Our implementation of \textit{QAssist} is publicly available~\cite{qassist-rep}.
+
+(2) We develop in a semi-automatic manner a QA dataset tailored to NL requirements. We name this dataset \textit{REQuestA} -- standing for Requirements Engineering Question-Answering dataset. \textit{REQuestA} has been built by two third-party human analysts over six SRSs spanning three application domains. Overall, \textit{REQuestA} contains 387 question-answer pairs. Of these, 214 are manually defined; the remaining 173 are generated automatically and then subjected to manual validation. We make the \textit{REQuestA} dataset publicly available~\cite{qassist-rep}.
+
+(3) We empirically evaluate \textit{QAssist} on the \textit{REQuestA} dataset.  
+Our results indicate that \textit{QAssist} retrieves with an accuracy of 100\% from a domain-specific corpus the document that is most relevant to a given question. Furthermore, \textit{QAssist} localizes the answer to a question to three passages within the requirements specification and within the corpus with an average recall of 90.1\% and 96.5\%, respectively. \textit{QAssist} demarcates the actual answer to a question with an average accuracy of 84.2\%.
+
+\sectopic{Significance.} We believe our work is significant for the RE and NLP communities, as we discuss next.
+In RE, automated QA has been investigated only to a limited extent and mostly in the context of traceability~\cite{Maletic:09,Mader:13,Pruski:15,Lin:17, Malviya:17}. Traceability QA primarily targets the relationship between different artifacts, e.g., requirements, design diagrams and source code. 
+More recently, QA has been studied for improving the understanding of compliance requirements~\cite{Abualhaija:22}. 
+For RE, the significance of our work is two-fold. First, our QA solution is, to our knowledge, the first to empirically investigate the application of modern QA technologies over industrial requirements. Through a seamless process of posing questions and getting instant answers, our approach enables analysts to explore potential quality issues, e.g., incompleteness and inconsistency. Second, alongside our  solution, we build and publicly release a considerably sized QA dataset covering six SRSs from three application domains. This dataset focuses on clarification questions posed over SRSs and is the first dataset of its kind.
+
+QA is widely studied in the NLP community~\cite{Soares:20}, where, as we elaborate in Section~\ref{sec:related}, many automated solutions and datasets have been proposed and evaluated. The most well-known QA datasets in the NLP literature are derived from Wikipedia, e.g., SQUAD~\cite{SQUAD:16}, TriviaQA~\cite{Joshi:17} and NQ~\cite{Kwiatkowski:19}, to name few. There are also examples of domain-specific datasets, e.g., in the medical~\cite{Pampari:18,He:19,Tian:19} and railway~\cite{Hu:20} domains.
+From an NLP standpoint, our work is significant in that it is capable of looking beyond a single source for identifying answers to a posed question.
+\iffalse
+document over which two main respects: First, we apply state-of-the-art QA technologies to industrial requirements and systematically assess the effectiveness of these technologies for technologies and to what extent can current NLP state-of-the-art be an effective means in assisting requirements engineers.
+\fi
+The NLP literature concentrates mainly on the situation where the answer to a question resides in an a-priori-known source document (or text passage). Our work departs from this position by bringing in a secondary source of knowledge, namely a domain-specific corpus, to complement the primary source (in our case, an SRS), while maintaining the distinction between the two sources. Using a secondary source is necessitated by our application context: SRSs are typically highly technical with a potentially large amount of tacit (unstated) domain knowledge underpinning them. By provisioning for, and when necessary, automatically constructing a domain-specific corpus, our approach increases the chance that analysts will obtain satisfactory answers to \hbox{their requirements-related questions.}
+
+
+\sectopic{Structure. }
+Section~\ref{sec:background} presents background.  Section~\ref{sec:approach} describes our QA approach.
+Section~\ref{sec:evaluation} reports on our empirical evaluation. \textcolor{black}{Section~\ref{sec:google} compares with broad-based search engines. }
+Section~\ref{sec:threats} explores threats to validity. 
+Section~\ref{sec:related} discusses related work. Section~\ref{sec:conclusion} concludes the paper.
+
+
+\section{Related Work}\label{sec:related}
+
+In this section, we position our work in the existing literature on QA as studied by the RE and NLP communities.
+
+\sectopic{QA in RE. } 
+There has been only limited research where QA is applied for addressing RE problems. Existing works focus on requirements traceability~\cite{Mader:13,Pruski:15,Lin:17}, identifying compliance requirements~\cite{Sleimi:19,Abualhaija:22}, 
+and extracting information from online forums~\cite{Kanchev:17}. These techniques are mostly IR-based, with the exception of \cite{Abualhaija:22}, which, like our approach, uses machine reading comprehension (MRC).
+Our approach differs from \cite{Abualhaija:22} both in its purpose and also in how it employs MRC. First, whereas \cite{Abualhaija:22} focuses on QA over legal provisions (e.g., privacy regulations), our approach deals with QA over SRSs. 
+Second, \cite{Abualhaija:22} is limited in that it applies MRC to a-priori-specified documents only. Our approach can, in contrast, mine domain-related content from Wikipedia in an attempt to make tacit domain knowledge explicit and thereby handle questions that would go unanswered if the scope of search for answers was limited to the SRS under analysis only.
+
+In terms of QA datasets, not many such datasets are available in RE. Abualhaija et al.'s dataset of 107 question-and-answer pairs~\cite{Abualhaija:22} is built over legal documents.
+In contrast, our dataset, \textit{REQuestA}, is built over SRSs. To our knowledge, \textit{REQestA} is the first dataset of its kind, providing a total of 387 question-and-answer pairs on industrial requirements.
+
+Malviya et al.~\cite{Malviya:17} investigate questions that requirements engineers typically ask throughout the development process. They collect through a survey with industry practitioners a set of 159 questions, grouped into nine different categories such as project management and quality assessment.
+Malviya~et~al.'s questions are broad and can crosscut several artifacts in the development life cycle. Our work focuses specifically on clarification questions asked  over SRSs and associated domain-knowledge resources; our objective here is developing automated QA technologies that can answer such questions.
+
+\sectopic{QA in NLP. } QA tasks in the NLP literature include question classification, answer extraction, and question generation~\cite{Hao:22,Yusuf:22,Jin:19,Diefenbach:20}. 
+Answer extraction is considered to be the main QA task in NLP~\cite{Ojokoh:18}.
+Recent advances in QA answer extraction include fine-tuning large scale
+language models such as BERT, RoBERTa, and ALBERT~\cite{Jing:19,Wulamu:19,Ren:20,Parshakova:19}. 
+Inspired by the NLP literature, we apply in our work the QA models reported in a recent QA benchmark~\cite{Thakur:21}.
+Several existing QA datasets curated from generic text
+are publicly available. These datasets  include SQuAD~\cite{SQUAD:16}, GLUE~\cite{Wang:18}, 
+and TriviaQA~\cite{Joshi:17}.
+There are also some domain-specific datasets,
+e.g., for the medical~\cite{He:19} and railway~\cite{Hu:20} domains. 
+For the same reasons mentioned earlier when discussing related work in RE, none of the available datasets in NLP are suitable for our needs in this paper. 
+
+Language models have been employed for various text generation tasks~\cite{Pan:19}, including question generation (QG)~\cite{Kumar:19,Raffel:19}.
+QG models have enabled researchers in many fields to automatically generate their own synthetic QA datasets~\cite{Liu:21,Bartolo:21,Lelkes:21,Gupta:22}. Our dataset was partially generated using QG. To our knowledge, QG has not been attempted in RE before.
+
+Our work is distinguished from QA research in NLP in that we provide an end-to-end solution. Our approach covers all QA steps starting from posing a question down to providing the most relevant passages and potential answers. Foundational research in NLP often focuses on individual QA steps, e.g., IR-based text retrieval  or MRC-based answer extraction. Our work does not contribute to the foundations for QA. Nevertheless, our motivating use case (QA over requirements), our combination of NLP technologies, the flexibility to build domain-specific corpora and consult them during QA, and our extensive empirical evaluation of QA in an RE context are, to the best of our knowledge, new.
+
+
+
+\section{Background}\label{sec:background}
+
+This section describes the background for our QA approach. 
+
+\sectopic{Open-domain QA.} Our proposed approach targets the open-domain QA task (defined in Section~\ref{sec:introduction}). Modern open-domain QA  solutions work in two stages, combining information retrieval (IR) with  machine reading comprehension (MRC)~\cite{Chen:17}.
+IR is applied first to narrow the search space by finding the relevant text passages that likely contain the answer to a question~\cite{McGill:83}.
+Subsequently, MRC models extract the likely answer to the question from the text passages retrieved~\cite{SQUAD:16}. 
+An IR-based method is referred to as a  \textsc{retriever} since it retrieves relevant text, while an MRC-based model is referred to as a \textsc{reader} since it reads the text to find the answer~\cite{Zhu:21}.
+State-of-the-art QA techniques rely heavily on language models (LMs) such as BERT~\cite{Devlin:18} as an enabling technology~\cite{Liu:19}.
+Below, we introduce IR and MRC alongside the LMs that we consider and experiment with in \hbox{the development of our approach.}
+\sectopic{Information Retrieval (IR). } Given a query and a collection of documents, IR methods are designed to rank the documents according to their relevance to the query~\cite{Manning:08}. 
+Traditional methods in IR include term frequency - inverse document frequency (TF-IDF) and Okapi Best Matching (BM25). 
+TF-IDF assigns a composite weight to each term occurring in the document depending on its occurrence frequency in the document relative to its frequency in the entire document collection~\cite{Jones:72}. These weights are used to transform a text sequence into a mathematical vector.
+Following this, both the query and the documents are represented as vectors, with the query being treated as a (short) document. Relevance is computed using similarity metrics, e.g., cosine similarity~\cite{Manning:08}. Similarity metrics quantify the similarity between the query and a document while normalizing the difference in vector length; vectors for documents are significantly longer than those for queries. 
+Unlike TF-IDF which is a binary model relying on the presence of question terms in the document collection, BM25 is a probabilistic model that improves the TF-IDF weights using relevance feedback~\cite{Robertson:09}. 
+
+In the context of QA, IR-based methods assess relevance of documents as well as text passages within individual documents. In the latter case, each passage is regarded as a single document during vectorization.
+Despite being relatively old, BM25 and to a lesser extent TF-IDF are still widely applied in  text retrieval tasks due to their simple implementation and robust behavior~\cite{Thakur:21}. 
+In addition to traditional methods, dense and reranking methods have recently been introduced  in the QA literature~\cite{Nogueira:19, Thakur:21,Wang:21,Zhuang:21}. Leveraging language models, dense methods compute relevance based on the text representations in the dense vector space, whereas reranking methods combine the rankings of two different IR-based methods. 
+
+\sectopic{Machine Reading Comprehension (MRC).} MRC models are specifically used to extract the likely answer to a given question from a text passage~\cite{SQUAD:16}. 
+MRC is often solved using pre-trained language models (e.g., BERT), introduced next. These models typically limit  the length of the text  passage to be less than or equal to 512 tokens~\cite{Devlin:18,chen:20}.
+
+\sectopic{Language Models (LMs).} Large-scale neural LMs have rapidly  dominated the state-of-the-art in NLP~\cite{Lewis:20}. LMs are pre-trained on large  bodies of text in order to learn contextual information, regularities of language, and syntactic and semantic relations between words. This learned knowledge can then be used by fine-tuning LMs to solve downstream NLP tasks~\cite{Pan:09}, e.g., QA~\cite{Petroni:19}. Below, we briefly discuss the LMs that we consider and experiment with in this paper.
+
+\textit{Bidirectional Encoder Representations from Transformers (BERT)~\cite{Devlin:18}} is pre-trained on the BooksCorpus and English Wikipedia with two training objectives, namely masked language modeling (MLM) and next sentence prediction (NSP). 
+In MLM, a fraction of the tokens in the pre-training text are randomly masked. The model is trained to predict the original vocabulary of these masked tokens based on the surrounding context. For example, BERT should predict the masked token ``briefed'' in the phrase ``\texttt{[MASK]} reporters on''. In NSP, the model is trained to predict whether two text segments are consecutive in the original text. 
+BERT learns contextualized representations of words by utilizing the \emph{Transformer} architecture~\cite{Vaswani:17} and attention mechanisms that allow the model to attend to different information from different representations. For example, the model re-weights the embeddings of ``bank'' and ``river'' in the sentence ``I walked along the banks of the river'' to highlight the meaning of ``bank'' in this context. 
+
+
+Efficiently Learning an Encoder that Classifies Token Replacements Accurately (\textit{ELECTRA})~\cite{Clark:20} improves the contextual representations learned by BERT by replacing the MLM training objective with a token replacement objective, i.e., randomly replacing some tokens instead of masking them. 
+
+A Lite BERT (\textit{ALBERT})~\cite{Lan:19}, A Distilled Version of BERT (\textit{DistilBERT})~\cite{Sanh:19}, \textit{MiniLM}~\cite{Wang:20a} and the Robustly optimized BERT pre-training approach (\textit{RoBERTa})~\cite{Liu:19a} are other variants that optimize the size and computational cost of BERT using methods such as knowledge distillation~\cite{Gou:21} -- a technique that transfers knowledge from a large unwieldy model to generate a smaller model with less parameters yet similar performance.
+
+\begin{figure*}[!t]
+\centering
+  \includegraphics[width=0.95\textwidth]{figs/approach.pdf}
+  \caption{Overview of our approach (\textit{QAssist}).}
+  \label{fig:approach}
+ 
+\end{figure*}
+
+The text-to-text transfer transformer (\textit{T5}) model~\cite{Raffel:19} is another interesting and popular LM. T5 is pre-trained on the Colossal Clean Crawled Corpus (C4) which was also released alongside the model. C4 consists of hundreds of gigabytes of clean text that is crawled from the Web. Compared to BERT-style models, T5 uses a text-to-text framework that enables addressing a wider spectrum of NLP downstream tasks as long as they can be formulated as a text-to-text problem.
+
+\section{Empirical Evaluation} \label{sec:evaluation}
+
+In this section, we empirically evaluate \textit{QAssist}. 
+
+\subsection{Research Questions (RQs)}
+
+Our evaluation addresses the following RQs:
+
+\sectopic{RQ1: Which \textsc{retriever} has the highest accuracy in finding text that is most relevant to a given question?}
+Recall from Section~\ref{sec:approach} that \textit{QAssist} employs \textsc{retriever}$_D$ in step~1 (i.e., \textit{Document Retrieval}) and \textsc{retriever}$_T$ in step~3 (i.e., \textit{Passage Retrieval}). \textsc{Retriever}$_D$ takes as input a collection of documents and returns as output the most relevant document $d\in\mathcal{D}$. \textsc{Retriever}$_T$ takes as input a list of text passages and return as output the top-$k$ passages relevant to  a given question. For each \textsc{retriever}, we investigate in RQ1 four alternatives  from the IR literature as outlined in Section~\ref{subsec:evaluationProc}.  
+RQ1 identifies the most accurate alternative for each \textsc{retriever}.
+
+\sectopic{RQ2: Which \textsc{reader} produces the most accurate results for extracting the likely answer to a given question? }
+\textit{QAssist} uses in step~4 (i.e., \textit{Answer Extraction}) a \textsc{reader} for extracting a likely answer to a given question from each relevant text passage retrieved by the \textit{passage retrievers} in step~3. 
+Multiple alternative \textsc{readers} can be applied here as we explain in Section~\ref{subsec:evaluationProc}. RQ2 investigates these alternatives and identifies the most accurate one.
+
+\sectopic{RQ3: Does \textit{QAssist} run in practical time?} 
+RQ3 analyzes \textit{QAssist}'s execution time. 
+To be applicable in practice, \textit{QAssist} needs to be able to answer questions in practical time.
+
+\subsection{Implementation}\label{subsec:implementation}
+
+We implement \textit{QAssist} using Python 3.7.13 and 
+Jupyter Notebooks~\cite{Kluyver:16}.
+Specifically, we implement the NLP pipeline (including the tokenizer and sentence splitter) using the Transformers 3.0.1 library~\cite{transformers}. We implement the traditional IR methods and TF-IDF vectorization using Scikit-learn 1.0.2~\cite{scikit-learn}, and implement BM25 using the BM25 0.2.2 library~\cite{rank-bm25}. 
+The language models that we experiment with include the IR-based models \textit{DistilBERT-base-tas-b} and \textit{MiniLM-L-12-v2} from BeIR~\cite{beir} and the MRC-based models 
+\textit{ALBERT-large v1.0}, \textit{BERT-large-uncased},  \textit{DistilBERT-base-cased}, \textit{ELECTRA-base}, \textit{MiniLM-uncased} and \textit{RoBERTa-base} from HuggingFace~\cite{huggingface}. 
+For corpus extraction from Wikipedia, we use the Wikipedia 1.4.0 library~\cite{wikipy}.
+For question generation, discussed in Section~\ref{subsec:data_collection}, we use NLTK 3.2.5~\cite{NLTK} to preprocess text from SRSs and corpus documents.  
+
+We then apply \textit{T5-base-question-generator} and \textit{BERT-base-cased-qa-evaluator} for automatically generating and assessing question-answer pairs. Both of these models are from HuggingFace.
+
+\input{subsections/data_collection}
+
+\input{subsections/evaluation_procedure}
+
+\input{subsections/RQs}
+
+
+\section{Conclusion}\label{sec:conclusion}
+
+In this paper, we proposed \textit{QAssist} -- an AI-based question-answering (QA) system to support the analysis of natural-language requirements.
+Given a question, \textit{QAssist} retrieves relevant text passages from both the requirements document
+being analyzed as well as an external source of domain knowledge. \textit{QAssist} further highlights the likely answer to the question in each retrieved text passage. The flexibility to incorporate an external knowledge source into the QA process enables \textit{QAssist} to answer otherwise unanswerable questions related to the tacit domain information assumed by the requirements. When a domain-knowledge resource is absent, \textit{QAssist} automatically builds one by mining Wikipedia articles, using the terminology in the requirements being analyzed to guide the mining process.
+To evaluate \textit{QAssist}, we created through third-party annotators a QA dataset, named \textit{REQuestA}. Both \textit{QAssist} and \textit{REQuestA} are publicly available~\cite{qassist-rep}.
+Our empirical results indicate that
+\textit{QAssist} localizes the answer to a posed question to three passages within the requirements document and within the external domain-knowledge resource with an average recall of 90.1\% and 96.5\%, respectively.  Narrowing the scope to these passages, \textit{QAssist} has an average accuracy of 84.2\% in pinpointing the actual answer.
+\iffalse
+\textit{QAassist} has an average recall of 90.1\% and 96.5\% for retrieving the relevant text passages to a given question among the top-3 passages found as relevant from the NL requirements document and the domain knowledge resource, respectively. \textit{QAssist} has an average accuracy of 84.2\% for extracting the answer to the question. 
+\fi
+
+In future work, we would like to conduct user studies to better understand how practitioners would interact with requirements documents when equipped with a QA tool. 
+Another future direction is to experiment with emerging QA methods in NLP that are capable of producing a ``no answer'' outcome when a question is not answerable \hbox{with sufficient accuracy.}
+
+
+\section{Threats to Validity}\label{sec:threats}
+The validity concerns most pertinent to our evaluation are internal
+and external validity.
+
+\sectopic{Internal Validity.} The main concern regarding internal validity is dataset bias. To mitigate bias, the authors ensured that they were  not involved in dataset construction; this task was done exclusively by third parties (non-authors) who had no exposure to our technical solution.
+
+
+
+\sectopic{External Validity.} Our evaluation is based on a dataset containing six industrial SRSs and spanning three different application domains. The results we obtained across these SRSs and domains combined with the comparatively large size of our QA dataset 
+provide confidence about the generalizability of our empirical findings.
+Additional experimentation is nevertheless important to further mitigate  external-validity threats.  
+
+\subsection{Data Collection Procedure}\label{subsec:data_collection}
+
+To evaluate  \textit{QAssist}, we collected six SRSs from three application domains, namely aerospace, defence, and security. 
+Our data collection resulted in a QA dataset named \textit{REQuestA} (RE Question-Answering dataset).
+To reduce the cost and effort required for the construction of this dataset, about half of the question-answer pairs in \textit{REQuestA} were generated automatically using text generation models~\cite{Raffel:19} and then validated by human analysts. The remaining half were defined manually. In this section, we discuss the desiderata for \textit{REQuestA}, the automatic QA generation method, the process for manual definition of question-answer pairs, and finally the details of the resulting dataset. 
+
+\sectopic{Desiderata. }
+We identify the following desiderata for \textit{REQuestA} in view of the analytical goals we would like to support, as discussed in Section~\ref{sec:introduction}. 
+
+\noindent (1) \textit{Focus on content-based questions}. \textit{REQuestA} is populated with clarification questions over SRSs. \textit{REQuestA} thereby does not contain questions that are not directly related to the SRS content, for instance, questions related to change impact analysis or project management, an example of which would be ``How many requirements are not implemented in Phase-1 of the project?''. Questions of this nature are legitimate in RE~\cite{Malviya:17}, but are outside the scope of our current work.
+
+\noindent (2) \textit{Inclusion of external sources of knowledge}. Motivated by covering the domain knowledge that is often left tacit in SRSs, we would like \textit{REQuestA} to include relevant text passages not only from SRSs but also from external sources of knowledge. The inclusion of external knowledge sources enables us to more conclusively evaluate the effectiveness of QA by considering requirements-related questions that would go unanswered based on the contents of a given SRS alone.
+
+\sectopic{QA Auto-generation. } 
+Despite the availability of QA datasets, none of them are directly applicable in our work, as explained in Section~\ref{sec:introduction}. Building a ground truth for QA requires considerable manual effort for proposing both questions and answers. This prompted us to consider question generation (QG)~\cite{Du:17,Pan:19} as an aid during dataset construction.
+ QG enables automated derivation of a large number of questions and answers from a given knowledge source; these questions and answers can subsequently be subjected to manual validation for correctness. Such validation generally takes less time and cognitive effort from humans than deriving questions and answers from scratch.
+
+An entry in \textit{REQuestA} is  a text passage and a question-answer pair associated with that passage. 
+\textit{An answer} in our work is a short text span in a sentence. 
+The questions and answers in \textit{REQuestA} are derived from two different sources: the input SRS and a domain-specific corpus created automatically around the content of the input SRS. 
+Fig.~\ref{fig:qg-overview} shows an overview of our method for automatically generating questions and answers. Given an SRS as input, our method returns a list of question-answer pairs in four steps, elaborated next.  
+
+\vspace*{.2em}
+\noindent\textit{(a) Preprocessing}: In this step, we preprocess the input SRS by applying an NLP pipeline. The goal of this step is to identify a set of concepts which are used in the next step to analyze the domain of the input SRS. To find these concepts, we applied REGICE~\cite{Arora:17} -- an existing tool for extracting  glossary terms from NL requirements. 
+
+\vspace*{.2em}
+\noindent \textit{(b) Domain Analysis}: We build in this step a minimal domain-specific corpus. 
+To do so, we first group the SRSs from the same domain and then use the concepts extracted from these SRSs in step~(a). 
+Specifically, we compute for each concept a TF-IDF score, adapted to work over phrases (e.g., ``navigation camera'') rather than only individual terms (e.g., ``camera''). 
+Next, we attempt to increase the specificity of the concepts by removing any generic concepts (e.g., ``camera'') appearing in WordNet~\cite{Miller:95} -- a generic lexical database for English.  
+We then sort the concepts in descending order of TF-IDF scores and select the top-50 concepts, referring to these concepts as \textit{keywords}. 
+Inspired by recent work on the generation of domain-specific corpora for requirements analysis tasks~\cite{Ezzini:21}, 
+we use each keyword to query Wikipedia and find a matching article, i.e., an article whose title overlaps with a given keyword. 
+Finally, we randomly select from the matching articles a subset to use in the next step. 
+
+\begin{figure}[!t]
+\centering
+  \includegraphics[width=0.5\textwidth]{figs/question-generation.pdf}
+ 
+  \caption{Overview of our question generation method (used exclusively for building our dataset, \textit{REQuestA}).}
+  \label{fig:qg-overview}
+
+\end{figure}
+
+\vspace*{.2em}
+\noindent \textit{(c) Splitting}: 
+In this step, we use the same method presented in Section~\ref{sec:approach} to automatically split the SRS and Wikipedia articles into a set of text passages.  
+
+\vspace*{.2em}
+\noindent \textit{(d) Question-answer Pair Generation}: 
+In this step, we use a QG model based on the T5 language model (introduced in Section~\ref{sec:background}). We give as input a text passage to the QG model. The model first extracts a random answer from the passage and then automatically generates a corresponding question. 
+For example, for passage \textbf{DR-13} in Fig.~\ref{fig:example}, the QG model could first pick  ``3004 kg'', and then generate the following question: \textit{``What shall the wet mass of the spacecraft not exceed?''}.
+The output of the QG model includes the text passage and a  set of automatically generated question-answer pairs. Each such pair will be denoted $\langle q,a\rangle$ hereafter. Note that multiple pairs can be generated from the same text passage.
+To reduce the manual effort needed for validating the questions and answers, we apply a QA evaluator that is based on BERT. The evaluator takes as input a pair $\langle q,a\rangle$ and returns as output a value representing its prediction about whether the pair  is valid. 
+We sort the auto-generated pairs according to the resulting scores from the evaluator, and then select the top 5\% of the $\langle q,a\rangle$ pairs automatically generated from each SRS and the Wikipedia articles in the respective corpus.
+
+\sectopic{Construction of \textit{REQuestA}.}
+The construction of \textit{REQuestA} involved two third-party (non-author) human analysts.
+The first analyst has a Master's degree in multilingualism. The second analyst has  a computer science background with a Master's degree in quality assurance. Both analysts had prior experience with software requirements and had previously contributed to annotation tasks involving SRSs. Before starting their work, the analysts participated in a half-day training session on question answering in RE where they additionally received instructions about the desiderata for \textit{REQuestA}.
+
+We shared with the analysts the original SRSs, the randomly selected Wikipedia articles (created during the domain analysis step in Fig.~\ref{fig:qg-overview}), and 
+the list of automatically generated $\langle q,a\rangle$ pairs for each SRS. 
+The analysts were asked to handle each $\langle q,a\rangle$ pair as follows. 
+Each question $q$ was labeled as \textit{valid} indicating that $q$ was correct as-is, \textit{rephrased} indicating that $q$ was semantically correct but required structural improvement to become valid, or \textit{invalid} indicating that $q$ did not make  sense. 
+Similarly, each answer $a$ was labeled as \textit{correct}, \textit{corrected}, or \textit{invalid} with similar indications to the ones mentioned above for $q$. Additionally, $a$ could be labeled as \textit{not in context} indicating that the question cannot be answered from the given text passage. In this case, we consider the answers as \textit{invalid}.
+We further asked the analysts to manually define question-answer pairs on each text passage during the validation process. We discuss quality considerations for our dataset later in this section.
+
+To construct the \textit{REQuestA} dataset, we filtered out any pair where either $q$ or $a$ was invalid. For the remaining pairs, we used the rephrased $q$ and corrected $a$ according to the revisions suggested by the human analysts. 
+In total, we automatically generated 204 $\langle q,a\rangle$ pairs; 111 from the SRSs and 93 from the Wikipedia articles. 
+From these, we filtered 31 pairs due to invalid questions or answers, leaving 173 pairs in the dataset (86 from the SRSs and 87 from the Wikipedia articles). We further included in \textit{REQuestA} question-answer pairs that the analysts had defined manually during the validation process alongside the respective text passages. In total, the analysts manually defined 214 pairs (103 from the SRSs and 111 from the Wikipedia articles). 
+Overall, \textit{REQuestA} contains 387 pairs.
+
+Table~\ref{tab:docCollection} provides summary statistics for \textit{REQuestA}.
+Specifically, the table lists the number of auto-generated $\langle q,a\rangle$ pairs (\textit{auto}) as well as the number of pairs manually defined by the analysts (\textit{man}).  The table further shows $\overline{|\mathcal{T}_D|}$ indicating the average 
+number of text passages in the Wikipedia articles (noting that there are multiple articles in each corpus), and $|\mathcal{T}_S|$ indicating the number of text passages in each SRS.
+
+\input{tables/doc-col}
+
+
+\sectopic{Quality of \textit{REQuestA}. } As a quality measure, the two analysts reviewed an overlapping subset amounting to 10\% of the auto-generated $\langle q,a\rangle$ pairs. We counted an agreement when the analysts selected the same label for a given question or answer (i.e., valid or invalid), noting that valid includes both rephrased and corrected.
+On this subset, the analysts were in full agreement (i.e., no disagreements) on the labels for the questions and answers.
+
+To further ensure the quality of the dataset, we analyzed all the automatically generated questions and answers against the corrections provided by the human analysts.
+Out of the 173 valid questions, the analysts collectively rephrased 24 questions (representing $\approx$14\% of the auto-generated questions) and corrected 46 answers (representing $\approx$26\% of the auto-extracted answers).
+Out of the 46 corrected answers, 26  were expanded by the analysts to include missing tokens, e.g., the auto-extracted answer ``software code'' was corrected to ``implemented software code''. To increase the quality of our dataset, we included in \textit{REQuestA} the corrected answers and not the auto-extracted ones. 
+Following best practices in the natural-language generation literature and machine translation~\cite{Hanna:21}, we apply BLEU for lexical similarity and BERTScore for semantic similarity. 
+Given two questions, $q_1$ and $q_2$, BLEU measures the overlapping tokens between $q_1$ and $q_2$. The score is then normalized by the total number of the tokens in $q_1$ and $q_2$. BERTScore measures semantic similarity between $q_1$ and $q_2$ based on contextual word embeddings. 
+The resulting scores are BLEU$=$0.54 and BERTScore$=$0.95. These values indicate that the auto-generated questions and the rephrased ones are semantically very similar albeit using different structures. 
+These scores indicate that our QG method successfully produces semantically correct questions, while also implying that the analysts frequently chose to make structural improvements for better readability. 
+
+Since no training or fine-tuning is performed in our approach, we use \textit{REQuestA} in its entirety for empirically evaluating the available QA technologies.
+To facilitate replication and future research, \textit{REQuestA} is made publicly available~\cite{qassist-rep}. 
+
+
+\subsection{Evaluation Procedure} \label{subsec:evaluationProc}
+
+To answer our RQs, we conduct the following experiments. See Section~\ref{sec:background} for background.
+
+\sectopic{EXPI.} This experiment answers \textbf{RQ1}. We evaluate in EXPI four alternative \textsc{retrievers}, including the traditional \textsc{retrievers} TF-IDF and BM25, DistilBERT dense \textsc{retriever}, and a reranking \textsc{retriever} that pairs BM25 with MiniLM cross encoder. 
+We identify in EXPI the most accurate \textsc{retriever} applied in step~1 of our approach (Fig.~\ref{fig:approach}) for retrieving the most relevant external document from a domain-specific corpus. 
+We further identify the most accurate \textsc{retriever} in step~3 for retrieving from the input SRS and the most relevant external document the top-$k$ relevant text passages for a given question.
+We compare the performance of the alternative \textsc{retrievers} using two evaluation metrics commonly used in the IR literature~\cite{McGill:83}.  
+The first metric is \textit{recall@k (R@$k$)} and assesses whether the document (or text passage) containing the correct answer to a given question ($q$) is in the ranked list of the top-$k$ documents (or passages) produced by the \textsc{retriever}.
+The second metric, \textit{normalized discounted cumulative gain@k (nDCG@$k$)}, is similar to \textit{R@$k$}, except that it accounts not only for the mere presence of the relevant document (or passage) but also for its rank. 
+
+We note that we are interested only in the most relevant document (top-$1$) retrieved by the document \textsc{retriever}
+in step~1 of our approach. In this case, ranking is not relevant and the above two metrics produce the same result; we thus report only R@$1$ for the document \textsc{retriever}. 
+To run EXPI, using an existing open-source tool~\cite{Ezzini2022wikidominer}, we generate domain-specific corpora covering the aerospace, defence, and security domains and corresponding to the SRSs in our study.   
+
+\vspace*{.2em}\sectopic{EXPII.} 
+This experiment answers \textbf{RQ2}. To extract the answer to a given question in step~4 of our approach (Fig.~\ref{fig:approach}), we experiment with the following alternative \textsc{readers}: 
+ALBERT, BERT, DistilBERT, ELECTRA, MiniLM, and RoBERTa.
+We compare the performance of the \textsc{readers} using \textit{Accuracy (A)}, computed as the number of questions correctly answered by the \textsc{reader} divided by the total number of questions. 
+To decide whether an answer is correct, we compare the extracted answer by the \textsc{readers} against the answer provided by the analysts in our dataset (\textit{REQuestA}). 
+We evaluate an extracted answer for correctness in three different modes. Let $a_{GT}$ denote the ground-truth answer to a question. In \textit{exact matching} mode, the extracted answer fully matches  $a_{GT}$. In \textit{partial matching} mode, the extracted answer partially matches (i.e., overlaps with) $a_{GT}$. In \textit{semantic matching} mode, the extracted answer has a cosine semantic similarity with  $a_{GT}$ that is greater than a predefined threshold. In our work, we apply a threshold of $0.5$~\cite{Ramage:09}.
+The first two modes evaluate correctness at a lexical level, whereas the last mode measures correctness based on meaning. 
+
+In addition to reporting accuracy, we also report F1 measure -- 
+another commonly-reported lexical metric in the QA literature~\cite{Cambazoglu:21}.
+F1 is the harmonic mean computed as \hbox{$2*P*R/(P+R)$}, where $P$ is the precision and $R$ is the recall. 
+We define $P$ as the number of overlapping tokens between the extracted answer and  $a_{GT}$ divided by the total number of tokens in the extracted answer. We define $R$ as the number of overlapping tokens between the extracted answer and  $a_{GT}$ divided by the total number of tokens in  $a_{GT}$. We report in EXPII overall F1-score averages for all questions.  
+
+\vspace*{.2em}\sectopic{EXPIII. } This experiment answers \textbf{RQ3}. We report the execution of our approach with the most accurate models from the previous experiments. EXPIII is conducted on the Google Colaboratory cloud using the free plan with the following specifications: Intel(R) Xeon(R) CPU@2.20GHz, Tesla T4 GPU, and 13GB RAM.
+
+
+\subsection{Answers to the RQs}
+
+\sectopic{RQ1. Which \textsc{retriever} has the highest accuracy in finding text that is most relevant to a given question?} 
+RQ1 identifies the best-performing (i)~\textit{document} \textsc{retriever} and (ii)~\textit{passage} \textsc{retriever} to be applied in steps~1~and~3 of \textit{QAssist}, respectively. 
+Tables~\ref{tab:rq1-a} and \ref{tab:rq1-b} \hbox{show the results of EXPI.}
+
+\input{tables/RQ1-a}
+
+In Table~\ref{tab:rq1-a}, traditional \textsc{retrievers} (TF-IDF and BM25) are clearly able to find the most relevant documents across all domains, thus achieving a perfect R@1. 
+In comparison, our dense \textsc{retriever} (DistilBERT) has an average R@1 of 96.5\%, which is slightly worse than the traditional  \textsc{retrievers}. The reranking \textsc{retriever} achieves a perfect R@1 as well since it partially uses the results of BM25. 
+In view of these results, we select BM25 as the \textsc{retriever} to use for step~1 of our approach, since BM25 is computationally more efficient than the reranking \textsc{retriever}. Compared to TF-IDF, BM25 is more robust~\cite{Whissell:11} and widely-applied in the QA literature~\cite{Thakur:21}.
+
+In Table~\ref{tab:rq1-b}, we show the results for retrieving the most relevant $k$ text passages for $k=1, 3, 5, 10$. 
+The upper part of the table provides the average results for our collection of six SRSs. The lower part of the table shows the results for retrieving passages from the most relevant external document. We recall from Section~\ref{sec:approach} that $\mathcal{T}_S$ denotes the set of passages within a given SRS and $\mathcal{T}_D$ denotes the passages in the most relevant external document from the corpus. In our dataset, an SRS has on average about 40 passages, whereas an external document has on average 53  passages.
+Here, recall measures the presence of the relevant passage in the retrieved passages, whereas nDCG measures whether the relevant passage has a higher rank among the retrieved passages. In our analysis, we focus on recall, noting that rank does not play as significant a role for small values of $k$ ($\leq 3$) where our discussion of recall, below, leads us to.
+
+We observe from Table~\ref{tab:rq1-b} that the reranking \textsc{retriever} outperforms the alternatives in the two metrics and for all $k$ values, except for the security domain as we elaborate later. 
+We naturally see improvement in  recall with higher values of $k$. Concretely, the reranking \textsc{retriever} achieves for retrieving passages from the SRSs an average recall of 78.9\%, 90.1\%, 92.2\%, and 92.4\% at 
+$k=1$, $k=3$, $k=5$, and $k=10$, respectively. The same \textsc{retriever} achieves for retrieving  passages from the external document an average recall of 77.0\%  at 
+$k=1$, and 96.5\% at $k=3$, $k=5$, and $k=10$.
+
+
+\input{tables/RQ1-b}
+
+Selecting the best value of $k$ has practical implications. 
+While higher $k$ values yield better recall, they entail additional effort for reviewing the results of \textit{QAssist}. For instance, selecting $k=10$ yields the best overall results, which implies that a stakeholder has more relevant context at their disposal for understanding and interpreting the requirements.
+However, this comes at the cost of more time and effort needed to browse through the retrieved text passages. 
+We deem $k=3$ as a reasonable compromise in our context, since the gain in recall at $k=5$ (in comparison to $k=3$) is merely $\approx$2 percentage points; selecting $k=5$ would imply browsing through two additional passages per question. That said, $k$ can be left as a user-configurable parameter, to be adjusted according to needs and the time budget available. 
+
+The results show that the dense \textsc{retriever}, DistilBERT, performs on par with the reranking  \textsc{retriever} for the security domain. 
+In our collection, the domain-specific corpus generated for security is the smallest among the corpora as it is generated from two SRSs, one of which is very small (SRS \#6). Furthermore, the number of passages analyzed in this domain is 23, compared to the aerospace and defence with an average of 42 and 94 passages, respectively. This observation suggests that the dense \textsc{retriever} is more effective when there is a fewer number of passages. 
+The performance of the reranking \textsc{retriever} is in general better than that of the dense \textsc{retriever} for $k=3$. Consequently, we select the reranking \textsc{retriever} as the best-performing \hbox{alternative for step~3 of our approach.}
+\pagebreak[4]
+
+\begin{tcolorbox}[arc=0mm,width=\columnwidth,
+                  top=1mm,left=1mm,  right=1mm, bottom=1mm,
+                  boxrule=1pt] 
+The answer to \textbf{RQ1} is that BM25 is the best document \textsc{retriever} with a perfect recall, and the reranking \textsc{retriever} is the best passage \textsc{retriever} with an average recall@$3$ of 90.1\% and 96.5\%  for SRSs and external (corpus) documents, respectively.
+\end{tcolorbox}
+\vspace*{.5em}
+
+\sectopic{RQ2. Which \textsc{reader} produces the most accurate results for extracting the likely answer to a given question?} Table~\ref{tab:rq2} shows the results of EXPII, comparing the accuracy of the \textsc{readers} for extracting the answer to a given question.
+Note that in RQ1, we focused on retrieving \emph{passages}, whereas in RQ2, we are interested in determining which \textsc{reader} identifies the most accurate \emph{text span} containing the answer within the passages already found.
+
+The table shows that the most accurate \textsc{reader} varies depending on which matching mode we choose.
+Considering the \textit{exact matching} mode, RoBERTa is the most accurate \textsc{reader}, followed by ALBERT, with an average accuracy of 24.6\%  
+and 24.3\%, respectively. This finding is corroborated by the F1 measure. Nevertheless, both \textsc{readers} are outperformed by DistilBERT in the \textit{partial matching} mode which achieves the best average accuracy of 86.4\%. 
+
+Noting their lexical nature, the exact and partial matching modes as well as the F1 measure have the drawback that they focus on whether the extracted answer is literally the same as the one in the ground truth rather than providing equivalent information~\cite{Risch:21}. 
+For example, consider question Q1 in Fig.~\ref{fig:example}. The answer extracted for this question from the first passage of the domain-specific corpus (right side of the figure) could be the following: ``how much more massive the vehicle is with propellant than without''. This answer does not have a lexical overlap with the highlighted answer (shaded green in the figure), despite considerable similarity in meaning. For such cases, lexical metrics would evaluate the extracted answer as incorrect. To better assess the performance of the \textsc{readers} in our context, where users may be seeking all closely relevant information, we further report results for the \textit{semantic matching} mode. 
+Using the \textit{semantic matching} mode would lead us to the same conclusion as that offered by \textit{exact matching} and F1. That is, ALBERT and RoBERTa have the highest average accuracy of 84.2\% and 84.0\%, respectively. 
+Despite the similar behavior of the two models, ALBERT considerably outperforms RoBERTa in \textit{partial matching} mode with an average percentage points of $\approx$19\%. 
+We thus select ALBERT as the \hbox{best-performing \textsc{reader} for answer extraction.}
+
+{\color{black}
+Since Wikipedia has been used for pre-training BERT and many variants thereof, and considering that part of our question-answer pairs originate from Wikipedia, we show that answer extraction in our approach is still accurate for content that originates from sources different from Wikipedia. Recall from  Table~\ref{tab:docCollection} that REQuestA contains a total of 189 (= 86 + 103) question-answer pairs from SRSs and another 198 (= 87 + 111) pairs from Wikipedia articles. The 189 question-answer pairs from the SRSs are independent from Wikipedia. The performance of BERT-based models over these pairs is a representative indicator for non-Wikipedia content. 
+
+In Table~\ref{tab:rq2}, we further provide a breakdown of the \textsc{reader} results based on the origin of the question-answer pairs. We denote SRS-based questions as $q_{S}$ and domain-based questions (which, in our case study, are sourced from Wikipedia) as $q_{D}$. The table shows that all models achieve on-par or better accuracy over $q_{S}$ compared to $q_{D}$. Based on the breakdown in Table~\ref{tab:rq2}, we conclude that the exposure of BERT-based models to Wikipedia during pre-training is unlikely to have influenced our performance results.
+
+}
+\begin{tcolorbox}[arc=0mm,width=\columnwidth,
+                  top=1mm,left=1mm,  right=1mm, bottom=1mm,
+                  boxrule=1pt] 
+The answer to \textbf{RQ2} is that considering both lexical and semantic measures, ALBERT provides the best overall trade-off for answer extraction with an average accuracy of $\approx$24\% in the \textit{exact matching} mode, $\approx$79\% in the \textit{partial matching} mode, and $\approx$84\% in the \textit{semantic matching} mode.  
+\end{tcolorbox}
+
+\input{tables/RQ2}
+
+\sectopic{RQ3. Does \textit{QAssist} run in practical time?} 
+To answer RQ3, we discuss the execution time of our approach based on the conclusions from RQ1 and RQ2 and the setup described under \textit{EXPIII} in Section~\ref{subsec:evaluationProc}. Based on RQ1, we select BM25 as the document \textsc{retriever} and the reranking method as the passage \textsc{retriever}. For answer extraction, based on RQ2, we select ALBERT as the \textsc{reader}. 
+With these choices, we report the execution time for each step of \textit{QAssist} (Fig.~\ref{fig:approach}).
+
+Retrieving the most relevant document from the corpora created for the aerospace, defence, and security domains (step~1) requires 2.06, 1.37, and 0.08 seconds, respectively. The time required  in step~2 for splitting a document into tokens and sentences is comparatively negligible. For retrieving relevant passages in step~3, we note that the six SRSs in our study vary in size from small (SRS\#6 with 32 requirements) to large (SRS\#2 with 1041 requirements). Similarly, the Wikipedia articles (making up the domain-specific corpora) from which we retrieve passages vary in size, as shown previously in Table~\ref{tab:docCollection}. 
+For our dataset, the time required for retrieving passages from an SRS is 2.27 seconds for the smallest SRS and 6.43 seconds for the largest. For corpus articles, the average time for passage retrieval is 2.62 seconds. Extracting  answers from passages, i.e., step~4, takes an average of 1.1 seconds.
+
+In addition to the above-reported execution times, there is a one-time loading overhead for the \textsc{reader}, as shown in the last column of Table~\ref{tab:rq2}.
+For ALBERT (best \textsc{reader} from RQ2), this overhead is $\approx$3.2 minutes. We deem this overhead acceptable considering that, once the \textsc{reader} has been loaded, the user can ask as many questions as desired.
+
+Excluding the overhead for loading the \textsc{reader}, answering an individual question, when averaged across all questions in our dataset, takes 10.36 seconds. We believe this execution time is reasonable for most practical situations. Moreover, the execution time can be improved if one has access to more powerful computing resources than ours (Google Colab's free plan, as noted in Section~\ref{subsec:evaluationProc}).
+
+\vspace*{.2em}
+\begin{tcolorbox}[arc=0mm,width=\columnwidth,
+                  top=1mm,left=1mm,  right=1mm, bottom=1mm,
+                  boxrule=1pt] 
+When run on Google Colab's free plan, our approach takes an average of 10.36 seconds to answer an individual question. In addition, one has to provision for a one-time overhead of 3.2 minutes to load the required language model (ALBERT). We find this level of performance practical for question answering over requirements. Performance can be further improved with more powerful computational resources for language models.
+\end{tcolorbox}
+\vspace*{.2em}
+
+
+\section{Comparison with Broad-based Search Engines} \label{sec:google}
+
+{\color{black}An intuitive way for QA during the analysis of an SRS would be to pose the questions to a (broad-based) search engine such as Google.  In the context of our work, search engines are generally not very effective for two main reasons. First, answers to domain-specific questions can reside in company-specific documents which are unlikely to be accessible to search engines. 
+Our approach, in contrast, gives analysts the possibility to plug company-specific documents into the QA system. 
+Second, the lack of domain-specificity in search engines can easily result in misleading answers. For example, an online search for ``rocket mass'' instead of ``wet mass'' to answer Q1 in Fig.~\ref{fig:example} would point the analyst to the design of a rocket mass heater\footnote{\url{https://en.wikipedia.org/wiki/Rocket\_mass\_heater}}, which is not relevant to the space domain. 
+Unlike search engines, our approach is scoped to the original SRS and any external knowledge resources selected by the user. As such, questions are implicitly disambiguated as long as the external knowledge resources are domain-specific. To further illustrate, consider the question ``What is NEAT?''.  Posing this question online would lead to irrelevant results due to the ambiguous abbreviation, whereas posing the same question to our approach would retrieve the definition of ``Near-Earth Asteroid Tracking'' -- inline with the SRS content.
+
+To empirically assess the success rate of search engines in our problem context, we posed to Google from our dataset a total of 50 verbatim questions. Of these, 20 questions were SRS-based and 30 were domain-based. The authors independently investigated whether the top-3 retrieved documents by Google contained the correct answer as per our ground truth. Out of the 50 questions, we found that 16 questions were answered correctly by Google, leading to a success rate of 32\%. From the 16 correctly answered questions, 14 were domain-based. We note that the domain-based questions in our dataset, REQuestA, originate from Wikipedia articles, which search engines have access to and can crawl. The outcome would most likely have been different had the external knowledge resource not been public. Therefore, in addition to the need for explicit disambiguation as discussed above, the success rate of search engines is likely to be affected by the public accessibility of the documents that should be considered during QA. 
+In conclusion, we believe that search engines are currently not the best alternative for QA over specialized and proprietary material -- a situation that is common in RE.}
+
+
+

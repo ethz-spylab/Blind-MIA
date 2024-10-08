@@ -1,0 +1,514 @@
+\section{Introduction}
+
+Initialization of parameters has long been identified as playing a critical role in improving both the convergence and generalization performance of deep neural networks \citep{glorot2010understanding, erhan2010does, he2015delving}. In recent years, however, various normalization techniques, such as batch normalization \citep{ioffe2015batch}, layer normalization \citep{ba2016layer}, and weight normalization \citep{salimans2016weight}, have been found to somewhat reduce this heavy reliance on the initialization of parameters. 
+The normalization techniques have done so by preserving some of the conditions that motivated various initialization schemes throughout training more explicitly. For instance, batch normalization normalizes each neuron to have zero mean and unit variance across examples within a minibatch, which is what Xavier initialization \citep{glorot2010understanding} and He initialization \citep{he2015delving} aim to achieve in an ideal situation.
+
+Although batch normalization has been widely used for training deep neural networks \citep{he2016deep,tan2019efficientnet}, there are a small number of studies about why it helps training \citep{santurkar2018does}. Rather than revealing its theoretical effect, several researchers studied whether batch normalization is really necessary by training deep neural networks without batch normalization. \citet{zhang2019fixup} have proposed Fixup initialization replacing batch normalization in ResNet \citep{he2016deep} by adding additional parameters to each residual block. \citet{brock2021high} have also succeeded to train ResNet with adaptive gradient clipping that adjusts unit-wise ratio of gradient norms to parameter norms during training. The similarity among their algorithms and batch normalization is that they add their own schemes to adaptively supervise optimization of the deep neural networks.
+
+We suspect that the necessity for such adaptation comes from some neighborhood properties of an initial parameter configuration. Training is an optimization process finding an optimal parameter configuration which well-approximates a particular task derived from input data in the parameter space. It means that each parameter configuration corresponds to each task but this is not necessarily one-to-one. We hypothesize that training encourages the current parameter configuration to converge to the nearest optimal parameter configuration from the initial one. If there is no optimal solution near the initial parameter configuration, then the current parameter configuration either deviates from the initial parameter configuration (exploding gradient) or stays around it (vanishing gradient). We thus propose an algorithm to find a initial parameter configuration that can solve various tasks in their neighborhood.
+
+Before finding such initial parameter configuration, we first need to check whether a given network solves any task derived from the input data. \citet{zhang2016understanding} empirically showed that over-parametrization of deep neural networks enables them to memorize the entire dataset so that they can be fitted to its arbitrary target task. Based on this, \citet{pondenkandath2018leveraging} have empirically demonstrated that pre-training on random labels can accelerate training on downstream tasks. However, \citet{maennel2020neural} has shown that the random label pre-training sometimes hurts the convergence of fine-tuning on the downstream tasks. They also presented that the pre-trained model generalizes worse than randomly initialized networks even if the random label pre-training promotes learning on the downstream task. For these studies, we further conjecture that a given over-parametrized network can solve any task in its parameter space, but it cannot do this at a single parameter configuration.
+
+We therefore decide to utilize a set of parameter configurations, where we can find an optimal parameter configuration for any target task. If this set can be accumulated to the vicinity of one parameter configuration, we view this configuration as a good initial parameter configuration. To do this, we first restrict possible downstream tasks to $d$-way classification to make the model output domain be the same as a $(d-1)$-dimensional unit simplex defined in \eqref{def:simplex}. We then define a neighbor of the initial parameter configuration as small perturbation to this. Our unsupervised algorithm encourages each neighbor to solve a different task so that optimizers based on stochastic gradient descent such as Adam \citep{kingma2014adam} can easily find a solution near our initial parameter configuration.  
+
+We offer the mathematical statement for our conjecture in \S\ref{sec:uniform}, and propose an optimization problem to satisfy our claim for a given input. In doing so, we observe two possible degenerate cases to achieve our goal. In \S\ref{sec:under-class} and \S\ref{sec:input_ignoring}, we present how to avoid these unwanted situations. We validate our algorithm by various binary tasks derived from MNIST \citep{lecun1998gradient} 
+in \S\ref{sec:main_exp}. From these experiments, we observe that fine-tuning deep neural networks from our initial parameters improves average test accuracy across the various binary tasks, and this gain is greater when the number of labelled examples is small. 
+
+
+
+
+\section{Preliminaries and notations}
+
+\paragraph{Norms} 
+
+Unless explicitly stated, a norm $\|\cdot\|$ refers to $L^2$ norm. We denote the Frobenius norm of a matrix ${\bm{A}}\in\mathbb{R}^{m\times n}$ by 
+$\|{\bm{A}}\|_F=\sqrt{\sum_{i=1}^m\sum_{j=1}^n A_{ij}^2}$,
+where $A_{ij}$ is the $(i,j)$-th entry of ${\bm{A}}$. We write the $L^2$ operator norm of ${\bm{A}}$ as
+$\|{\bm{A}}\|^*=\sup_{\|{\bm{x}}\|=1} \|{\bm{A}}{\bm{x}}\|$,
+where ${\bm{x}}\in\mathbb{R}^n$.
+\paragraph{Supports} For a distribution $p({\bm{x}})$, we write its support as 
+$\texttt{supp}(p({\bm{x}}))=\{{\bm{x}}\in\mathbb{R}^n\mid p({\bm{x}})>0\}.$
+
+\paragraph{Model prediction} 
+
+A model prediction for $d$-way classification is a point in the $(d-1)$-dimensional unit simplex $\Delta^{d-1}\subset\mathbb{R}^d$ defined by
+\begin{align}
+\label{def:simplex}
+    \Delta^{d-1}=\left\{(p_1,p_2,\cdots,p_d)\in\mathbb{R}_{{\geq}0}^{d} :\sum_{i=1}^{d} p_i = 1\right\},
+\end{align}
+where $\mathbb{R}_{\geq0}$ is the set of non-negative real numbers. We refer to a prediction of the model parametrized by ${\bm{\theta}}$ for an input ${\bm{x}}$, as ${\bm{f}}_{\bm{\theta}}({\bm{x}})\in\Delta^{d-1}$.
+
+\paragraph{Uniform distribution over $\Delta^{d-1}$} 
+In this paper, we mainly deal with the uniform distribution over $\Delta^{d-1}$, $\mathcal{U}(\Delta^{d-1})$. We can generate its random sample ${\bm{u}}$ by 
+\begin{align}
+\label{eq:sampling_uniform_simplex}
+    {\bm{u}}=\left(\frac{{\bm{e}}_1}{\sum_{i=1}^d {\bm{e}}_i},\frac{{\bm{e}}_2}{\sum_{i=1}^d {\bm{e}}_i},\cdots,\frac{{\bm{e}}_d}{\sum_{i=1}^d {\bm{e}}_i}\right),
+\end{align}
+where each ${\bm{e}}_i$ is independently drawn from $\texttt{exponential}(1)$ \citep{marsaglia1961uniform}.
+
+
+\paragraph{Maximum mean discrepancy (MMD)} 
+
+The MMD \citep{gretton2012kernel} is a framework for comparing two distributions $p({\bm{x}})$ and $q({\bm{y}})$ when we have samples from both distributions. The kernel MMD is defined by 
+\begin{align}
+\label{def:mmd}
+    \texttt{MMD}(p({\bm{x}}),q({\bm{y}});\gamma) =&\mathbb{E}_{{\bm{x}}\sim p({\bm{x}})}\mathbb{E}_{{\bm{x}}'\sim p({\bm{x}})}[k_\gamma({\bm{x}}, {\bm{x}}')]
+    \\
+    &-2\mathbb{E}_{{\bm{x}}\sim p({\bm{x}})}\mathbb{E}_{{\bm{y}}\sim q({\bm{y}})}[k_\gamma({\bm{x}}, {\bm{y}})]
+    \nonumber
+    \\
+    &+\mathbb{E}_{{\bm{y}}\sim q({\bm{y}})}\mathbb{E}_{{\bm{y}}'\sim q({\bm{y}})}[k_\gamma({\bm{y}}, {\bm{y}}')],
+    \nonumber
+\end{align}
+where $k$ is a kernel function. A Gaussian kernel is often used, i.e., $k_\gamma({\bm{x}},{\bm{y}})=\exp\left(-\frac{\|{\bm{x}}-{\bm{y}}\|^2}{2\gamma^2}\right)$. \citet{gretton2012kernel} showed that $p({\bm{x}})=q({\bm{y}})$ in distribution if and only if $\texttt{MMD}(p({\bm{x}}),q({\bm{y}});\gamma)=0$.
+
+
+\section{Unsupervised learning of initialization}
+\label{sec:theory}
+
+We start by conjecturing that the parameter configuration for any $d$-way classification must be in the vicinity of {\it good} initial parameters. In other words, a parameter configuration, that solves any $d$-way classification task, is near the initial parameter configuration, so that such configuration can be readily found by stochastic gradient descent using labelled examples. The question we answer here is then how we can identify such an initial parameter configuration given a set of unlabelled examples. 
+
+\subsection{Uniformity over all mappings}
+\label{sec:uniform}
+
+
+Let ${\bm{f}}_{\bm{\theta}}({\bm{x}})\in \mathbb{R}^d$ be an output of a deep neural network parametrized by ${\bm{\theta}}\in\mathbb{R}^m$ given an input ${\bm{x}}\in \mathbb{R}^n$ sampled from an input distribution $p({\bm{x}})$. In supervised learning, there is a target mapping ${\bm{f}}^*$ 
+defined on $\texttt{supp}(p({\bm{x}}))$, and we want to find ${\bm{\theta}}^*$ that 
+\begin{align}
+\label{eq:general_supervised_learning}
+    \min_{{\bm{\theta}}\in\mathbb{R}^m} l({\bm{f}}_{\bm{\theta}}, {\bm{f}}^*),
+\end{align}
+for a given loss function $l$. For example, we often use $l({\bm{f}}_{\bm{\theta}}, {\bm{f}}^*)=\mathbb{E}_{{\bm{x}}\sim p({\bm{x}})}[\|{\bm{f}}_{\bm{\theta}}({\bm{x}})-{\bm{f}}^*({\bm{x}})\|^2]$ for regression and $l({\bm{f}}_{\bm{\theta}}, {\bm{f}}^*)=\mathbb{E}_{{\bm{x}}\sim p({\bm{x}})}[\texttt{KL}({\bm{f}}^*({\bm{x}})||{\bm{f}}_{\bm{\theta}}({\bm{x}}))]$ for classification task, where $\texttt{KL}({\bm{f}}^*({\bm{x}})||{\bm{f}}_{\bm{\theta}}({\bm{x}}))$ is the Kullback-Leibler (KL) divergence from ${\bm{f}}_{\bm{\theta}}({\bm{x}})$ to ${\bm{f}}^*({\bm{x}})$. 
+
+In deep learning, it is usual to search for an optimal solution ${\bm{\theta}}^*$ from \eqref{eq:general_supervised_learning} in the full parameter space $\mathbb{R}^m$ by using a first-order optimizer, such as SGD and Adam \citep{kingma2014adam}. In this process, \citet{hoffer2017train} have demonstrated however that
+\begin{align}
+\label{eq:ultra_slow_diffusion}
+    \|{\bm{\theta}}_t - {\bm{\theta}}_0\| \sim \log t,
+\end{align}     
+where ${\bm{\theta}}_t$ is a vector of parameters at the $t$-th optimization step and ${\bm{\theta}}_0$ is that of initial parameters. 
+In other words, 
+the rate of deviation from ${\bm{\theta}}_0$ decreases as training progresses. It means that the first order optimizer tends to find an optimal solution near the initial point. We thus rewrite \eqref{eq:general_supervised_learning} as
+\begin{talign}
+\label{eq:nbd_supervised_learning}
+    {\bm{\theta}}^* = \argmin_{{\bm{\theta}}\in {\mathbb{B}}_r({\bm{\theta}}_0)} l({\bm{f}}_{\bm{\theta}}, {\bm{f}}^*),
+\end{talign}
+where ${\mathbb{B}}_r({\bm{\theta}}_0)$ is a $r$-ball centered at ${\bm{\theta}}_0$, ${\mathbb{B}}_r({\bm{\theta}}_0)=\{{\bm{\theta}}\in\mathbb{R}^d:\|{\bm{\theta}}-{\bm{\theta}}_0\|<r\}$.
+
+With this in our mind, what is the good initialization ${\bm{\theta}}_0$ for \eqref{eq:nbd_supervised_learning}? To answer this question, we look at what kind of classifiers we have within ${\mathbb{B}}_r({\bm{\theta}}_0)$. If ${\bm{x}}$ is an example randomly drawn from the input distribution $p({\bm{x}})$, the set of all possible model outputs from ${\bm{x}}$ in ${\mathbb{B}}_r({\bm{\theta}}_0)$ is 
+\[
+    {\mathbb{F}}({\bm{x}};{\bm{\theta}}_0)=\{{\bm{f}}_{\bm{\theta}}({\bm{x}}):{\bm{\theta}}\in{\mathbb{B}}_r({\bm{\theta}}_0)\}.
+\]
+We define the collection of all possible target mappings from the input space into the $(d-1)$-dimensional unit simplex $\Delta^{d-1}$ defined in \eqref{def:simplex} as 
+\[
+    \mathcal{F} = \{{\bm{f}}^*\mid {\bm{f}}^*:\texttt{supp}(p({\bm{x}}))\rightarrow \Delta^{d-1} \subset \mathbb{R}^d\}.
+\]
+If ${\bm{\theta}}_0$ is a good initial configuration, ${\mathbb{F}}({\bm{x}};{\bm{\theta}}_0)$ has to be $\Delta^{d-1}$. Otherwise, our model cannot approximate ${\bm{f}}^*\in\mathcal{F}$ such that ${\bm{f}}^*({\bm{x}})\in\Delta^{d-1}\setminus{\mathbb{F}}({\bm{x}};{\bm{\theta}}_0)$ in ${\mathbb{B}}_r({\bm{\theta}}_0)$.  
+
+To approximate all target mappings in $\mathcal{F}$ by ${\bm{f}}_{\bm{\theta}}$ near ${\bm{\theta}}_0$ for ${\bm{x}}$, there must be ${\bm{\theta}}\in{\mathbb{B}}_r({\bm{\theta}}_0)$ satisfying ${\bm{f}}_{\bm{\theta}}({\bm{x}})={\bm{s}}$ for arbitrary ${\bm{s}}\in\Delta^{d-1}$.
+In other words, if we randomly pick ${\bm{\theta}}$ in ${\mathbb{B}}_r({\bm{\theta}}_0)$, the probability density of ${\bm{f}}_{\bm{\theta}}({\bm{x}})={\bm{s}}$ for any ${\bm{s}}\in\Delta^{d-1}$ is positive and should be the same over $\Delta^{d-1}$ without prior knowledge of target mappings.
+
+\begin{claim}
+\label{claim:uniformity}
+   
+    Denote the distribution of ${\bm{y}}={\bm{f}}_{{\bm{\theta}}}({\bm{x}})$ given ${\bm{x}} \sim p({\bm{x}})$ over ${\bm{\theta}}\sim\mathcal{U}({\mathbb{B}}_r({\bm{\theta}}_0))$ as $q_{{\bm{x}}}({\bm{y}};{\bm{\theta}}_0,r)$.\footnote{
+        Although ${\bm{x}}$ is given, ${\bm{f}}_{\bm{\theta}}({\bm{x}})$ is random due to the randomness of ${\bm{\theta}}$.
+    } 
+    Then, ${\bm{\theta}}_0$ is a good initialization if and only if $\texttt{supp}(q_{{\bm{x}}}({\bm{y}};{\bm{\theta}}_0,r))=\Delta^{d-1}$ and $q_{{\bm{x}}}({\bm{y}};{\bm{\theta}}_0,r)$ is equal to $\mathcal{U}(\Delta^{d-1})$ in distribution, because we do not know which ${\bm{s}}\in\Delta^{d-1}$ is more likely.
+\end{claim}
+
+To obtain ${\bm{\theta}}_0$ satisfying Claim~\ref{claim:uniformity}, we build an optimization problem that makes $q_{{\bm{x}}}({\bm{y}};{\bm{\theta}}_0,r)$ converge to $\mathcal{U}(\Delta^{d-1})$ in distribution for a given ${\bm{x}}\sim p({\bm{x}})$. 
+The first step toward this goal is to use 
+the maximum mean discrepancy (MMD) \citep{gretton2012kernel} from \eqref{def:mmd}. We define an example specific loss as
+\begin{align}
+\label{eq:mmd_uniform_nbd}
+    \mathcal{L}_{{\bm{x}}}^{uni}({\bm{\theta}}_0;r,\Delta^{d-1},\gamma)
+    =
+    \texttt{MMD}(q_{{\bm{x}}}({\bm{y}};{\bm{\theta}}_0,r),\mathcal{U}(\Delta^{d-1});\gamma).
+   
+   
+\end{align}
+
+According to \citet{gretton2012kernel}, \eqref{eq:mmd_uniform_nbd} is equal to $0$ if and only if $q_{{\bm{x}}}({\bm{y}};{\bm{\theta}}_0,r)$ is equal to $\mathcal{U}(\Delta^{d-1})$ in distribution. 
+We can therefore find ${\bm{\theta}}_0$ that satisfies Claim~\ref{claim:uniformity}, by minimizing \eqref{eq:mmd_uniform_nbd} with respect to ${\bm{\theta}}_0$.
+
+The minimization of \eqref{eq:mmd_uniform_nbd} with respect to ${\bm{\theta}}_0$ needs samples from both $\mathcal{U}(\Delta^{d-1})$ and $\mathcal{U}({\mathbb{B}}_r({\bm{\theta}}_0))$. In the case of $\mathcal{U}(\Delta^{d-1})$, 
+we draw samples using \eqref{eq:sampling_uniform_simplex}. For $\mathcal{U}({\mathbb{B}}_r({\bm{\theta}}_0))$, we relax it to $\mathcal{N}({\bm{\theta}}_0,{\bm{\Sigma}})$ where ${\bm{\Sigma}}=\texttt{diag}(\sigma_1^2,\sigma_2^2,\cdots,\sigma_m^2)$ for two reasons: i) 
+this applies the same with uniform, since we can change the value range for each parameter separately; ii) the normal distribution allows us to use the reparametrization trick to compute $\nabla_{{\bm{\theta}}_0}\mathcal{L}_{{\bm{x}}}^{uni}({\bm{\theta}}_0;r,\Delta^{d-1},\gamma)$ from \eqref{eq:mmd_uniform_nbd} \citep{kingma2013auto}. Furthermore, as shown in Theorem~\ref{thm:prob_out_of_nbd} below, a proper choice of the covariance matrix makes Gaussian perturbation have similar effect as uniform perturbation:
+\begin{theorem}
+\label{thm:prob_out_of_nbd}
+    Let ${\bm{\theta}}\sim\mathcal{N}({\bm{\theta}}_0, \texttt{diag}(\sigma_1^2,\sigma_2^2,\cdots,\sigma_m^2))$ and $\alpha_* =\max_{i=1,2,\cdots,m} \sigma_i^2$. If $r^2$ is greater than $m\alpha_*$, then we have
+    \begin{align}\label{eq:prob_out_of_nbd}
+        {\mathbb{P}}\left(\|{\bm{\theta}}-{\bm{\theta}}_0\|\geq\ r \right) \leq \exp\left(-\frac{1}{8}\min\left\{\eta^2,m\eta\right\}\right),
+    \end{align}
+    where $\eta=\frac{r^2}{m\alpha_*}-1$ (proved in \S\ref{a_sec:thm1_proof}). 
+\end{theorem}
+
+Theorem~\ref{thm:prob_out_of_nbd} implies that if we add a Gaussian perturbation $\boldsymbol{\epsilon}\sim\mathcal{N}({\bm{0}},{\bm{\Sigma}})$ to ${\bm{\theta}}_0$, then the perturbed parameter configuration, ${\bm{\theta}}={\bm{\theta}}_0+\boldsymbol{\epsilon}$, is enough closed to ${\bm{\theta}}_0$ with a high probability, when $\alpha^*=\max_i\sigma_i^2$ is sufficiently small. In other words, although $\mathcal{N}({\bm{\theta}}_0,{\bm{\Sigma}})$ is not exactly equivalent to $\mathcal{U}({\mathbb{B}}_r({\bm{\theta}}_0))$ in distribution, these two distributions play a similar role in the view of generating random parameter configurations near ${\bm{\theta}}_0$. We therefore rewrite \eqref{eq:mmd_uniform_nbd} to 
+enable reparametrization trick, as below:
+\begin{align}
+\label{eq:mmd_normal_nbd}
+    \mathcal{L}_{{\bm{x}}}^{uni}({\bm{\theta}}_0;{\bm{\Sigma}},\Delta^{d-1},\gamma)=
+   
+   
+   
+    &\mathbb{E}_{\boldsymbol{\epsilon}\sim\mathcal{N}({\bm{0}},{\bm{\Sigma}})}\mathbb{E}_{\boldsymbol{\epsilon}'\sim\mathcal{N}({\bm{0}},{\bm{\Sigma}})}[k_\gamma({\bm{f}}_{{\bm{\theta}}_0+\boldsymbol{\epsilon}}({\bm{x}}), {\bm{f}}_{{\bm{\theta}}_0+\boldsymbol{\epsilon}'}({\bm{x}}))]
+   
+    \\
+    &-2\mathbb{E}_{\boldsymbol{\epsilon}\sim\mathcal{N}({\bm{0}},{\bm{\Sigma}})}\mathbb{E}_{{\bm{u}}\sim \mathcal{U}(\Delta^{d-1})}[k_\gamma({\bm{f}}_{{\bm{\theta}}_0+\boldsymbol{\epsilon}}({\bm{x}}), {\bm{u}})]
+    \nonumber
+    \\
+    &+\mathbb{E}_{{\bm{u}}\sim \mathcal{U}(\Delta^{d-1})}\mathbb{E}_{{\bm{u}}'\sim \mathcal{U}(\Delta^{d-1})}[k_\gamma({\bm{u}}, {\bm{u}}')],
+    \nonumber
+\end{align}
+where $q_{{\bm{x}}}({\bm{y}};{\bm{\theta}}_0,{\bm{\Sigma}})$ is the distribution of ${\bm{f}}_{\bm{\theta}}({\bm{x}})$ given ${\bm{x}}$ with ${\bm{\theta}}\sim\mathcal{N}({\bm{\theta}}_0,{\bm{\Sigma}})$. 
+In other words, we add Gaussian noise to each parameter and encourage prediction for ${\bm{x}}$ based on such perturbed parameter configuration to be well spread out over $\Delta^{d-1}$. 
+From now on, we use ${\bm{\theta}}_0+\boldsymbol{\epsilon}$ to denote the perturbed parameter configuration, with $\boldsymbol{\epsilon}\sim\mathcal{N}({\bm{0}},{\bm{\Sigma}})$, to be more explicit about our use of reparametrization trick. 
+
+\Eqref{eq:mmd_normal_nbd} is an example specific loss, and minimizing this with respect to ${\bm{\theta}}_0$ only guarantees the existence of ${\bm{\theta}}^*$
+near ${\bm{\theta}}_0$
+satisfying ${\bm{f}}^*={\bm{f}}_{{\bm{\theta}}^*}$ for a single ${\bm{x}}$. Hence, we take the expectation of \eqref{eq:mmd_normal_nbd} over the input distribution $p({\bm{x}})$:
+\begin{align}
+\label{eq:uniformity_loss}
+    \mathcal{L}^{uni}({\bm{\theta}}_0;{\bm{\Sigma}},\Delta^{d-1},\gamma,p({\bm{x}}))
+    =
+    \mathbb{E}_{{\bm{x}}\sim p({\bm{x}})}[\mathcal{L}_{\bm{x}}^{uni}({\bm{\theta}}_0;{\bm{\Sigma}},\Delta^{d-1},\gamma)].
+\end{align}
+We minimize this expected loss to find an initial parameter configuration ${\bm{\theta}}_0^*$ that satisfies Claim~\ref{claim:uniformity} for the input data on average. 
+When done so, we can find ${\bm{f}}_{\bm{\theta}}$ within the close proximity of ${\bm{\theta}}_0^*$ that approximates any $d$-way target mapping ${\bm{f}}^*$, given $p({\bm{x}})$. 
+
+\subsection{Degeneracies and remedies}
+\label{sec:degenerate_remedy}
+
+Let ${\bm{x}}_1,{\bm{x}}_2,\cdots,{\bm{x}}_M$ be random samples drawn from $p({\bm{x}})$, $\boldsymbol{\epsilon}_1, \boldsymbol{\epsilon}_2,\cdots, \boldsymbol{\epsilon}_N$ be random perturbations from $\mathcal{N}({\bm{0}},{\bm{\Sigma}})$, and ${\bm{c}}_1,{\bm{c}}_2,\cdots, {\bm{c}}_N$ from $\mathcal{U}(\Delta^{d-1})$. If ${\bm{\theta}}_0^{1}$ satisfies
+\begin{align}
+\label{eq:degenerate_ex}
+    {\bm{c}}_j
+    =
+    {\bm{f}}_{{\bm{\theta}}_0^{1}+\boldsymbol{\epsilon}_j}({\bm{x}}_1)
+    =
+    {\bm{f}}_{{\bm{\theta}}_0^{1}+\boldsymbol{\epsilon}_j}({\bm{x}}_2)
+    =
+    \cdots
+    =
+    {\bm{f}}_{{\bm{\theta}}_0^{1}+\boldsymbol{\epsilon}_j}({\bm{x}}_M),
+\end{align}
+for each $j$, then $\mathcal{L}_{{\bm{x}}_i}^{uni}({\bm{\theta}}_0^{1};{\bm{\Sigma}},\Delta^{d-1},\gamma)=0$ for all $i$. Hence, ${\bm{\theta}}_0^{1}$ is one of the optimal solutions for \eqref{eq:uniformity_loss}.
+In the case of ${\bm{\theta}}_0^{1}$, each perturbed model near ${\bm{\theta}}_0^{1}$ is a constant function, to which we refer as {\it input-output detachment}.
+Furthermore, 
+each of these constant functions may output a {\it degenerate} categorical distribution whose support does not cover all $d$ classes, for which we refer to this phenomenon as {\it degenerate softmax}. We empirically demonstrate that both degeneracies indeed occur when we train a fully connected network by minimizing $\mathcal{L}^{uni}$ in \S\ref{a_sec:degenerate_cases_exp}.  
+In this section, we present two regularization terms, to be added to \eqref{eq:uniformity_loss}, to avoid these two unwanted cases, respectively.
+
+\subsubsection{Degenerate softmax} 
+\label{sec:under-class}
+
+We first address the latter issue of degenerate softmax. Since we have specified that the task of our interest is $d$-way classification, we prefer models that can classify inputs into all $d$ classes in the neighborhood of ${\bm{\theta}}_0^*$. We thus impose a condition that there exists at least one example categorized into each and every class. We first define a set of the points ${\mathbb{A}}_i$ classified into the $i$-th class as
+\begin{align}
+\label{def:ith_part_simplex}
+    {\mathbb{A}}_i
+    =
+    \left\{{\bm{a}}=(a_1,a_2,\cdots,a_d)\in\Delta^{d-1}: 
+    a_i\geq a_j\textrm{ for all } j=1,2,\cdots,d \right\}.
+\end{align}
+
+Given $\boldsymbol{\epsilon}\sim\mathcal{N}({\bm{0}},{\bm{\Sigma}})$, the probability of \textit{`the model at ${\bm{\theta}}_0^*+\boldsymbol{\epsilon}$ classifies ${\bm{x}}$ into the $i$-th class'} is ${\mathbb{P}}_{{\bm{x}}\sim p({\bm{x}})}({\bm{f}}_{{\bm{\theta}}_0^*+\boldsymbol{\epsilon}}({\bm{x}})\in{\mathbb{A}}_i)$. This probability should be positive for all $i=1,2,\cdots,d$ to avoid degenerate softmax at ${\bm{\theta}}_0^*$. To satisfy this, we use Theorem~\ref{thm:prob_each_class} which offers a lower bound of ${\mathbb{P}}_{{\bm{x}}\sim p({\bm{x}})}({\bm{f}}_{{\bm{\theta}}_0^*+\boldsymbol{\epsilon}}({\bm{x}})\in{\mathbb{A}}_i)$ using the distance from the $i$-th vertex ${\bm{v}}^{(i)}$:
+
+\begin{theorem}
+\label{thm:prob_each_class}
+    Let ${\bm{v}}^{(i)}=\left(v^{(i)}_1,v^{(i)}_2,\cdots,v^{(i)}_d\right)\in\Delta^{d-1}$, where $v^{(i)}_i=1$ and ${\mathbb{A}}_i$ be a subset of $\Delta^{d-1}$, as defined in \eqref{def:ith_part_simplex}. Then, 
+    \begin{align}
+    \label{eq:lower_prob_each_class}
+        {\mathbb{P}}_{{\bm{x}}\sim p({\bm{x}})}({\bm{f}}_{{\bm{\theta}}_0^*+\boldsymbol{\epsilon}}({\bm{x}})\in{\mathbb{A}}_i) \geq 1-\sqrt{d}\mathbb{E}_{{\bm{x}}\sim p({\bm{x}})}[\|{\bm{v}}^{(i)}-{\bm{f}}_{{\bm{\theta}}_0^*+\boldsymbol{\epsilon}}({\bm{x}})\|],
+       
+    \end{align}
+    for a given $\boldsymbol{\epsilon}\sim\mathcal{N}({\bm{0}},{\bm{\Sigma}})$ (proved in \S\ref{a_sec:thm2_proof}).
+\end{theorem}
+
+According to \eqref{eq:lower_prob_each_class},  
+$\mathbb{E}_{{\bm{x}}\sim p({\bm{x}})}[\|{\bm{v}}^{(i)}-{\bm{f}}_{{\bm{\theta}}_0^*+\boldsymbol{\epsilon}}({\bm{x}})\|]<\frac{1}{\sqrt{d}}$ implies ${\mathbb{P}}_{{\bm{x}}\sim p({\bm{x}})}({\bm{f}}_{{\bm{\theta}}_0^*+\boldsymbol{\epsilon}}({\bm{x}})\in{\mathbb{A}}_i)>0$ for each $i$, given $\boldsymbol{\epsilon}\sim\mathcal{N}({\bm{0}},{\bm{\Sigma}})$. This means that we can avoid degenerate softmax by minimizing
+\begin{align}
+\label{eq:underclass_loss}
+    \mathcal{L}^{sd}({\bm{\theta}}_0;{\bm{\Sigma}},d,p({\bm{x}}))= \mathbb{E}_{\boldsymbol{\epsilon}\sim\mathcal{N}({\bm{0}},{\bm{\Sigma}})}\left[\max\left\{\max_{i=1,2,\cdots,d}\mathbb{E}_{{\bm{x}}\sim p({\bm{x}})}[\|{\bm{v}}^{(i)}-{\bm{f}}_{{\bm{\theta}}_0^*+\boldsymbol{\epsilon}}({\bm{x}})\|],\frac{1}{\sqrt{d}}\right\}-\frac{1}{\sqrt{d}}\right].
+\end{align}
+This minimization pulls the softmax output toward the furthest vertex for each $\boldsymbol{\epsilon}\sim\mathcal{N}({\bm{0}},{\bm{\Sigma}})$, 
+eventually avoiding the issue of degenerate softmax.
+
+
+
+
+\subsubsection{Input-output detachment}
+\label{sec:input_ignoring}
+
+Here, let us go back to the first issue of input-output detachment we identified in \eqref{eq:degenerate_ex}. This issue happens when each perturbed model near ${\bm{\theta}}_0^{1}$ is a constant function. In other words, the Jacobian of the model's output with respect to the input is zero, and in the case of multi-layered neural networks, the Jacobian of the model's output with respect to one of the intermediate layers is zero. This largely prevents learning from ${\bm{\theta}}_0^{1}$, because ${\bm{\theta}}_0^{1}$ is surrounded by the parameter configurations from which learning cannot happen. 
+We thus design an additional loss that regularizes the Jacobian of model prediction with respect to its input and hidden neurons to prevent the input-output detachment. 
+
+
+
+
+
+In the rest of this section, we consider ${\bm{f}}$ as the logits instead of the values after applying softmax, in order to avoid an issue of saturation caused by softmax \citep{varga2017gradient}. Let ${\bm{x}}_l\in \mathbb{R}^{n_l}$, for $l \in \left\{ 0,1,\cdots,L \right\}$, be a vector of pre-activated neurons at the $(l+1)$-th layer parametrized by ${\bm{\theta}}^{(l+1)}_0$, where ${\bm{x}}_0\in\mathbb{R}^{n_0}$ and ${\bm{x}}_L\in\mathbb{R}^{n_L}=\mathbb{R}^d$ are an input vector and its corresponding output vector, respectively. ${\bm{f}}_{{\bm{\theta}}_0^{(l:L)}}$ is the function from $\mathbb{R}^{n_l}$ to $\mathbb{R}^d$, parametrized by ${\bm{\theta}}_0^{(l+1)},{\bm{\theta}}_0^{(l+2)},\cdots,{\bm{\theta}}_0^{(L)}$. Let us now consider the effect of perturbing the input to such a function:
+\begin{align}
+\label{eq:jacobian_perturbation}
+    {\bm{f}}_{{\bm{\theta}}_0^{(l:L)}}({\bm{x}}_l+\boldsymbol{\xi}_l)
+    \approx 
+    {\bm{f}}_{{\bm{\theta}}_0^{(l:L)}}({\bm{x}}_l)+{\bm{J}}_{{\bm{\theta}}_0^{(l:L)}}({\bm{x}}_l)\boldsymbol{\xi}_l,
+\end{align}
+where ${\bm{J}}_{{\bm{\theta}}_0^{(l:L)}}({\bm{x}}_l)\in\mathbb{R}^{d\times n_l}$ is the Jacobian matrix of ${\bm{f}}_{{\bm{\theta}}_0^{(l:L)}}$ with respect to ${\bm{x}}_l$. 
+
+We then look at \eqref{eq:jacobian_perturbation} entry-wise:
+\begin{align}
+\label{eq:jacobian_perturbation_entry}
+    f_{{\bm{\theta}}_0^{(l:L)}}^{(i)}({\bm{x}}_l+\boldsymbol{\xi}_l)
+    \approx 
+    f_{{\bm{\theta}}_0^{(l:L)}}^{(i)}({\bm{x}}_l)+J_{{\bm{\theta}}_0^{(l:L)}}^{(i)}({\bm{x}}_l)\boldsymbol{\xi}_l,
+\end{align} 
+where $f_{{\bm{\theta}}_0^{(l:L)}}^{(i)}$ is the $i$-th entry of ${\bm{f}}_{{\bm{\theta}}_0^{(l:L)}}$, and $J_{{\bm{\theta}}_0^{(l:L)}}^{(i)}$ is the $i$-th row of ${\bm{J}}_{{\bm{\theta}}_0^{(l:L)}}$ for $i=1,2,\cdots,d$. From \eqref{eq:jacobian_perturbation_entry}, we can see that the absolute difference between $f_{{\bm{\theta}}_0^{(l:L)}}^{(i)}({\bm{x}}_l)$ and $f_{{\bm{\theta}}_0^{(l:L)}}^{(i)}({\bm{x}}_l+\boldsymbol{\xi}_l)$ can be well approximated by the absolute value of the gradient-perturbation product:
+\begin{align}
+\label{eq:jacobian_abs_change}
+    \left|f_{{\bm{\theta}}_0^{(l:L)}}^{(i)}({\bm{x}}_l+\boldsymbol{\xi}_l)-f_{{\bm{\theta}}_0^{(l:L)}}^{(i)}({\bm{x}}_l)\right|
+    \approx 
+    \left|J_{{\bm{\theta}}_0^{(l:L)}}^{(i)}({\bm{x}}_l)\boldsymbol{\xi}_l\right|.
+\end{align}
+Assuming the perturbation's norm to be unit, we can bound this quantity by the operator norm of the $i$-th row of Jacobian:
+\begin{align}
+\label{eq:jacobian_operator}
+    \sup_{\|\boldsymbol{\xi}_l\|=1}\left|f_{{\bm{\theta}}_0^{(l:L)}}^{(i)}({\bm{x}}_l+\boldsymbol{\xi}_l)-f_{{\bm{\theta}}_0^{(l:L)}}^{(i)}({\bm{x}}_l)\right|
+    \approx 
+    \sup_{\|\boldsymbol{\xi}_l\|_2=1}\left|J_{{\bm{\theta}}_0^{(l:L)}}^{(i)}({\bm{x}}_l)\boldsymbol{\xi}_l\right|
+    =
+    \left\|J_{{\bm{\theta}}_0^{(l:L)}}^{(i)}({\bm{x}}_l)\right\|^*.
+\end{align}
+Since $J_{{\bm{\theta}}_0^{(l:L)}}^{(i)}({\bm{x}}_l)$ is a row vector, i.e., a matrix of rank 1, the Frobenius norm
+$\|\cdot\|_F$ is equivalent to the operator norm $\|\cdot\|^*$. This allows us to rewrite \eqref{eq:jacobian_operator} as 
+\begin{align}
+\label{eq:jacobian_frobenius}
+    \sup_{\|\boldsymbol{\xi}_l\|_2=1}\left|f_{{\bm{\theta}}_0^{(l:L)}}^{(i)}({\bm{x}}_l+\boldsymbol{\xi}_l)-f_{{\bm{\theta}}_0^{(l:L)}}^{(i)}({\bm{x}}_l)\right|
+    \approx
+    \left\|J_{{\bm{\theta}}_0^{(l:L)}}^{(i)}({\bm{x}}_l)\right\|_F.
+\end{align}
+
+According to \Eqref{eq:jacobian_frobenius}, 
+if $\|J_{{\bm{\theta}}_0^{(l:L)}}^{(i)}({\bm{x}}_l)\|_F$ is positive, our initial model ${\bm{f}}_{{\bm{\theta}}_0}$ is sensitive to the change in ${\bm{x}}_l$. That is, it is not a constant function.
+
+Per the derivation above, in order to avoid the input-output detachment, 
+we can for instance impose that, for all $i=1,2,\cdots,d$,
+\begin{align}
+\label{eq:const_jaco}
+    c
+    =
+    \left\|J_{{\bm{\theta}}_0^{(0:L)}}^{(i)}({\bm{x}}_0)\right\|_F
+    =
+    \left\|J_{{\bm{\theta}}_0^{(1:L)}}^{(i)}({\bm{x}}_1)\right\|_F
+    =
+    \cdots
+    =
+    \left\|J_{{\bm{\theta}}_0^{(L-1:L)}}^{(i)}({\bm{x}}_{L-1})\right\|_F,
+\end{align} 
+where $c>0$ is a constant. Here, we set $c=1$ which has an equivalent effect of setting the parameters using the so-called He initialization \citep{he2015delving}, as shown in the following theorem:
+\begin{theorem}
+\label{thm:he_init}
+    Let ${\bm{f}}_{{\bm{\theta}}_0}$ be a fully connected network with ReLU \citep{nair2010rectified} non-linearity. We write the layerwise non-linear transformation from ${\bm{x}}_l$ to ${\bm{x}}_{l+1}$ for $l\neq 0$ as 
+    \begin{align*}
+        {\bm{f}}_{{\bm{\theta}}_0^{(l:l+1)}}({\bm{x}}_l)
+        =
+        {\bm{W}}^{(l+1)}\texttt{ReLU}({\bm{x}}_l)+{\bm{b}}^{(l+1)},
+    \end{align*}
+    where ${\bm{W}}^{(l+1)}\in\mathbb{R}^{n_{l+1}\times n_l}$ is the weight matrix and ${\bm{b}}\in\mathbb{R}^{n_{l+1}}$ is the bias vector. 
+    Assume that each element of ${\bm{x}}_l$ has a symmetric distribution at $0$ and all elements of ${\bm{x}}_l$ are mutually independent. If the $(i,j)$-th entry of ${\bm{W}}^{(l+1)}$, $W_{ij}^{(l+1)}$, is a random sample from $\mathcal{N}(0,\sigma_l^2)$ and ${\bm{b}}^{(l+1)}$ is ${\bm{0}}$, then the following equality holds for all $k=1,2,\cdots, n_{l+1}$ when $\sigma_l=\sqrt{\frac{2}{n_l}}$ with sufficiently large $n_l$:
+    \begin{align}
+    \label{eq:he_jaco_condition}
+        1\approx\left\|J_{{\bm{\theta}}_0^{(l:l+1)}}^{(k)}({\bm{x}}_l)\right\|_F
+        =
+        \|{\bm{W}}^{(l+1)} \mathds{1}({\bm{x}}_l > 0)\|_F, 
+       
+    \end{align}
+    where $\mathds{1}({\bm{x}}_l >0)$ turns each positive entry in ${\bm{x}}_l$ to $1$ and $0$ otherwise (proved in \S\ref{a_sec:thm3_proof}).
+\end{theorem}
+
+
+In order to prevent input-output detachment, we thus 
+introduce an additional regularization term:
+\begin{align}
+\label{eq:ignore_loss}
+    \mathcal{L}^{iod}({\bm{\theta}}_0;p({\bm{x}}))
+    =
+    \mathbb{E}_{{\bm{x}}\sim p({\bm{x}})}\left[\frac{1}{d}\sum_{i=1}^d \left\{\max_{l\in\{0,1,\cdots,L-1\}}\left(1-\left\|J_{{\bm{\theta}}_0^{(l:L)}}^{(i)}({\bm{x}}_l)\right\|_F\right)^2\right\}\right],
+\end{align}
+where ${\bm{x}}_l$ is a vector of pre-activated neurons at the $l$-th layer and ${\bm{x}}_0$ is an input vector. By minimizing \eqref{eq:ignore_loss} with respect to ${\bm{\theta}}_0$, we prevent ${\bm{\theta}}_0$ from being constant, and consequently all nearby models as well, which we demonstrate empirically in \S\ref{a_sec:nearby_jaco_exp}. 
+
+\subsection{Hyperparameters and our recommendation}
+\label{sec:final_loss}
+
+We designed three loss functions to find a good initial parameter configuration ${\bm{\theta}}_0^*$ for $d$-way classification, using only unlabelled examples; i) $\mathcal{L}^{uni}({\bm{\theta}}_0;{\bm{\Sigma}},\Delta^{d-1},\gamma)$ in \S\ref{sec:uniform}; ii) $\mathcal{L}^{sd}({\bm{\theta}}_0;{\bm{\Sigma}},d)$ in \S\ref{sec:under-class}; iii) $\mathcal{L}^{iod}({\bm{\theta}}_0)$ in \S\ref{sec:input_ignoring}.
+$\mathcal{L}^{uni}({\bm{\theta}}_0;{\bm{\Sigma}},\Delta^{d-1},\gamma)$ makes our model predictions be evenly spread over $\Delta^{d-1}$ centered on ${\bm{\theta}}_0$. $\mathcal{L}^{sd}({\bm{\theta}}_0;{\bm{\Sigma}},d)$ encourages the neighborhood of ${\bm{\theta}}_0$ to have solutions specialized for $d$-way classification by preventing {\it degenerate softmax}. $\mathcal{L}^{iod}({\bm{\theta}}_0)$ avoids the issue of  {\it input-output detachment}. We additively combine all these to form the final loss function:
+\begin{align}
+\label{eq:final_loss}
+    \mathcal{L}({\bm{\theta}}_0;{\bm{\Sigma}},\Delta^{d-1},\gamma, p({\bm{x}}),\lambda,\xi)=&\mathcal{L}^{uni}({\bm{\theta}}_0;{\bm{\Sigma}},\Delta^{d-1},\gamma,p({\bm{x}})) 
+    \\
+    & + \lambda\mathcal{L}^{sd}({\bm{\theta}}_0;{\bm{\Sigma}},d,p({\bm{x}}))
+    \nonumber
+    \\
+    &+\xi\mathcal{L}^{iod}({\bm{\theta}}_0;p({\bm{x}})).
+    \nonumber 
+\end{align}
+In \S\ref{a_sec:need_all_exp}, we empirically present that $\mathcal{L}^{sd}$ and $\mathcal{L}^{iod}$ indeed prevent the degenerate softmax and the input-output detachment, and all these three loss functions in \eqref{eq:final_loss} are necessary to find a good initial parameter configuration. 
+In the rest of this section, we provide guidelines on how to choose some of the hyperparameters.
+
+We select the bandwidth of MMD in $\mathcal{L}^{uni}$, $\gamma$, based on the median heuristic \citep{smola1998learning}. It uses the median of all pairwise distances for the Gaussian kernel in \eqref{eq:mmd_normal_nbd}. This technique is commonly used in many unsupervised learning based on the Gaussian kernel \citet{garreau2017large} such as kernel CCA \citep{bach2002kernel} and kernel two-sample test \citep{gretton2012kernel}. For more detailed description of the median heuristic in our experiments, see \S\ref{a_sec:med_heuristic}.  
+
+For ${\bm{\Sigma}}=\texttt{diag}(\sigma_1^2,\sigma_2^2,\cdots,\sigma_m^2$) of both $\mathcal{L}^{uni}$ and $\mathcal{L}^{sd}$, each $\sigma_i^2$ corresponding to $\theta_{0,i}$ is set based on the number of neurons connected to $\theta_{0,i}$. For instance, if $\theta_{0,i}$ is the entry of either ${\bm{W}}\in\mathbb{R}^{n_{out}\times n_{in}}$ or ${\bm{b}}\in\mathbb{R}^{n_{out}}$ (i.e., a parameter in a fully-connected layer), we set $\sigma_i$ to $\sqrt{s^2/n_{in}}$ for ${\bm{W}}$ and $\sqrt{s^2/n_{out}}$ for ${\bm{b}}$ where $s$ is a hyperparameter shared across all $i$'s. 
+For all the experiments in \S\ref{sec:main_exp}, we set $s=\sqrt{0.5}$, based on the preliminary experiments in \S\ref{a_sec:perturbation_std}. 
+
+
+In the cases of $\lambda$ and $\xi$, we mainly focus on selecting $\lambda$ while fixing $\xi$ to $1$, because these two loss functions, $\mathcal{L}^{uni}$ and $\mathcal{L}^{iod}$, are intertwined.
+We use $\lambda=0.4$ for all the experiments in \S\ref{sec:main_exp}. With $\lambda=0.4$, we observed in the preliminary experiments that both $\mathcal{L}^{uni}$ and $\mathcal{L}^{sd}$ decrease. See \S\ref{a_sec:lambda_underclass}
+for more details. 
+
+
+\section{Experimental Settings}
+\label{sec:exp_setup}
+
+
+To evaluate our algorithm, we fine-tune deep neural networks on the various binary downstream tasks synthetically created out of existing dataset. Here, we describe the experimental setup.
+
+\paragraph{Datasets and tasks}
+
+We derive binary tasks from MNIST \citep{lecun1998gradient} 
+, using the original labels. For example,
+we can create a binary classification problem, distinguishing odd and even numbers from MNIST which originally has 10 classes (0-9 digits). In this way, we can create $2^{10}-2$ tasks from
+MNIST
+. After we define how to convert the original labels to either 0 or 1, we randomly select $N$ (for training) + $0.2N$ (for validation) instances, which allows us to test the impact of the size of labelled set.  
+We standardize each image to have zero-mean and unit variance across all the examples. We do not use any data augmentation.
+
+\paragraph{Models}
+
+We train a multi-layer perceptron with fully-connected layers, $\texttt{FCN}$, on MNIST
+. $\texttt{FCN}$ has three hidden layers with ReLU \citep{nair2010rectified} nonlinearity. 
+$+\texttt{BN}$ refers to the addition of batch normalization \citep{ioffe2015batch} to all hidden layers before ReLU. Additional details about the network architectures  are included in \S\ref{a_sec:model_archi}.
+
+\paragraph{Baselines}
+
+In order to assess the effectiveness of the proposed approach, we compare it against more conventional approaches to initialization. First, we compare our approach against data-agnostic initialization schemes, including Xavier initialization \citep{glorot2010understanding} and He initialization \citep{he2015delving}.
+We also compare it to \textit{R.label} which refers to a data-dependent initialization scheme proposed by \citet{pondenkandath2018leveraging}. In the case of R.label, we randomly assign labels to the examples in  each mini-batch and minimize the cross entropy loss. Both our initial parameter configuration and R.label's initial parameter configuration are pre-trained on the same number of unlabelled examples for the same maximum number of epochs. For each pre-training run, we choose the parameter configuration based on the pre-training loss.
+See \S\ref{a_sec:pretrain} 
+for more details about the baselines and our pre-training setup.
+
+Orthogonal to these initialization schemes, we also test adding batch normalization to these baseline approaches. It has been observed by some that batch normalization makes learning less sensitive to initialization \citep{ioffe2015batch}. 
+
+\paragraph{Training and evaluation} 
+
+For each initialization scheme, we fine-tune the network by minimizing the cross entropy loss, using Adam \citep{kingma2014adam} with a fixed learning rate of $10^{-3}$ and momentum parameters set to $(\beta_1,\beta_2)=(0.9,0.999)$. We use mini-batches of size 50 and train the network for up to 10 epochs without any regularization. For each binary task, we monitor the validation loss over the epochs and calculate the test accuracy (\%) on 10,000 test examples when the validation loss is at its minimum. We then report the mean and standard deviation of the test accuracy (\%) across 20 random binary tasks. We repeat this whole set of experiments four times, for each setup.
+
+
+
+
+
+
+
+
+
+
+\section{Results}
+\label{sec:main_exp}
+
+\begin{table}[t]
+\caption{We present the average ($\pm$stdev) 
+test scores on MNIST across four random experiments by varying the number of labelled examples ($10N$ for training and $2N$ for validation). We denote the random label pre-training by \textit{R.label}. \textbf{Bold} marks the best score within each column. For all $N$, our initialization approximates various tasks better than the others do. Especially, when the number of labelled examples is small, the improvement is significant. Although both R.label and our initialization use 60,000 unlabelled data, our pre-training is superior to R.label. The positive effect of batch normalization ($+\texttt{BN}$) can be observed with $N=40$, but its effect does not match that of our approach. Compared to $\texttt{FCN}$ trained from scratch, we observe that $+\texttt{BN}$ negatively impacts on the test score when the number of labelled instances is small ($N=5$) while our initialization improves the test score regardless of $N$.
+} 
+\label{tab:mnist_binary}
+\begin{center}
+    \begin{tabular}{ccc|cccc}
+    \hline
+    \multicolumn{1}{c}{\bf Model}&\multicolumn{1}{c}{\bf Init}& \multicolumn{1}{c|}{\bf Pre-trained} &\multicolumn{1}{c}{\bf N=5} &\multicolumn{1}{c}{\bf N=10} &\multicolumn{1}{c}{\bf N=20} &\multicolumn{1}{c}{\bf N=40}
+    \\ 
+    \hline 
+    \hline
+    \texttt{FCN}&Xavier&Ours&\textbf{82.42}$\pm$0.72&85.98$\pm$0.65&\textbf{90.07}$\pm$0.17&92.48$\pm$0.57
+    \\
+    \texttt{FCN}&Xavier&-&79.63$\pm$0.78&83.70$\pm$0.59&87.54$\pm$0.67&90.91$\pm$0.53
+    \\
+    \texttt{FCN}&Xavier&R.label&76.81$\pm$2.13&83.34$\pm$0.79&87.53$\pm$0.91&90.88$\pm$0.52
+    \\
+    \texttt{FCN}+\texttt{BN}&Xavier&-&77.09$\pm$1.22&83.50$\pm$0.44&88.00$\pm$0.60&91.48$\pm$0.53
+    \\
+    \texttt{FCN}+\texttt{BN}&Xavier&R.label&78.87$\pm$1.75&84.38$\pm$0.97&88.71$\pm$0.53&91.57$\pm$0.59
+    \\
+    \hline
+    \texttt{FCN}&He&Ours&82.27$\pm$0.78&\textbf{86.46}$\pm$0.37&89.69$\pm$0.28&\textbf{92.61}$\pm$0.51
+    \\
+    \texttt{FCN}&He&-&79.17$\pm$1.21&83.41$\pm$0.92&87.96$\pm$0.64&91.34$\pm$0.37
+    \\
+    \texttt{FCN}&He&R.label&77.41$\pm$2.09&83.52$\pm$0.77&87.31$\pm$0.68&90.66$\pm$0.41
+    \\
+    \texttt{FCN}+\texttt{BN}&He&-&76.89$\pm$1.48&83.01$\pm$0.98&88.01$\pm$0.66&91.55$\pm$0.57
+    \\
+    \texttt{FCN}+\texttt{BN}&He&R.label&78.82$\pm$0.78&85.33$\pm$0.62&89.15$\pm$0.68&92.14$\pm$0.67
+    \\ 
+    \hline
+\end{tabular}
+\end{center}
+\end{table}
+
+\begin{table}[t]
+\caption{We additionally demonstrate the standard deviation of test scores across 20 binary random tasks derived from MNIST by varying the number of labelled examples ($10N$ for training and $2N$ for validation). This metric measures the ability to solve most of tasks well (lower is better). We perform four random runs and report the average standard deviation. Here, ($\pm$stdev) means the standard deviation across four random experiments. We denote the random label pre-training by \textit{R.label}. \textbf{Bold} marks the best score within each column. Similar to Table \ref{tab:mnist_binary}, our initialization solves most of tasks well even if there are a small number of labelled examples. Both $+\texttt{BN}$ and R.label can hurts the performance to approximate various tasks when the number of labelled instances is small (N=5).
+} 
+
+\label{tab:mnist_binary_std}
+\begin{center}
+    \begin{tabular}{ccc|cccc}
+    \hline
+    \multicolumn{1}{c}{\bf Model}&\multicolumn{1}{c}{\bf Init}& \multicolumn{1}{c|}{\bf Pre-trained} &\multicolumn{1}{c}{\bf N=5} &\multicolumn{1}{c}{\bf N=10} &\multicolumn{1}{c}{\bf N=20} &\multicolumn{1}{c}{\bf N=40}
+    \\
+    \hline 
+    \hline
+    \texttt{FCN}&Xavier&Ours&\textbf{4.76}$\pm$0.88 & 4.54$\pm$0.52 & \textbf{3.01}$\pm$0.71 & 2.26$\pm$0.40
+    \\
+    \texttt{FCN}&Xavier&-&6.62$\pm$1.29&5.55$\pm$0.62&3.54$\pm$0.27&2.65$\pm$0.53
+    \\
+    \texttt{FCN}&Xavier&R.label&6.08$\pm$0.92&5.02$\pm$1.16&3.82$\pm$0.23&2.78$\pm$0.49
+    \\
+    \texttt{FCN}+\texttt{BN}&Xavier&-&7.47$\pm$1.70&5.53$\pm$0.69&3.72$\pm$0.78&2.72$\pm$0.32
+    \\
+    \texttt{FCN}+\texttt{BN}&Xavier&R.label&6.62$\pm$1.50&5.44$\pm$0.33&3.20$\pm$0.41&2.40$\pm$0.37
+    \\
+    \hline
+    \texttt{FCN}&He&Ours&5.26$\pm$0.87&\textbf{4.04}$\pm$0.80 & 3.25$\pm$0.42 & \textbf{2.16}$\pm$0.40
+    \\
+    \texttt{FCN}&He&-&5.74$\pm$0.81&5.32$\pm$0.45&3.31$\pm$0.48&2.47$\pm$0.31
+    \\
+    \texttt{FCN}&He&R.label&6.37$\pm$1.10&4.84$\pm$1.02&3.98$\pm$0.44&3.03$\pm$0.85
+    \\
+    \texttt{FCN}+\texttt{BN}&He&-&7.52$\pm$0.76&6.50$\pm$1.76&3.59$\pm$0.80&2.74$\pm$0.41
+    \\
+    \texttt{FCN}+\texttt{BN}&He&R.label&7.33$\pm$1.10&4.95$\pm$1.08&3.18$\pm$0.55&2.30$\pm$0.28
+    \\ 
+    \hline
+\end{tabular}
+\end{center}
+\end{table}
+
+
+Table~\ref{tab:mnist_binary} shows that the average test scores on 20 random binary tasks across 4 random runs. The 20 binary tasks for each run is the same regardless of model, initialization, and pre-training. Pre-training $\texttt{FCN}$ with 60,000 unlabelled examples by our algorithm improves average test accuracy across 20 random tasks compared to that of training $\texttt{FCN}$ from scratch, and this improvement is greater than the number of labelled instances is small. Furthermore, our test scores are better than all the schemes applied to $\texttt{FCN}+\texttt{BN}$ which has more parameters than $\texttt{FCN}$. Both R.label and $+\texttt{BN}$ bring the positive effect when the number of labelled examples is sufficient (N=40). However,  for $N=5$, both hurt the test performance of the randomly initialized plain network.
+
+We also present the standard deviation of test scores across 20 binary random tasks created from MNIST in Table \ref{tab:mnist_binary_std}. Similar to Table \ref{tab:mnist_binary}, our initialization improves the ability to solve most of downstream tasks, and this improvement is greater when the number of labelled instances is small. We also observe R.label and $+\texttt{BN}$ can hurt this ability in terms of the standard deviation for $N=5$. 
+
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+In this paper we proposed a novel criterion for identifying good initialization of parameters in deep neural networks. This criterion looks at the distribution over models derived from parameter configurations in the vicinity of an initial parameter configuration. If this distribution is close to a uniform distribution, the initial parameters are considered good, since we can easily reach any possible solution rapidly from there on. 
+
+We then derived an unsupervised initialization algorithm based on this criterion. In addition to maximizing this uniformity,
+our algorithm
+prevents two degenerate cases; (1) degenerate softmax and (2) input-output detachment. 
+Our experiments reveal that 
+the model initialized by our algorithm can be trained better than the one trained from scratch, in terms of average test accuracy across a diverse set of tasks. This improvement was found to be comparable to or better than random label pre-training \citep{pondenkandath2018leveraging, maennel2020neural} and batch normalization \citep{ioffe2015batch} combined with typical initialization strategies. 
+
+The effectiveness of the proposed approach leaves us with one puzzling question. The proposed algorithm does not take into account the use of gradient-based optimization, unlike model-agnostic meta-learning \citep{finn2017model}, and it could still find initial parameters that were amenable to gradient-based fine-tuning. This raises a question on the relative importance between initialization and the choice of optimizer in deep learning. We leave this question for the future.
+
+
+
+
+\subsubsection*{Acknowledgments}
+This work was supported by 42dot, Hyundai Motor Company (under the project Uncertainty in Neural Sequence Modeling), Samsung Advanced Institute of Technology (under the project Next Generation Deep Learning: From Pattern Recognition to AI), and NSF Award 1922658 NRT-HDR: FUTURE Foundations, Translation, and Responsibility for Data Science. This work was supported in part through the NYU IT High Performance Computing resources, services, and staff expertise.
+
+

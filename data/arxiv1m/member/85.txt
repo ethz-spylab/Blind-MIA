@@ -1,0 +1,683 @@
+
+\section{Todo for revision}
+
+\section{Introduction}
+
+ Zero-shot cross-lingual transfer is the ability of a model to learn from labeled data in one language and transfer the learning to another language without any labeled data. Transformer ~\cite{NIPS2017_3f5ee243} based multilingual models pre-trained on unlabeled data from multiple languages are the state-of-the-art means for cross-lingual transfer \cite{ruder-etal-2019-transfer,Devlin2019}. While pre-training based cross-lingual transfer holds great promise for low web-resource languages (LRLs), such techniques are found to be more effective for transfer within high web-resource languages (HRLs) \cite{wu-dredze-2020-languages}.
+ 
+ Vocabulary generation is an important step in multilingual model training, where vocabulary size directly impacts model capacity. Usually, the vocabulary is generated from a union of HRL{} and LRL{} data. This often results in under-allocation of vocabulary bandwidth to LRL{}s, as LRL{} data is significantly smaller in size compared to HRL{}. This under-allocation of model capacity results in lower LRL{} performance \cite{wu-dredze-2020-languages}, as mentioned previously. In response, prior research has explored development of region-specific models \cite{antoun2020arabert,khanuja2021muril}, generating vocabulary specific to language clusters \cite{chung-etal-2020-improving}, and exploring relatedness among languages to build better LMs for LRL{}s \cite{khemchandani-etal-2021-exploiting}. However, none of these methods have utilized relatedness among languages for better vocabulary generation during multilingual pre-training.
+ 
+
+
+
+
+
+\begin{table}[!t]
+    \centering
+    \resizebox{\linewidth}{!}{
+    \begin{tabular}{|p{2.5cm}|p{6cm}|} \hline
+        Language and Token frequencies & English: {\color{red}Universit}y (10), versity (6); German: {\color{red}Universit}aten (2); Dutch: {\color{red}Universit}eit (1); Western Frisian: {\color{red}Universit}eiten (1) \\
+        
+         \hline
+         Starting Vocab & Uni, versit, U,n,i,v,e,r,s,i,t,y,a \\ 
+         \hline
+         BPE Vocab & versity,  Uni, versit, U,n,i,v,e,r,s,i,t,y,a \\ \hline
+         \textsc{OBPE}{} Vocab & {\color{red}Universit}, Uni, versit, U,n,i,v,e,r,s,i,t,y,a  \\ 
+         \hline
+       
+       
+    \end{tabular}
+    }
+    \caption{\label{tab:overlap-example}First row shows lexically overlapping tokens in four different languages with their corpus frequencies (in brackets), with English (En) as the High Web-Resource Language (HRL{}). From a starting vocabulary shown in the second row, BPE merges tokens based on greater overall frequency, adding new vocabulary item \textit{versity} as it has the highest overall frequency (16). \textsc{OBPE}{} instead adds \textit{Universit} since it also rewards cross-lingual overlap, even though \textit{Universit} has lower overall frequency (15). 
+    }
+   
+\end{table}
+
+
+
+
+
+ 
+
+In this paper, we hypothesize that exploiting language relatedness can result in an overall more effective vocabulary, which is also better representative of LRLs.
+Closely related languages (e.g., languages belonging to a single family) have common origins for words with similar meanings. We show some examples across three different families of related languages in Table~\ref{tab:overlap-exampleAll}.
+Morphological inflections of the root word lead to lexically overlapping tokens across languages. Learning representations for such subwords in lexically overlapping words
+    shared across HRL and its related LRLs can enable better transfer of supervision from HRL to LRLs.
+    During Masked Language Modelling (MLM) pretraining \cite{Devlin2019}, the shared tokens can serve as anchors in learning contextual representations of neighboring tokens. However, choosing the correct granularity of sharing automatically is tricky.  On one extreme, we can choose a vocabulary which  favours longer units frequent in HRL without regard for sharing,
+    thereby leading to better semantic representation of the tokens but no cross-lingual transfer. On the other extreme, we can choose character-level vocabulary \cite{ma-etal-2020-charbert}, where every token is shared across languages but have no semantic significance.  
+    
+    
+    %
+    Given
+    text from a mix of high and low Web-resource languages (HRL and LRL, respectively), Byte Pair Encoding (BPE)~\cite{sennrich-etal-2016-neural} and  its variants like Wordpiece \cite{schuster2012japanese} and Sentencepiece \cite{kudo-richardson-2018-sentencepiece}
+    prefer frequent tokens, most of those
+    from the HRLs.
+    This would cause most long HRL tokens to get included, leaving only a limited budget of short tokens for the LRL. Any sub-token level overlap between HRL and LRL could get lost in this process.  In a zero-shot setting, since available supervision is HRL based, this creates a bottleneck when transferring supervision from HRL to LRLs.  Oversampling LRLs is a common strategy to offset this imbalance but that hurts HRL performance as shown in  \cite{conneau-etal-2020-unsupervised}.
+   
+   
+    
+   In this paper, we propose Overlap BPE (\textsc{OBPE}{}). \textsc{OBPE}{} chooses a vocabulary
+   
+    %
+   
+    by giving token overlap among HRL and LRLs a primary consideration. \textsc{OBPE}{}  prefers vocabulary units which are shared across multiple languages, while also encoding the input corpora compactly. Thus, \textsc{OBPE}{} tries to balance the trade-off between cross-lingual subword sharing and the need for robust representation of individual languages in the vocabulary. This results in a more balanced vocabulary, resulting in improved performance for LRLs without hurting HRL accuracy. Table~\ref{tab:overlap-example} shows an example to highlight this difference between \textsc{OBPE}\ and BPE.
+    
+
+
+
+
+Recently ~\citet{K2020Cross-Lingual,conneau-etal-2020-emerging} concluded that token overlap  is unimportant for cross-lingual transfer. However, they studied language pairs where either both languages had a large corpus, or where the languages were not sufficiently related.  We focus on related languages within a family and observe drastic drop in zero-shot accuracy when we synthetically reduce the overlap to zero (58\% F1 drops to 17\% for NER, 71\% drops to 30\% for text classification). 
+
+This paper offers the following contributions
+\begin{itemize}
+\item
+We present \textsc{OBPE}{}, a simple yet effective modification to the popular BPE algorithm to promote overlap between LRLs and a related HRL during vocabulary generation. \textsc{OBPE}{} uses a generalized mean based formulation to quantify token overlap among languages.
+
+\item
+We evaluate \textsc{OBPE}{} on twelve languages across three related families, and show consistent improvement in zero-shot transfer over state-of-the art
+baselines on four NLP tasks.
+We analyse the reasons behind the gains obtained by OBPE and show that OBPE increases the percentage of LRL tokens in the vocabulary without reducing HRL tokens. This is unlike over-sampling strategies where increasing one reduces the other.
+
+\item
+Through controlled experiments on the amount of token overlap on a related HRL-LRL pair, we show that token overlap is extremely important in the low-resource, related language setting.  Recent literature which  conclude that token overlap is unimportant may have overlooked this important setting.
+\end{itemize}
+
+The source code for our experiments is available
+at  \href{https://github.com/Vaidehi99/OBPE}{https://github.com/Vaidehi99/OBPE}.
+
+
+
+\section{Related Work}
+Transformer-based multilingual language models such as mBERT \cite{devlin-etal-2019-bert} and XLM-R \cite{conneau-etal-2020-unsupervised} are now established as the de-facto method for  zero-shot cross-lingual transferability, and thus hold  promise for low resource domains.  
+However, recent studies have indicated
+that even the current state-of-the-art models such
+as XLM-R (Large) do not yield reasonable
+transfer performance across low resource target languages with limited data~\cite{wu-dredze-2020-languages}.
+This has led to a surge of interest in enhancing cross-lingual transfer of multilingual models to the low-resource setting. We categorize existing work based on the stage of the pre-training pipeline where it is relevant:
+
+\noindent{\bf Input Data}
+In the data creation stage, \citet{conneau-etal-2020-unsupervised} propose over-sampling of LRL documents to improve LRL representation in the vocabulary and pre-training steps. \citet{khemchandani-etal-2021-exploiting} specifically target related languages and propose transliteration of LRL documents to the script of related HRL for greater lexical overlap. We deploy both these tricks in this paper.
+
+\noindent{\bf Tokenization}
+\citet{rust-etal-2021-good} study that even the tokenization step could have a crucial impact on performance accrued to each language in a multilingual models.  They propose the use of dedicated tokenizer for each language instead of  the automatically generated multilingual mBERT tokenizer.  However, they continue to use the default mBERT vocabulary generator.
+
+\noindent{\bf Vocabulary Generation}
+\citet{sennrich-etal-2016-neural} highlighted the importance of subword tokens in the vocabulary and proposed use of the  BPE algorithm~\cite{gage1994new} for efficiently growing such a vocabulary incrementally.  Variants like Wordpiece \cite{schuster2012japanese} and Sentencepiece \cite{kudo-richardson-2018-sentencepiece} either build on top of BPE or follow a very similar process. 
+\citet{kudo-2018-subword} is a variant method that chooses tokens based on unigram LM score.  We obtained better results with BPE and continued with that. All these BPE variants incrementally add subwords based on overall frequency in the combined corpus, and they all ignore language boundaries.
+\citet{chung-etal-2020-improving} observed that such a combined approach could under-represent several languages, and proposed instead to separately create vocabularies for clusters of related languages and take a union of each cluster-specific vocabulary. However, within each cluster they continue to use the default vocabulary generator.  Our approach can be used as a drop-in replacement to further enhance the quality of the cluster-specific vocabulary that they obtain.
+\citet{wang2018multilingual,gao-etal-2020-improving} propose a soft-decoupled encoding approach for exploiting subword overlap between LRLs and HRLs. However, their focus is NMT models and does not easily integrate in existing multilingual models such as mBERT.  \cite{maronikolakis-etal-2021-wine-v} targets tokenization compatibility based purely on vocabulary size and does not focus on choosing the tokens that go in the vocabulary.
+
+  
+
+
+\noindent{\bf Pre-Training and Adaptation}
+Several previous works have proposed to include additional alignment loss between parallel~\cite{DBLP:conf/iclr/CaoKK20} or pseudo-parallel~\cite{khemchandani-etal-2021-exploiting} sentences to co-embed HRLs and LRLs. Another approach is to design language-specific Adapter layers~\cite{pfeiffer-etal-2020-adapterhub, pfeiffer-etal-2020-mad,artetxe-etal-2020-cross,ustun-etal-2020-udapter} that can be easily fine-tuned for each new language. 
+~\citet{pfeiffer-etal-2021-unks} leverages the pre-trained embeddings of lexically overlapping tokens between the vocabulary of pre-trained model and that of unseen target language to initialize the corresponding embeddings of target language. However, they did not attempt to increase the fraction of such tokens in the vocabulary. 
+
+
+
+
+We are not aware of any prior work that explicitly promotes overlapping tokens between LRLs and HRLs in the vocabulary of multilingual models.
+
+
+
+
+
+
+
+\section{Overlap-based Vocabulary Generation}
+We are given monolingual data ${D_{1},...,D_n}$ in a set of  $n$ languages $\mathcal{L}=\{{L_{1},...,L_n}\}$ and a vocabulary budget $\text{V}$.  Our goal is to generate a vocabulary $\mathcal{V}$ that when used to tokenize each $D_i$ in a multilingual model would provide cross-lingual transfer to LRL s from related HRL s. We use $\cL_\text{\lrl}$ to denote the subset of the $n$ languages that are low-resource, the remaining languages $\mathcal{L}-\cL_\text{\lrl}$ are denoted as the set $\cL_\text{\hrl}$ of high resource languages.
+
+Existing methods of vocabulary creation start with a  union $D$ of monolingual data ${D_{1},...,D_n}$, and choose a vocabulary $\mathcal{V}$ that most compactly represents $D$.  We first present an overview of BPE, a popular algorithm for vocabulary generation
+\subsection{Background: BPE}
+Byte Pair Encoding (BPE) \cite{gage1994new} is a simple data compression technique that chooses a vocabulary $\mathcal{V}$ that minimizes total size of $D=\cup_i D_i$ when encoded using $\mathcal{V}$.
+\begin{equation}
+\label{eq:bpe:goal}
+\mathcal{V} = \argmin\limits_{S: |S|=\text{V}}\sum_{i=1}^n \lvert \text{encode}(D_{i},S) \rvert
+\end{equation}
+ The size of the encoding $\lvert \text{encode}(D_{i},S) \rvert$ can be alternately expressed as the sum of frequency of tokens in  $S$ when $D_i$ is tokenized using $S$. 
+This motivates the following efficient greedy algorithm to implement the above optimization~\cite{sennrich-etal-2016-neural}. Let $f_{ki}$ denote the frequency of a candidate token $k$ in the corpus $D_i$ of language $L_i$.
+The BPE algorithm grows $\mathcal{V}$ incrementally. Initially, $\mathcal{V}$ comprises of characters in $D$. Then, until $|\mathcal{V}| \le \text{V}$, it chooses  the token $k$ obtained by merging two existing tokens in $\mathcal{V}$ for which the frequency in $D$ is maximum.
+\vspace{-0.3cm}
+\begin{equation}
+\label{eq:bpe:step}
+\mathcal{V} = \mathcal{V} \cup arg\,max_{k=[u,v]:u,v\in \mathcal{V}} \sum_i f_{ki}
+\end{equation}
+A limitation of BPE on multilingual data is that tokens that appear largely in low-resource $D_i$ may not get added to $\mathcal{V}$, leading to sentences in $L_i$ being over-tokenized.
+For a low resource language, the available monolingual data  $D_i$ is often orders of magnitude smaller than another high-resource language.  Models like mBERT and XLM-R address this limitation by over-sampling documents of low-resource languages. However, over-sampling LRL s might compromise learned representation of HRL s where task-specific labeled data is available.  
+We propose an alternative strategy of vocabulary generation called \textsc{OBPE}{} that seeks to maximize transfer from HRL\ to LRL.  
+
+
+
+
+
+
+
+
+
+
+
+
+
+\begin{algorithm}[t]
+\begin{small}
+\caption{Overlap based BPE (\textsc{OBPE}{})}
+\begin{algorithmic} 
+\For{$i \in \{1,2,...,n\}$}
+\State Split words in $D_{i}$ into characters $C_{i}$ with a special marker after every word
+\EndFor\\
+$\mathcal{V}$ = $\cup_{i=1}^n C_{i}$
+\While{$\lvert\mathcal{V}\rvert < \text{V}$}
+\State Update token and pair frequency on $\{D_i\},\mathcal{V}$
+\State  Add to $\mathcal{V}$ token $k$ formed by merging pairs $u,v \in \mathcal{V}$ \hspace{1cm}with the largest value of
+\vspace{-0.5cm}
+\begin{equation*}
+    (1-\alpha)\sum_{j}f_{kj} + \alpha\sum\limits_{i\in \cL_\text{\lrl}{}}\max\limits_{h \in \cL_\text{\hrl}{}}\left(\frac{f^p_{ki} +  f^p_{kh}}{2}\right)^{\frac{1}{p}}
+\end{equation*}
+\EndWhile
+
+\end{algorithmic}
+\end{small}
+\end{algorithm}
+\subsection{Our Proposal: OBPE}
+The key idea in OBPE{} is to maximize the overlap between an LRL\ and a closely related HRL\ while simultaneously encoding the input corpora compactly as in BPE.  When labeled data $D^T_h$ for a task $T$ is available in an HRL\ $L_h$, then a multilingual model fine-tuned with $D^T_h$ is likely to transfer better to a related LRL\ $L_i$ when $L_i$ and $L_h$ share several tokens in common. Thus, the objective  that OBPE\ seeks to optimize when creating a vocabulary is:
+\begin{equation}
+\begin{aligned}
+\label{eq:obpe:goal}
+    \mathcal{V} =  & \argmin  \limits_{S: |S|=\text{V}} \left[ (1-\alpha) \sum_{i=1}^n \lvert \text{encode}(D_{i},S) \rvert  \right. \\ &-\left. \alpha\sum\limits_{i\in \cL_\text{\lrl}}\max\limits_{j\in \cL_\text{\hrl}}\text{overlap}(L_{i}, L_{j}, S) \right]
+\end{aligned}
+\end{equation}
+
+
+where $0 \le \alpha \le 1$ determines importance of the two terms. The first term in the objective compactly represents the total corpus, as in BPE's (Eq~\eqref{eq:bpe:goal}).  The second term additionally biases towards vocabulary with greater overlap of each LRL to one HRL\ where we expect task-specific labeled data to be present.  There are several ways in which we can measure the overlap between two languages with respect to a current vocabulary.  First, we encode each of $D_i$ and $D_j$ using the vocabulary $S$, which then yields a multiset of tokens in each corpus.  Inspired by the literature on fair allocation~\cite{barman2021universal}, we explore a continuously parameterized function that expresses overlap between two languages' encoding as a generalized mean function as follows: 
+\begin{equation}
+    \text{overlap}(L_{i}, L_{h}, S) = \sum_{k \in S} \left(\frac{f_{ki}^{p} + f_{kh}^{p}}{2}\right)^\frac{1}{p},~~p \le 1
+\label{Bilingual overlap defn}
+\end{equation}
+where $f_{ki}$ denotes  the frequency of token $k$ when $D_i$ is encoded with $S$. For different values of $p$, we get different tradeoffs between fairness to each language and overall goodness. When $p=-\infty$, generalized mean reduces to the minimum function, and we get the most egalitarian allocation.  However, this ignores the larger of the two frequencies.  When $p=1$, we get a simple average which is what the first term in Equation~\eqref{eq:obpe:goal} already covers. For $p=0,-1$, we get the geometric and harmonic means respectively. Due to smaller size of LRL monolingual data, the frequency of a token which is shared across languages is likely to be much higher in HRL monolingual data as compared to that in LRL monolingual data, Hence, setting $p$ to large negative values will increase the weight given to LRLs and thus increase overlap.  We will present an exploration of the effect of $p$ on zero-shot transfer in the experiment section.
+
+
+
+\begin{table*}[h]
+\begin{small}
+    \centering
+    \begin{tabular}{|l|l|l|r|r|} \hline
+        Family & HRL & LRLs & \multicolumn{2}{|c|}{Number of HRL Docs} \\
+       
+         & & & {\sc balanced} & {\sc skewed} \\ \hline
+                 West Germanic & English (en) & German (de), Dutch (nl), Western\ Frisian (fy) & 0.16M & 1.00M  \\ \hline
+                 Romance & French (fr) & Spanish (es), Portuguese (pt), Italian (it)  & 0.16M & 0.50M \\ \hline
+                  Indo-Aryan & Hindi (hi) & Marathi (mr), Punjabi (pa), Gujarati (gu) & 0.16M & 0.16M \\ \hline
+    \end{tabular}
+    \caption{Twelve Languages \emph{simulated} as HRLs and LRLs across with two different corpus distribution: {\sc balanced}\ and {\sc skewed}. Number of documents in languages simulated as LRLs is 20K.}
+    \label{tab:langs}
+    \end{small}
+\end{table*}
+The greedy version of the above objective that controls the
+candidate vocabulary item to be
+inducted in each iteration of OBPE is thus:
+\begin{equation}
+\label{eq:obpe:step}
+\begin{split}
+    \mathcal{V} = \mathcal{V} \cup arg\,max_{k=[u,v]:u,v\in \mathcal{V}} 
+    (1-\alpha)\sum_{j}f_{kj} \\ + \alpha\sum_{i\in \cL_\text{\lrl}}\max_{h \in \cL_\text{\hrl}}\left(\frac{f_{ki}^{p} + f_{kh}^{p}}{2}\right)^\frac{1}{p}
+\end{split}
+\end{equation}
+The data structure maintained by BPE to efficiently conduct such merges can be applied with little changes to the OBPE algorithm.  The only difference is that we need to separately maintain the frequency in each language in addition to overall frequency. Since the time and resources used to create the vocabulary is significantly smaller than the model pre-training time, this additional overhead to the  pre-training step is negligible.
+
+
+
+
+
+
+
+
+
+
+
+
+\section{Experiments}
+\label{sec:expts}
+
+We evaluate by measuring the efficacy of zero-shot transfer from the HRL\ on four different tasks: named entity recognition
+(NER), part of speech tagging (POS), text classification(TC), and  Cross-lingual Natural Language Inference (XNLI).  
+Through our experiments, we evaluate the following questions: 
+\begin{enumerate}
+    \item  Is OBPE more effective than BPE for zero-shot transfer? (\refsec{sec:effective-obpe})
+   
+   
+   
+   
+    \item What is the effect of token overlap on overall accuracy? (\refsec{sec:analysis})
+    \item How does increased LRL representation in the vocabulary impact accuracy? (\refsec{sec:samp})
+   
+   
+   
+  
+   
+    
+   
+    \end{enumerate}
+We report additional ablation and analysis experiments in  \refsec{sec:ablation}.
+
+
+\noindent
+\subsection{Setup}
+{\bf Pre-training Data and Languages}
+As our pre-training dataset $\{D_i\}$,  we use
+the Wikipedia dumps of all the languages as used in mBERT. We pre-train with 12 languages grouped into three families of four related languages as shown in Table~\ref{tab:langs}. In each family, we simulate as HRL the most populous language, and call the remaining as LRLs. The number of documents for languages simulated as LRLs is set to 20K. For the HRLs, we consider two corpus distributions:
+\begin{itemize}
+    \item {\sc balanced}\ : all three HRLs get 160K documents each
+    \item {\sc skewed}\ : English gets one million, French half million, and Hindi 160K documents
+\end{itemize}
+We evaluate twelve-language models in each of these settings, and present results for separate four language models per family in Table \ref{tab:4_lang} in the Appendix.  For the Indo-Aryan languages set, the monolingual data of Punjabi and Gujarati is transliterated to Devanagari, the script of Hindi and Marathi. We use libindic’s indictrans library ~\cite{Bhat:2014:ISS:2824864.2824872} for
+transliteration. Languages in the other two sets do not require transliteration as they have a common script. Thus, all four languages in each set are in the same script so their lexical overlap can be leveraged.
+
+
+
+
+
+\begin{table}[t]
+    \centering
+    \resizebox{\linewidth}{!}{
+    \begin{tabular}{|l|l|r|r|r|r|}
+    \hline
+        \multirow{3}{*}{Dataset split} & Lang & \multicolumn{4}{|c|}{Number of sentences} \\ \hline
+        ~ & ~ & NER & POS & TC & XNLI \\ \hline
+        \multirow{3}{*}{Train:HRL} & hi & 5.0 & 53.0 & 25.0 & ~ \\ 
+        & en & 10.5 & 18.0 & 10.0 & 393.0 \\ 
+        & fr & 7.5 & 16.5 & 10.0 & 393.0 \\ \hline
+        \multirow{3}{*}{Validation:HRL} & hi & 1.0 & 3.0 & 4.0 & \\
+        ~ & en & 6.0 & 4.0 & 10.0 & 2.5 \\ 
+        ~ & fr & 4.0 & 2.0 & 10.0 & 2.5 \\ \hline
+        \multirow{3}{*}{Test data} & hi & 0.2 & 12.0 & 7.0 & ~ \\ 
+        ~ & en & 6.0 & 4.6 & 10.0 & 5.0 \\ 
+        ~ & fr & 4.0 & 4.1 & 10 & 5.0 \\ 
+        ~ & mr & 0.8 & 9.5 & 6.5 & - \\ 
+        ~ & pa & 0.2 & 13.4 & 7.9 & - \\ 
+        ~ & gu & 0.3 & 14.0 & 8.0 & - \\
+        ~ & de & 12.0 & 19.3 & 10.0 & 5.0 \\
+        ~ & nl & 8.0 & 1.0 & - & - \\ 
+        ~ & fy & 0.8 & - & - & - \\ 
+        ~ & es & 5.0 & 3.1 & 10.0 & 5.0 \\ 
+        ~ & pt & 4.0 & 2.5 & - & - \\
+        ~ & it & 5.0 & 3.4 & - & - \\ \hline
+    \end{tabular}
+    }
+    \caption{\label{tab:task:stats}Task-specific data sizes. Number of sentences in thousands.}
+\end{table}
+\noindent
+{\bf Pre-Training Details}
+To ensure that LRLs are not under-represented, we over-sample using exponentially smoothed weighting similar to multilingual BERT \cite{devlin-etal-2019-bert} with exponentiation factor
+0.7. We perform MLM pretraining on a BERT base model with 110M parameters from scratch. We generate a vocabulary of size of 30k.
+We chose batch size as 2048, learning rate as 3e-5 and maximum sequence length as 128.  Pre-training of BERT
+was done with duplication factor 5 for
+for 64k iterations for HRLs.
+For all LRLs, duplication factor was 20 and training was done for 24K iterations. MLM pre-training was done on Google
+v3-8 Cloud TPUs where 10K iterations required 2.1 TPU hours.
+
+
+
+\begin{table*}[!ht]
+    \centering
+    \begin{adjustbox}{max width=1.0\textwidth,center}
+    \begin{tabular}{|l|l| l|l| l|l |l|l |l|}
+    \hline
+        \multirow{2}{*}{Method} & \multicolumn{4}{c|}{LRL Performance ($\uparrow$)} &\multicolumn{4}{c|}{HRL Performance ($\uparrow$)} \\ 
+        & NER & TC & XNLI & POS & NER & TC & XNLI & POS \\
+        \hline
+        BPE \cite{sennrich-etal-2016-neural} & 64.48 & 65.52 & 52.07 & 84.64  & 83.26 
+        & \textbf{82.07} 
+        & 62.71 
+        & \textbf{95.20} 
+         \\ 
+        BPE-dp \cite{provilkov-etal-2020-bpe} & 63.92 & 64.15 & 52.66 & 84.75  & 81.73 
+        & 81.07 
+        & 63.74 
+        & 94.61
+        \\
+       
+       
+       
+       
+       
+       
+       
+       
+       
+        
+        CV \cite{chung-etal-2020-improving}  & 59.58  & 61.91  & 49.30  & 81.68 & 81.15 & 80.93& 64.51 & 94.47
+        \\ 
+        TokComp \cite{maronikolakis-etal-2021-wine-v}  & 63.79  & 65.77  & 53.94  & \textbf{85.49} & 82.43 & 80.93& 66.10 & 94.86
+        \\ 
+       
+        {\textsc{OBPE}{} (This paper)}  & \textbf{65.72}& \textbf{68.02} & \textbf{54.03}  & 85.26 
+        & \textbf{83.98}  & 81.91  & \textbf{66.27} & 95.09\\
+       
+      
+   
+    \hline
+    \end{tabular}
+    \end{adjustbox}
+        \caption{Zero-shot performance of models in the Balanced-12 setting trained on 9 LRL and 3 HRL languages. Performance is measured on four tasks: NER (F1), Text Classification (Accuracy), POS (Accuracy), and XNLI (Accuracy). For all metrics, higher is better ($\uparrow$). Zero-shot transfer to LRL improves  without hurting HRL\ accuracy. P-value of paired-t-test between BPE and OBPE LRL gains has values $0.01,0.04, 0.02,0.01$ for each of the 4 tasks establishing statistical significance. Detailed results for each language is pesented in Table~\ref{tab:varying_p}. \refsec{sec:effective-obpe} has further discussion.}
+         \label{tab:overall} 
+\end{table*}
+
+\begin{table*}[htb]
+    \centering
+    \begin{adjustbox}{max width=1.1\textwidth,center}
+    \begin{tabular}{|l|l| l|l| l|l |l|l |l|}
+    \hline
+        \multirow{2}{*}{Method} & \multicolumn{4}{c|}{LRL Performance ($\uparrow$)} &\multicolumn{4}{c|}{HRL Performance ($\uparrow$)} \\  
+        & NER & TC & XNLI & POS & NER & TC & XNLI & POS \\
+        \hline
+        BPE \cite{sennrich-etal-2016-neural} & 52.91 & 51.68 & 48.57 & 74.79  & 81.78 
+        & 80.04
+        & 64.96 
+        & 95.03
+         \\ 
+        CV \cite{chung-etal-2020-improving}  & 52.73 & 54.40 & 44.28  & 76.70
+        & 79.84 & 77.74  & 57.18 & 94.60
+        \\ 
+       
+        {\textsc{OBPE}{}\ (This paper)}  & {\bf 55.09} & {\bf 55.37} & {\bf 50.01}  & {\bf 75.05} & {\bf 82.94} & {\bf 80.31} & {\bf 65.57} & {\bf 95.09}\\
+     \hline
+    \end{tabular}
+    \end{adjustbox}
+        \caption{Zero-shot performance of models in the Skewed-12 setting of Table~\ref{tab:langs} on same four tasks as Table~\ref{tab:overall}. \textsc{OBPE}{} shows gains here too. Detailed numbers in Table~\ref{tab:12_lang:skew} of Supplementary.  \refsec{sec:effective-obpe} has further discussion.}
+        \label{tab:overall:skew}
+\end{table*}
+
+
+
+\noindent
+{\bf Task-specific Data} We evaluate on four down-stream tasks: (1) NER: data from WikiANN
+\cite{pan-etal-2017-cross} and XTREME \cite{pmlr-v119-hu20b}, (2) XNLI: data from \cite{conneau-etal-2018-xnli},  (3) POS: data from XTREME \cite{pmlr-v119-hu20b} and TDIL\footnote{Technology Development for Indian Languages
+(TDIL), https://www.tdil-dc.in},  and (4) Text Classification (TC): data from TDIL and XGLUE \cite{liang-etal-2020-xglue}. We downsampled the  
+TDIL data for each
+language to make them class-balanced. The POS
+tagset for Indo-Aryan languages used was the BIS Tagset \cite{sardesai-etal-2012-bis}. Table~\ref{tab:task:stats} presents a summary.
+The test set to compute LRL perplexity was formed by sampling 10K sentences from Samanantar corpus\cite{ramesh2021samanantar} for Indic languages and from Tatoeba corpus\footnote{Tatoeba
+, https://tatoeba.org} for other languages. The perplexity reported for a language is the average of sentence perplexity over all the sentences sampled from that language's corpus.\\
+\noindent
+{\bf Task-specific fine-tuning details}
+We perform task-specific fine-tuning of pre-trained BERT on the task-specific training data of HRL\ and evaluate on all languages in the same family. Here we used
+learning-rate 2e-5 and batch size 32, with training duration as 16 epochs for NER, 8 epochs for
+POS and 3200 iterations for Text Classification and XNLI. The models were evaluated on a separate validation dataset of the HRL and the model with the minimum validation loss, maximum F1-score, accuracy and minimum validation loss was selected
+for final evaluation for XNLI, NER, POS and Text Classification respectively. All fine-tuning experiments
+were performed on Google Colaboratory. 
+The results
+reported for all the experiments are an average of 3
+independent runs. 
+
+
+
+
+
+
+
+
+
+
+
+    
+    
+
+
+
+
+\subsection{Effectiveness of \textsc{OBPE}{}}
+\label{sec:effective-obpe}
+We evaluate the impact of \textsc{OBPE}{} on improving zero-shot transfer from HRLs to LRLs within the same family across four different tasks.  We compare with four
+existing methods that represent different methods of vocabulary creation and allocation of budget across languages:
+
+\noindent
+{\bf Methods compared}
+\begin{enumerate}
+    \item \textbf{BPE} \cite{sennrich-etal-2016-neural}, the existing default method of vocabulary generation.
+    \item \textbf{Clustered vocabulary (CV)} \cite{chung-etal-2020-improving}  Since the paper uses a  SentencePiece unigram for vocabulary, we followed the same approach for this comparison.  We allocate each family equal number of vocabulary tokens which is \text{V}/3.
+    \item \textbf{BPE-dropout (BPE-dp)} \cite{provilkov-etal-2020-bpe} uses 
+    the vocabulary generated by BPE but tokenizes the text using a dropout rate of 0.1.  This allows the training of tokens that are subsumed by larger tokens in the vocabulary.
+    \item \textbf{Compatibility of Tokenizations (TokComp)} \cite{maronikolakis-etal-2021-wine-v}  uses a method to select meaningful vocabulary sizes in an automated manner for all language using compression rates. Since their best performances are found, when the compression rates are similar, we choose a size for each language corresponding to compression rate of 0.5. The tokenizer used in this method is WordPiece.
+.
+    \item \textbf{\textsc{OBPE}{}} (Ours) with default $\alpha=0.5, p = -\infty$. We also do ablation on these.
+\end{enumerate}
+
+In Table~\ref{tab:overall} we observe that across all four tasks, zero-shot LRL accuracy improves compared to BPE.  For example, the average accuracy on XNLI for the LRL languages improves from 55.6 to 58.1 just by changing the set of tokens in the vocabulary.  These gains are obtained without compromising HRL performance on the tasks. The Clustered Vocabulary (CV) approach is much worse than BPE. These experiments are on the Balanced-12 model.  In the supplementary section, we report the results on the Skewed-12 (Table~\ref{tab:overall:skew}) and Balanced-4 models (Table~\ref{tab:4_lang}) and show similar gains even with these models.
+In this table, we averaged the gains over nine LRLs, and in the Supplementary Table~\ref{tab:varying_p} we show consistent gains for individual languages.
+
+In addition to improving zero-shot transfer from HRLs to LRLs on downstream tasks, OBPE\ also leads to better intrinsic representation of LRLs.  We validate that by measuring the pseudo-perplexity~\cite{salazar-etal-2020-masked} of a test set of LRL sentences.  We find that average perplexity of LRL sentences drops by 2.6\%
+when we go from the BPE to OBPE vocabulary.  More details on this experiment appear in Figure~\ref{fig:ppl}. 
+\begin{figure}[t]
+  \centering
+  \includegraphics[scale =0.32]{PPL.pdf}
+  \caption{Percentage reduction in Pseudo perplexity~\cite{salazar-etal-2020-masked} for different LRLs as we go from BPE to OBPE\ vocabulary. (Section \ref{sec:effective-obpe})}
+  \label{fig:ppl}
+\end{figure}
+
+
+
+
+
+
+
+\input{samplegraph}
+
+In order to investigate the reasons behind the OBPE gains, we first inspected the percentage of tokens in the vocabulary that belong to LRLs, HRLs, and in their overlap. We find that with OBPE both LRL tokens and overlapping tokens increase.  Either of these could have led to the observed gains.  We analyze the effect of each of these factors in the following two sections.
+
+\subsection{Effect of Token Overlap}
+\label{sec:analysis}
+
+\begin{table}[!ht]
+\begin{small}
+    \centering
+    \begin{tabular}{|l|c|c|}
+    \hline
+        ~  &\multicolumn{2}{c|}{en-es}  \\ \hline
+        ~  & \multicolumn{1}{c|}{High (es: 1 GB)} &  \multicolumn{1}{c|}{Low: (es: 20K)}  \\ \hline
+         NER & -1.4 & -11.7 \\ \hline
+         XNLI & 0.7 & -1.3 \\ \hline
+          ~  &\multicolumn{2}{c|}{hi-mr}  \\ \hline
+        ~  & \multicolumn{1}{c|}{High (mr: 110K)} &  \multicolumn{1}{c|}{Low (mr: 20K)}  \\ \hline
+         NER & -12.2  & -41.6 \\ \hline
+         TC & -2.7 & -41.3 \\ \hline
+         POS & -6.6 & -7.8 \\ \hline
+    \end{tabular}
+\caption{Drop in Accuracy of Zero-shot transfer when we synthetically reduce token overlap to zero.  Transfer is from English (en) as HRL to Spanish (es) and from Hindi (hi) as HRL to Marathi (mr) in two settings: (1) High where es, mr have sizes comparable to the HRL and (2) Low where their sizes are only 20K. Token overlap is important in the low-resource and related language setting (Section~\ref{sec:analysis})}
+\label{tab:overlapHL}
+\end{small}
+\end{table}
+
+We present the impact of token overlap via two sets of experiments: first, a controlled setup where we synthetically vary the fraction of overlap and second where we measure correlation between overlap and gains of OBPE on the data as-is. 
+
+
+
+
+
+
+
+
+  
+
+
+For the controlled setup we follow \cite{K2020Cross-Lingual} for  synthetically controlling the amount of overlap between HRL and LRL. 
+We trained a bilingual model between Hindi (HRL 160K) and Marathi (LRL 20K) --- two closely related languages in the Indo-Aryan family. 
+To find the set of overlapping tokens between Hindi and Marathi, we first run \textsc{OBPE}{} on Hindi-Marathi language pair to generate a vocabulary and label all tokens present in both languages as 
+\emph{overlapping tokens}. We then incrementally sample 10\%, 40\%, 50\%, 90\% of the tokens from this set. We shift the Unicode of the entire Hindi monolingual data except the set of sampled tokens so that there are no overlapping tokens between Hindi (hi) and Marathi (mr) monolingual data other than the sampled tokens. Let us call this Hindi data \textbf{SynthHindi}. We then run \textsc{OBPE}{} on SynthHindi-Marathi language pair to generate a vocabulary
+to pretrain the model. The task-specific Hindi data is also converted to SynthHindi during fine-tuning and testing of the model.
+
+\reffig{fig:unicode} shows results with increasing overlap. We observe increasing gains in LRL accuracy as we go from no overlap to full overlap on all three tasks. NER accuracy increases from 17\% to 58\% for the LRL (mr) even while the HRL (hi) accuracy stays unchanged.  For TC we observe similar gains. For POS, even without token overlap, we get good cross-lingual transfer because POS tags are more driven by structural similarity, and Hindi and Marathi follow similar structure.
+
+
+
+
+
+\begin{table*}[h]
+
+\centering
+\parbox{0.55\textwidth}{
+\begin{small}
+    \setlength\tabcolsep{3.0pt}
+    \begin{tabular}{|l|l| l|l| l|l |l|l |l|}
+    \hline
+        \multirow{2}{*}{Method} & \multicolumn{4}{c|}{LRL Performance ($\uparrow$)} &\multicolumn{4}{c|}{HRL Performance ($\uparrow$)} \\ 
+        & NER & TC & XNLI & POS & NER & TC & XNLI & POS \\
+        \hline
+        BPE  & 64.5 & 65.5 & 52.1 & 84.6  & 83.3 
+        & \textbf{82.1} 
+        & 62.7 
+        & \textbf{95.2} 
+         \\ 
+        +overSample  & 64.4  & 67.6  & 52.1 & 84.6 & 82.4 & 82.0 & 62.0 & 95.2
+        \\ \hline
+       
+        {\textsc{OBPE}{} }  & \textbf{65.7}& \textbf{68.0} & \textbf{54.0}  & \textbf{85.3} 
+        & \textbf{84.0}  & 81.9  & \textbf{66.3} & 95.1\\
+        +overSample   & 64.6  & 67.9  & 53.5  & 85.1 & 82.7 & 81.7 & 65.7 & 94.8
+        \\ 
+       
+      
+   
+    \hline
+    \end{tabular}
+        \caption{\label{tab:sample}Zero-shot performance of models in the same setting as Table~\ref{tab:overall} but comparing default sampling with oversampling (exponentiation factor S=0.5). Note, even if BPE\_overSamp improves LRL somewhat, it causes HRL to drop. OBPE with default sampling is best for both LRLs and HRLs. Also OBPE\_overSampled is better than BPE\_overSampled (Section~\ref{sec:samp}). } 
+\end{small}
+}
+\vspace{-0.6 cm}
+\qquad
+\begin{minipage}[c]{0.38\textwidth}%
+\centering
+\includegraphics[scale =0.3]{chart.pdf}
+\caption{Percentage rise over BPE in representation of LRL, HRL and Shared (percentage of tokens shared between HRL and LRL weighted by frequency) in vocabulary generated by OBPE and BPE\_overSample and OBPE\_overSample (Section~\ref{sec:samp}). }
+\label{img:vocabstats}
+\end{minipage}
+\end{table*}
+
+
+
+         
+
+
+Our results contradict the conclusions of \cite{K2020Cross-Lingual} which claimed that token overlap is unimportant for cross-lingual transfer.  However, there are two key differences with our setting: (1)
+unlike \cite{K2020Cross-Lingual}, we explore low-resource settings, and (2) except for English-Spanish, the other language pairs they considered are not linguistically related. To explain the importance of both these factors,  in \reftbl{tab:overlapHL} we present accuracy of English-Spanish in a simulated low-resource setting where we sample 20K Spanish documents and 160K English documents.
+Also, we repeat our Hindi-Marathi experiments where Marathi is not low-resource.  We observe that
+(1) Spanish as LRL benefits significantly on overlap with English.
+(2) Marathi gains from token overlap with Hindi even in the high resource setting.
+
+Thus, we conclude that as long as languages are related, token overlap is important and the benefit from overlap is higher in the low resource setting.
+
+
+
+\paragraph{Overlap Vs Gain: Real data setup}
+\label{sec:real}
+
+\begin{table}[t]
+\begin{small}
+    \centering
+    \begin{tabular}{|l|l|c|}
+    \hline
+        Lang family & Task & Pearson Correlation\\ \hline
+        \multirow{2}{*}{Indo-Aryan} & NER & 0.835 \\ 
+          & POS & 0.690 \\ \hline
+         
+        \multirow{2}{*}{West Germanic} & NER & 0.387 \\
+          & POS & 0.348 \\ \hline
+        \multirow{2}{*}{Romance} & NER & 0.946 \\ 
+ 
+        & POS & 0.595 \\ \hline
+    \end{tabular}
+    \caption{\label{tab:corr}Correlation coefficient between performance gain and overlap gain within languages in a family for various tasks. 
+    (Section~\ref{sec:real}).}
+\end{small}
+\end{table}
+\vspace{-0.2cm}
+
+We further substantiate our hypothesis that the shared tokens across languages favoured by \textsc{OBPE}{} enable transfer of supervision from HRL to LRL via statistics on real-data.  In Table~\ref{tab:corr} we show the Pearson product-moment correlation coefficient between overlap gain and performance gain within LRLs of the same family and task. We get a high positive correlation coefficient, with an average of 0.644.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+\subsection{Effect of Increased LRL representation}
+\label{sec:samp}
+We next investigate the impact of increased representation of LRL tokens in the vocabulary.  OBPE increases LRL representation by favoring overlapping tokens, but LRL tokens can also be increased by  just over-sampling LRL documents.  
+We train another {\sc balanced} 12 model but with further over-sampling LRLs with exponentiation factor of 0.5 instead of 0.7.  We observe in  Figure~\ref{img:vocabstats} that this increases LRL fraction but reduces HRL tokens in the vocabulary. Table~\ref{tab:sample} also shows the comparison of zero-shot transfer accuracy with over-sampled BPE against over-sampled OBPE. We find that OBPE even with default exponentiation factor achieves highest LRL gains, whereas aggressively over-sampled BPE hurts HRL accuracy. Within the same sampling setting, OBPE is better than corresponding BPE.
+
+
+\subsection{Ablation study}
+\label{sec:ablation}
+\vspace{-0.2cm}
+We conducted experiments for different values of $p$ that controls the amount of overlap in the generalized mean function (\refeqn{eq:obpe:step}). Figure \ref{fig:p} and Table \ref{tab:varying_p} show the results for various $p$.  
+Setting $p=1$  gives the original BPE algorithm. Setting $p=0,-1$ gives geometric and harmonic mean respectively, setting $p=-\infty$ gives minimum. We compare the task-specific results for different values of $p$ as shown in Table~\ref{tab:varying_p} and find that the gains we obtain are highest in the $p=-\infty$ (minimum) setting (Figure~\ref{fig:p}).
+
+\input{p_graph}
+We also experiment with $\alpha = 0.7$, and find that for most languages the results were not better than our default  $\alpha = 0.5$.
+
+
+
+\section{Conclusion}
+
+In this paper, we address the problem of  cross-lingual transfer from HRL{}s to LRL{}s by exploiting relatedness among them. We focus on lexical overlap during the vocabulary generation stage of multilingual pre-training. We propose Overlap BPE (\textsc{OBPE}{}), a simple yet effective modification to the BPE algorithm, which chooses a vocabulary that maximizes overlap across languages. \textsc{OBPE}{} encodes input corpora compactly while also balancing the
+trade-off between cross-lingual subword sharing and language-specific vocabularies. We focus on three sets of closely related languages from diverse language families. Our experiments provide evidence that \textsc{OBPE}{} is effective in leveraging overlap across related languages to improve LRL{} performance. In contrast to prior work, through controlled experiments on the amount of token overlap between two related HRL{}-LRL{} language pairs, we establish that token overlap is important when a LRL is paired with a related HRL.
+
+\paragraph{Acknowledgements}
+We thank Yash Khemchandani and Sarvesh Mehtani for participating in the early phases of this research.  We thank Dan Garrette and Srini Narayanan for comments on the draft.
+We thank Technology Development for Indian Languages (TDIL) Programme initiated by the Ministry of Electronics
+Information Technology, Govt. of India for providing us datasets used in this study. The experiments
+reported in the paper were made possible by a Tensor Flow Research Cloud (TFRC) TPU grant. The
+IIT Bombay authors thank Google Research India
+for supporting this research.  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,286 @@
+
+\section{Introduction}
+\label{sec:intro}
+
+Many important application domains for machine learning (ML), such as numerical weather prediction, the internet 
+of things or healthcare, generate decentralized data \cite{BigDataNetworksBook}. Decentralized 
+data consists of local datasets that are related by an intrinsic network structure. Such a 
+network structure might arises from relations between the generators of local datasets or 
+functional constrains of the M\cite{nflarxiv2022}. We can represent such networked 
+data using an undirected weighted empirical graph \cite[Ch. 11]{SemiSupervisedBook}. 
+
+There is already a substantial body of literature on machine learning (ML) and signal processing 
+models and techniques for graph structured data \cite{SemiSupervisedBook,EmergingGSP}. 
+Most of existing work studies parametric models for local datasets that are related by an 
+intrinsic network structure. Arguably the most basic setting are scalar graph signal-in-noise 
+models using different smoothness or clustering assumptions \cite{JungTVMin2019,EmergingGSP}. 
+The extension from scalar signal-in-noise models to vector-valued graph signals and networked 
+exponential families has been studied in \cite{JungNetExp2020,VarmaTSIPN2020}. 
+
+Federated learning (FL) is an umbrella term for collaborative training of ML models from decentralized 
+data. FL methods have been championed for high-dimensional parametric models such as deep nets \cite{pmlr-v54-mcmahan17a,FLBookLudwig,FLBookYang}. 
+A focus of FL research so far has been on distributed optimization methods that exchange 
+different forms of model parameter updates such as gradients \cite{Liu2020,DeanDistSGD2012,TsiBerAth86,NEURIPS2018_8fb21ee7}. 
+However, there is only little work on FL of non-parametric models such as decision trees. 
+The adaption of specific decision tree algorithms to a FL setting is discussed in \cite[Ch. 2]{FLBookLudwig}. 
+
+The closest to our work is a recent study of a model agnostic \gls{fl} method that uses knowledge 
+distillation to couple the training of (arbitrary) local models \cite{Afonin2022}. Similar to this knowledge 
+distillation approach also we use the predictions of local models on the same dataset to construct 
+a regularization term. However, in contrast to \cite{Afonin2022} we exploit the network structure 
+of decentralized data to construct the regularization term. 
+
+{\bf Contribution.}  To the best of our knowledge, we present the first model agnostic FL method for 
+decentralized data with an intrinsic network structure. Our method copes with arbitrary collections 
+of local models for which efficient implementations are available. Examples for such implementations 
+can be found in Python libraries such as \texttt{scikit-learn}, \texttt{Keras} or \texttt{PyTorch} \cite{JMLR:v12:pedregosa11a,AutoKeras2023,NEURIPS2019_bdbca288}. The proposed method 
+couples the training of well-connected local models (forming a cluster) via enforcing them to deliver 
+similar predictions for a pre-specified test set. 
+
+{\bf Outline.} Section \ref{sec:non_parametric_nfl} formulates the problem of \gls{fl} from 
+decentralized data. Section \ref{sec_fedrelax} presents a model-agnostic \gls{fl} method 
+that trains heterogeneous networks of (local) ML models in a distributed fashion. 
+
+
+
+\section{Problem Formulation}
+\label{sec:non_parametric_nfl}
+
+Section \ref{sec_emp_graph} introduces the \gls{empgraph} as a useful representation 
+of collections of \gls{localdataset}s along with their similarities. 
+Section \ref{sec_net_models} augments the \gls{empgraph} by assigning a separate 
+local \gls{hypospace} (or model) to each node. Section \ref{sec_fedrelax} presents our 
+model agnostic FL method for coupling the training of local models by regularization. 
+The regularization will be implemented by enforcing a small variation of local models at 
+well-connected nodes (clusters). Section \ref{sec_gtv_measure} introduces the \gls{gtv} as 
+quantitative measure for the variation of heterogeneous networks of ML models. 
+
+large \gls{trainset} to train each local model.
+
+
+\subsection{The Empirical Graph } 
+\label{sec_emp_graph} 
+
+We represent decentralized data, i.e., collections of local datasets $\localdataset{i}$, for $i = \{1,\ldots,n\}$, 
+using an \gls{empgraph} $\mathcal{G} \defeq \pair{\mathcal{V}}{\mathcal{E}}$ with nodes (vertices) $\mathcal{V} = \{1,\ldots,n\}$. 
+The \gls{empgraph} of decentralized data is an undirected weighted graph $\mathcal{G}=(\mathcal{V},\mathcal{E})$ 
+whose nodes $\mathcal{V} \defeq \{1,\ldots,n\}$ carry the \gls{localdataset}s $\localdataset{i}$, for $i \in \mathcal{V}$. 
+Each node $i \!\in\!\mathcal{V}$ of the \gls{empgraph} $\mathcal{G}$ carries the \gls{localdataset}
+\begin{equation} 
+	\label{equ_def_local_dataset_plain}
+	\localdataset{i} \defeq \left\{ \big(\featurevec^{(i,1)},\truelabel^{(i,1)}\big), \ldots,\big(\featurevec^{(i,m_{i})},\truelabel^{(i,m_{i})}\big) \right\}. 
+\end{equation} 
+Here, $\featurevec^{(i,\sampleidx)}$ and $\truelabel^{(i,\sampleidx)}$ denote, respectively, the feature vector and 
+true label of the $\sampleidx$th \gls{datapoint} in the \gls{localdataset} $\localdataset{i}$. 
+Note that the size $m_{i}$ of the \gls{localdataset} might vary between different 
+nodes $i \in \mathcal{V}$. 
+
+An undirected edge $\{i,i'\}\!\in\!\mathcal{E}$ in the \gls{empgraph} indicates that the local 
+datasets $\localdataset{i}$ and $\localdataset{i'}$ have similar statistical properties. 
+We quantify the level of similarity by a positive edge weight $A_{i,i'}\!>\!0$.\footnote{The notion of statistical similarity 
+	could be made precise using a \gls{probmodel} that interprets the \gls{datapoint}s in each \gls{localdataset} $\localdataset{i}$ 
+	as \gls{iid} draws from an underlying \gls{probdist} $p^{(i)}\big(\featurevec,\truelabel\big)$. 
+}
+The neighbourhood of a node $i \in \mathcal{V}$ is $\neighbourhood{i} \defeq \{ i' \in \mathcal{V}: \{i,i'\} \in \mathcal{E}\}$. 
+
+Note that the undirected edges $e{i}{i'}$ of an empirical graph encode a symmetric 
+notion of similarity between \gls{localdataset}s. If the \gls{localdataset} $\localdataset{i}$ at node $i$ 
+is (statistically) similar to the \gls{localdataset} $\localdataset{i'}$ at node $i'$, then also the 
+\gls{localdataset} $\localdataset{i'}$ is (statistically) similar to the \gls{localdataset} $\localdataset{i}$.  
+
+The \gls{empgraph} of \gls{netdata} is a design choice which is guided by \gls{compasp} and \gls{statasp} of the resulting 
+ML method. For example, using an \gls{empgraph} with a relatively small number of edges (``sparse graphs'') 
+typically results in a smaller computational complexity. Indeed, the amount of computation required by the \gls{fl} 
+methods developed in Section \ref{sec_fedrelax} is proportional to the number of edges in the \gls{empgraph}. 
+On the other hand, the \gls{empgraph} should contain sufficient number of edges between nodes that 
+carry statistically similar \gls{localdataset}s. This allows \gls{gtvmin} techniques to adaptively 
+pool \gls{localdataset}s into clusters of (approximately) homogeneous data. 
+
+
+\subsection{Networked Models}
+\label{sec_net_models}
+
+Consider \gls{netdata} with \gls{empgraph} $\mathcal{G}$ whose nodes $i \in \mathcal{V}$ carry \gls{localdataset}s 
+$\localdataset{i}$. For each node $i \in \mathcal{V}$, we wish to learn a useful \gls{hypothesis} 
+$\learntlocalhypothesis{i}$ from a local \gls{hypospace} $\localmodel{i}$. The 
+learnt \gls{hypothesis} should incur a small average \gls{loss} over a \gls{localdataset} $\localdataset{i}$,
+\begin{equation} 
+\label{equ_def_local_lossfunc}
+\hspace*{-3mm}\locallossfunc{i}{\learntlocalhypothesis{i}}\!\defeq\!(1/\localsamplesize{i}) \sum_{\sampleidx=1}^{\localsamplesize{i}} \hspace*{-1mm}\loss{\big( \featurevec^{(i,\sampleidx)}, \truelabel^{(i,\sampleidx)} \big)}{\learntlocalhypothesis{i}}.
+\end{equation}
+
+A collection of local models $\localmodel{i}$, for each $i \in \mathcal{V}$, 
+defines a \gls{netmodel} $\netmodel{\mathcal{G}}$ over the \gls{empgraph} $\mathcal{G}$, 
+\begin{equation} 
+\netmodel{\mathcal{G}}: i \mapsto \localmodel{i} \mbox{ for each node } i \in \mathcal{V}. 
+\end{equation}
+A \gls{netmodel} is constituted by networked \gls{hypothesis} maps $\hypothesis \in \netmodel{\mathcal{G}}$. 
+Each such networked \gls{hypothesis} map assigns each node $i \in \mathcal{V}$ a local \gls{hypothesis},
+\begin{equation} 
+\hypothesis: i \mapsto \localhypothesis{i} \in \localmodel{i}. 
+\end{equation}
+
+It is important to note a \gls{netmodel} may combine different types of local models $\localmodel{i}$. 
+For example, $\localmodel{i}$ might be a linear model $\linmodel{\featuredim}$, while $\localmodel{i'}$ 
+might be a \gls{decisiontree} for some other node $i' \neq i$. The only restriction we 
+place on the choice for local models is the availability of computational means (``a .fit() function'') to 
+train them via regularized empirical risk minimization.  
+
+
+\subsection{Generalized Total Variation}
+\label{sec_gtv_measure}
+
+In principle, we could train each local model $\localmodel{i}$ separately on the 
+corresponding \gls{localdataset} $\localdataset{i}$ for each node $i \in \mathcal{V}$. 
+However, the \gls{localdataset}s might be too small to train a \gls{localmodel} which might be 
+a deep neural net or a linear model using a large number of features. As a remedy, we could try 
+to pool local datasets if they have similar statistical properties to obtain a sufficiently large 
+dataset to train the local models $\localmodel{i}$.   
+
+We use the network structure of the \gls{empgraph} $\mathcal{G}$ to adaptively pool \gls{localdataset}s 
+with similar statistical properties. This pooling will be implemented by requiring local models at 
+well-connected nodes (clusters) to behave similar on a common test set. To make this informal 
+idea more precise we next introduce a quantity measure for the variation of local models across
+the edges in $\mathcal{G}$. 
+
+Consider two nodes $i, i' \in \mathcal{G}$ in the \gls{empgraph} that are connected by 
+an edge $e{i}{i'}$ with weight $A_{i,i'}$. We define 
+the variation between $\hypothesis^{(i)}$ and $\hypothesis^{(i')}$ via the discrepancy 
+between their predictions 
+\begin{align}
+	\label{equ_def_variation_non_parametric}
+	\hspace*{-4mm} \variation{\localhypothesis{i}}{\localhypothesis{i'}} & \!\defeq\! (1/m') \sum_{\sampleidx=1}^{m'} 
+	\bigg[\loss{\pair{\featurevec^{(\sampleidx)}}{\hypothesis^{(i)}\big(\featurevec^{(\sampleidx)}\big)}}{\hypothesis^{(i')}} \nonumber \\ 
+	&\hspace*{10mm} \!+\!\loss{\pair{\featurevec^{(\sampleidx)}}{\hypothesis^{(i')}\big(\featurevec^{(\sampleidx)}\big)}}{\hypothesis^{(i)}} \bigg]
+\end{align}  
+on a common test-set 
+\begin{equation}
+	\label{equ_test_set}
+	\dataset^{(\rm test)} = \left\{ \featurevec^{(1)},\ldots, \featurevec^{(m')}\right\}.
+\end{equation}
+The test set \eqref{equ_test_set} must be shared with each node $i \in \mathcal{V}$ of the \gls{empgraph}. 
+
+We then define the \gls{gtv} of a networked \gls{hypothesis} $\hypothesis \in \netmodel{\mathcal{G}}$, 
+consisting of local \gls{hypothesis} maps $\localhypothesis{i} \in \localmodel{i}$ (for each node $i \in \mathcal{V}$)
+by summing the discrepancy \eqref{equ_def_variation_non_parametric} over all edges $\mathcal{E}$, 
+\begin{align}
+	\label{equ_def_gtv_non_param}
+	\gtv{\hypothesis} \defeq \sum_{e{i}{i'} \in \mathcal{E}} A_{i,i'} \variation{\localhypothesis{i}}{\localhypothesis{i'}}. 
+\end{align}
+Note that $\gtv{\hypothesis}$ is parametrized by the choice for the \gls{lossfunc} $L$ used to compute 
+the discrepancy $\variation{\localhypothesis{i}}{\localhypothesis{i'}}$ \eqref{equ_def_variation_non_parametric}. 
+The \gls{lossfunc} might be different from the local \gls{lossfunc} \eqref{equ_def_local_lossfunc} used to 
+measure the prediction error of a local \gls{hypothesis} $\localhypothesis{i}$. However, it might be 
+beneficial to use the same \gls{lossfunc} in \eqref{equ_def_local_lossfunc} and 
+\eqref{equ_def_variation_non_parametric} (see Section \ref{equ_def_mod_agn_fredreg}). 
+
+
+\section{A Model Agnostic FL Method}
+\label{sec_fedrelax}
+
+We now present our \gls{fl} method for learning a local \gls{hypothesis} map $\learntlocalhypothesis{i}$ for 
+each node $i$ of a an \gls{empgraph} $\mathcal{G}$. This method is from an instance of \gls{rerm}, 
+using \gls{gtv} \eqref{equ_def_gtv_non_param} as regularizer, 
+\begin{equation} 
+\label{equ_def_gtv_min}
+	\min_{\{ \localhypothesis{i} \in \localmodel{i}\}} \sum_{i \in \mathcal{V}} \locallossfunc{i}{\localhypothesis{i}} + \lambda 
+	\sum_{e{i}{i'} \in \mathcal{E}} A_{i,i'}  \variation{\localhypothesis{i}}{\localhypothesis{i'}} .
+\end{equation} 
+We use block-coordinate minimization \cite{ParallelDistrBook,CvxAlgBertsekas} to solve \gls{gtvmin} \eqref{equ_def_gtv_min}. 
+To this end, we rewrite \eqref{equ_def_gtv_min} as
+\begin{equation}
+\label{equ_GTVMin_MOCHA_coordmin}
+		 \min_{\hypothesis \in \netmodel{\mathcal{G}}}  \underbrace{\sum_{i \in \mathcal{V}} 
+\locallossfunc{i}{\localhypothesis{i}}+(\lambda/2) \sum_{i' \in \neighbourhood{i}} A_{i,i'} \variation{\localhypothesis{i}}{\localhypothesis{i'}}}_{\defeq f(\localhypothesis{1},\ldots,\localhypothesis{n})}  \nonumber \\ 
+\end{equation} 
+Given some local \gls{hypothesis} maps $\estlocalhypositer{i}{k'}$, for all nodes $i'\in \mathcal{V}$, 
+we compute (hopefully improved) updated local \gls{hypothesis} maps $\estlocalhypositer{i}{k'+1}$ 
+by minimizing $f(\hypothesis)$ along $\localhypothesis{i}$, keeping the other local \gls{hypothesis} maps fixed,  
+\begin{align} 
+	\label{equ_def_coord_min_update}
+	\estlocalhypositer{i}{k+1} & \in \argmin_{\localhypothesis{i} \in \localmodel{i}}f\bigg( \estlocalhypositer{1}{k},\ldots,\estlocalhypositer{i-1}{k},\localhypothesis{i},\estlocalhypositer{i+1}{k},\ldots \bigg)  \nonumber \\ 
+	& \hspace*{-10mm} \stackrel{\eqref{equ_GTVMin_MOCHA_coordmin}}{=}  \argmin_{{\localhypothesis{i} \in \localmodel{i}}} \locallossfunc{i}{\localhypothesis{i}} + (\lambda/2) \sum_{i' \in \neighbourhood{i}} A_{i,i'} \variation{\localhypothesis{i}}{\estlocalhypositer{i'}{k}}.
+\end{align} 
+We obtain Algorithm \ref{alg_fed_relax_nonparam} by iterating \eqref{equ_def_coord_min_update} (simultaneously at 
+all nodes $i \in \mathcal{V}$) until a \gls{stopcrit} is met. 
+\begin{algorithm}[htbp]
+	\caption{FedRelax}
+	\label{alg_fed_relax_nonparam}
+	{\bf Input}: empirical graph $\mathcal{G}$ with edge weights $A_{i,i'}$; 
+	local \gls{lossfunc}s $\locallossfunc{i}{\cdot}$; test-set $\dataset' = \left\{ \featurevec^{(1)},\ldots, \featurevec^{(m')}\right\}$; \gls{gtv} parameter $\lambda$; \gls{lossfunc} $L$ for computing the discrepancy $\discrepancy{i}{i'}{\hypothesis}$ \\
+	{\bf Initialize}: $k\!\defeq\!0$; $\estlocalhypositer{i}{0}\!\equiv\!0$ for all nodes $i \in \mathcal{V}$ 
+
+	\begin{algorithmic}[1]
+		\While{stopping criterion is not satisfied}
+		\For{all nodes $i \in \mathcal{V}$ in parallel}
+		\State share predictions $\left\{ \estlocalhypositer{i}{k} \big(\featurevec \big) \right\}_{\featurevec \in \dataset^{(\rm test)} }$, 
+		with neighbours $i' \in \neighbourhood{i}$ 
+		\State \label{equ_update_fed_relax} update \gls{hypothesis} $\estlocalhypositer{i}{k}$ as follows:  
+		\begin{align} 
+			\label{equ_update_step_fed_relax}
+			\hspace*{-6mm}	\estlocalhypositer{i}{k+1} & \!\in\!  \argmin_{\localhypothesis{i} \in \localmodel{i}} \hspace*{-1mm} \locallossfunc{i}{\localhypothesis{i}} \!+\! (\lambda/2)\hspace*{-3mm} \sum_{i' \in \neighbourhood{i}}\hspace*{-3mm} A_{i,i'}  \variation{\localhypothesis{i}}{\estlocalhypositer{i'}{k}}. 
+		\end{align}
+		\EndFor
+		\State $k\!\defeq\!k\!+\!1$
+		\EndWhile
+	\end{algorithmic}
+\end{algorithm}
+The main computational work of Algorithm \ref{alg_fed_relax_nonparam} is done in step \eqref{equ_update_fed_relax}. 
+This step is an instance of \gls{rerm} for the local model $\localmodel{i}$ at each node 
+$i \in \mathcal{V}$. The regularization term for this \gls{rerm} instance is a weighted sum of the 
+discrepancies \eqref{equ_def_variation_non_parametric} between the predictions (for the labels 
+on the test set \eqref{equ_test_set}) of the local \gls{hypothesis} map $\localhypothesis{i}$ 
+and the predictions of the current local \gls{hypothesis} maps $\localhypothesis{i}$ at 
+neighbouring nodes $i' \in \neighbourhood{i}$. 
+
+\subsection{Model Agnostic Federated Regression} 
+\label{equ_def_mod_agn_fredreg} 
+
+Note that Algorithm \ref{alg_fed_relax_nonparam} is parametrized by the choices for the \gls{lossfunc} 
+used to measure the training error \eqref{equ_def_local_lossfunc} of a local \gls{hypothesis} $\hat{\hypothesis}{i}$ and the \gls{lossfunc} 
+used to measure the discrepancy \eqref{equ_def_variation_non_parametric} between the local models at 
+connected nodes. 
+
+A popular choice for the \gls{lossfunc} in regression problems, i.e., data points having an 
+numeric label, is the \gls{sqerrloss}
+\begin{equation} 
+\label{equ_squared_loss}
+\loss{(\featurevec,\truelabel)}{h} \defeq \big(\truelabel - \underbrace{h(\featurevec)}_{=\predictedlabel} \big)^{2}. 
+\end{equation} 
+We obtain Algorithm \ref{alg_fed_relax_nonparam_regr} as the special case of Algorithm \ref{alg_fed_relax_nonparam} when using 
+the \gls{sqerrloss} in \eqref{equ_def_local_lossfunc} and \eqref{equ_def_variation_non_parametric}. 
+\begin{algorithm}[htbp]
+	\caption{FedRelax Least-Squares Regression}
+	\label{alg_fed_relax_nonparam_regr}
+	{\bf Input}: empirical graph $\mathcal{G}$ with edge weights $A_{i,i'}$; local \gls{lossfunc}s $\locallossfunc{i}{\cdot}$; test-set $\dataset' = \left\{ \featurevec^{(1)},\ldots, \featurevec^{(m')}\right\}$; \gls{gtv} parameter $\lambda$ \\
+	{\bf Initialize}: $k\!\defeq\!0$; $\estlocalhypositer{i}{0}\!\equiv\!0$ for all nodes $i \in \mathcal{V}$ 
+
+	\begin{algorithmic}[1]
+		\While{stopping criterion is not satisfied}
+		\For{all nodes $i \in \mathcal{V}$ in parallel}
+		\State share test-set labels $\left\{ \estlocalhypositer{i}{k} \big(\featurevec \big) \right\}_{\featurevec \in \dataset^{(\rm test)} }$, 
+		with neighbours $i' \in \neighbourhood{i}$ 
+		\State update \gls{hypothesis} $\estlocalhypositer{i}{k}$ as follows:  
+		\begin{align} 
+			\label{equ_update_step_fed_relax}
+			\hspace*{-4mm}	\estlocalhypositer{i}{k+1} & \in  \argmin_{\localhypothesis{i} \in \localmodel{i}} \bigg[ \locallossfunc{i}{\localhypothesis{i}} & \nonumber \\ 
+			& \hspace*{-8mm}+ (\lambda/(2m')) \hspace*{-3mm} \sum_{i' \in \neighbourhood{i}}\hspace*{-3mm} A_{i,i'} \hspace*{-1mm}\sum_{\sampleidx=1}^{m'} \left(
+			\hypothesis^{(i)}\big(\featurevec^{(\sampleidx)}\big) -\estlocalhypositer{i'}{k} \big(\featurevec^{(\sampleidx)}\big) \right)^2 \bigg]. 
+		\end{align}
+		\EndFor
+		\State $k\!\defeq\!k\!+\!1$
+		\EndWhile
+	\end{algorithmic}
+\end{algorithm}
+
+Note that the update \eqref{equ_update_step_fed_relax} is nothing but regularized \gls{erm} for 
+learning a local \gls{hypothesis} $\localhypothesis{i} \in \localmodel{i}$ from the 
+\gls{localdataset} $\localdataset{i}$. The regularization term in \eqref{equ_update_step_fed_relax} is 
+the average \gls{sqerrloss} incurred on the (``pseudo-'') labeled test set (see \eqref{equ_test_set}) 
+\begin{equation}
+	\bigcup_{i' \in \neighbourhood{i}} \left\{ \pair{\featurevec^{(1)}}{\estlocalhypositer{i'}{k}\big(\featurevec^{(1)}},\ldots, \pair{\featurevec^{(m')}}{\estlocalhypositer{i'}{k}\big(\featurevec^{(m')}} \right\}.
+\end{equation} 
+
+	
+
+

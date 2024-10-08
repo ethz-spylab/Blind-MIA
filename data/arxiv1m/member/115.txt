@@ -1,0 +1,212 @@
+\section{Introduction}
+\label{sec:introduction}
+
+Recent work on GPT-2~\citep{gpt2} and GPT-3~\citep{gpt3} have shown that large language models possess few-shot learning capabilities and zero-shot instruction following capabilities, despite only being pre-trained with a self-supervised causal language modeling objective (which is to predict the next token).
+
+An arbitrary task can be converted into a natural language task specification, often called a \textit{prompt}. Prompting a task in this way makes its format similar to the language modeling objective used to pre-train large language models. In the zero-shot setting, this prompt contains just the task with instructions, whereas in the few-shot setting, the prompt contains both the task and several example demonstrations. When a language model is tasked to generate text to complete this prompt, it can perform the task in the process. The broader paradigm of reframing all tasks as text generation is known as \textit{prompt-based learning}. In the few-shot setting, the learning that occurs from examples provided in a given prompt (the context) is known as \textit{in-context learning} \citep{promptingsurvey}. In the zero-shot setting, models perform \textit{instruction following} \citep{instructgpt}, with their performance guided through natural language instructions provided in the prompt.
+
+Emergent prompt-based learning capabilities have mainly been demonstrated for unidirectional language models. Bidirectional language models have stronger learned representations \citep{bert,xlm,t5}; however, they have not been able to broadly demonstrate the same few-shot in-context learning capabilities or zero-shot instruction following capabilities due to the incompatibility bidirectional denoising pre-training objectives have with the prompting paradigm. Instead, they typically require fine-tuning. Bidirectional models are not able to generate long, fluent completions to prompts since they are usually only trained to output single tokens or short spans of text to in-fill masked tokens during pre-training. We discuss this more in-depth in Section \ref{sec:directionality}.
+
+Today, language model architects are faced with a difficult choice between unidirectional or bidirectional models. The authors of GPT-3 lay out this design dilemma in \citet{gpt3}:
+\begin{displayquote}
+ \small{``GPT-3 has several structural and algorithmic limitations ... as a result our experiments do not include any bidirectional
+architectures or other training objectives such as denoising ... our design decision comes at the cost of potentially worse performance on tasks
+which empirically benefit from bidirectionality ... making a bidirectional model at the scale of GPT-3, and/or trying to make bidirectional models work with few- or zero-shot learning, is a promising direction for future research, and could help achieve the `best of both worlds'.''}
+\end{displayquote}
+
+\fewshotfigure
+
+In this paper, we directly address this dilemma. We contribute a new technique, \textsc{Sap} (\textbf{S}equential \textbf{A}utoregressive \textbf{P}rompting), that enables bidirectional language models to take advantage of prompting and allows them to perform at the level of unidirectional models in few- or zero-shot learning without fine-tuning. \textsc{Sap} iteratively prompts bidirectional models, concatenating previous generations back into the prompt, to produce longer generations from models that were only pre-trained to output short, mask-infill spans. We acknowledge efficiency concerns in Section \ref{sec:conclusion} and we discuss the importance and impact of \textsc{Sap} and its results to the field regardless of those concerns.
+
+Using the machine translation task as an in-depth case study, we empirically demonstrate mT5~\citep{xue-etal-2021-mt5}, a bidirectional language model, used with \textsc{Sap} outperforms its unidirectional counterparts, GPT-3 and XGLM~\citep{gpt3,xglm} in both the few-shot and zero-shot settings, while utilizing approximately 50\% fewer parameters. We then examine \textsc{Sap}'s effectiveness on other tasks such as question answering and summarization, demonstrating that bidirectional models can be prompted for tasks beyond machine translation.
+
+Our work hints at the possibility of more efficient and performant few-shot learners through pre-trained language models that incorporate bidirectionality. We discuss this impact and outline future research directions to this end in Section \ref{sec:conclusion}. In summary, our key contributions are:
+\begin{enumerate}
+    \item{We introduce \textsc{Sap}, a technique that enables bidirectional language models to work with few-shot and zero-shot prompt-based learning at a level that exceeds unidirectional models. Our results demonstrate in-context learning and instruction following are emergent properties of a broader class of language models, rather than only unidirectional models, addressing a long-standing challenge in language model design and use.}
+    \item{We perform an in-depth study of the effectiveness of a bidirectional language model, mT5, with \textsc{Sap} on the machine translation task. Evaluating over 14 language pairs, despite using approximately 50\% fewer parameters than GPT-3 and XGLM, we find \textsc{Sap} with mT5 has improved average few-shot and zero-shot performance over all language pairs, and especially has improved performance on individual low-resource language pairs. }
+    \item{We propose a range of improvements---filtering, prompt ensembling, and English-centric bootstrapping---to the unsupervised machine translation procedure outlined by \citet{gpt3unsupervised} to better adapt the bootstrapping process for unsupervised low-resource machine translation.}
+    \item{We assess \textsc{Sap}'s performance on the tasks of question answering and summarization, and we find the technique enables few-shot in-context learning and zero-shot instruction following capabilities of bidirectional models in tasks beyond machine translation.}
+\end{enumerate}
+
+\section{Related Work}
+
+\subsection{Unidirectional and Bidirectional Language Models}
+\label{sec:directionality}
+Transformer-based language models \citep{attention} can be broadly categorized into bidirectional and unidirectional models. Bidirectional models are models that use a denoising pre-training objective (such as masked language modeling), allowing them to utilize \textit{bidirectional} context when learning language representations. Unidirectional language models are models with a causal---or a left-to-right---language modeling objective (such as next token prediction), restricting them to be \textit{unidirectional} when learning representations \citep{promptingsurvey}.
+
+The T5 family of models, such as T5 v1.1 and mT5, and BART-style models \citep{bart} are bidirectional, while GPT-style models, such as GPT-2, GPT-3, and XGLM are unidirectional.  Usually, but not always, bidirectional models are paired with an encoder-decoder architecture, while unidirectional models are paired with a decoder-only architecture \citep{bert, t5,xue-etal-2021-mt5,gpt2,gpt3,xglm,bigsciencearchobjective}. BERT-style models are an example of an exception. BERT-style models are bidirectional, but they cannot be easily utilized for prompting and text generation since they are encoder-only \citep{bertspeak}. Of the available bidirectional models, T5 models are the only models with a long enough sequence length (unlimited with their relative position embeddings) to support many in-context prompt examples and with a large enough number of parameters to be effective zero-shot and few-shot performers \citep{gpt2,gpt3,scaling}.  See Appendix \ref{sec:survey} for a survey of popular open source language models. Aside from sequence length and model size, BART is not purely trained on the span denoising objective \textsc{Sap} exploits, but is also trained on many other corruption objectives like ``Sentence Permutation.'' For this reason, we utilize the T5 models for experiments and leave the exploration of the generalization of \textsc{Sap} to other models, that could become available later, as future work.
+
+\citet{bert} and \citet{t5} have both shown that after transfer learning, bidirectional denoising pre-training objectives such as BERT's masked language modeling and T5's random span corruption outperform causal language modeling on downstream tasks. \citet{gpt3} concedes this to be a potential source of weakness for the GPT-3 model on certain tasks where bidirectionality is important.
+
+Despite the advantages of denoising objectives, prompting and in-context learning capabilities have not been broadly demonstrated for bidirectional language models like T5, disqualifying them when few-shot in-context learning and zero-shot instruction following is desired. \citet{lester-etal-2021-power} explains this may be because: 
+\begin{displayquote}
+ \small{``...a T5 model pre-trained exclusively on span corruption, such as T5.1.1, has never seen truly natural input text (free of sentinel tokens), nor has it ever been asked to predict truly natural targets''}
+\end{displayquote}
+
+In other words: when pre-trained on their denoising objectives, language models like T5 that utilize bidirectionality are only conditioned to output a single token or short spans of tokens (the in-fill of the mask) rather than full and complete sentences; this inhibits their ability to generate arbitrary-length natural responses to a variety of prompts.
+
+Despite the stronger learned representations of bidirectional models, their shortcomings in prompt-based learning motivate \citet{gpt3} and \citet{xglm} to explicitly choose unidirectional models over bidirectional models for GPT-3 and XGLM.
+
+\subsection{Prompting Bidirectional Language Models}
+\label{sec:priortechniques}
+
+Unlike prior approaches to incorporate prompt-based learning capabilities into bidirectional models, our technique, \textsc{Sap}, neither requires fine-tuning, weight updates, nor supervised instruction-tuning datasets. It demonstrates that bidirectional language models develop \textit{innate} few-shot learning capabilities with in-context learning and zero-shot instruction following capabilities.
+
+\paragraph{Cloze-style prompts} \citet{cloze} and \citet{cloze2} find that bidirectional models such as RoBERTa and ALBERT \citep{roberta,albert} can be ``prompted'' with cloze-style phrases. They propose a few-shot training paradigm called \textsc{Pet} where the model's predicted mask in-fill, called a ``verbalizer,'' is used to label fine-tuning examples for the model. These verbalizers are only a single word or a few words, e.g. ``yes'', ``no'', ``amazing'', ``worse''. \citet{electrazero} follow a similar technique, but with the ELECTRA model \citep{electra}.  These works primarily demonstrate zero-shot effectiveness on classification tasks such as sentiment analysis, rather than more challenging generation tasks such as machine translation or question answering. Furthermore, they still require fine-tuning for effective few-shot learning, a major limitation that does not achieve the prompt-based in-context learning or instruction following abilities of unidirectional models such as GPT-3.
+
+\paragraph{LM-adaptation}
+\citet{lester-etal-2021-power} finds some success with prompting the T5 v1.1 models after continued pre-training on the unidirectional prefix-LM objective described in \citet{t5}. The resulting model, T5 v1.1 LM-adapted (T5+LM), is described as a late-stage adaptation to a unidirectional objective. Adaptation requires performing weight updates, and given that representations learned by the original denoising objective have been shown to be superior \citep{t5}, we hypothesize that such an adaptation could degrade the quality of the learned representations.
+
+\paragraph{Prompt-tuning}
+\citet{lester-etal-2021-power} and \citet{prefixtuning} find by fine-tuning only a portion of the parameters in an otherwise frozen pre-trained bidirectional language model, a ``soft prompt'' can be discovered through backpropagation. Soft prompts are prompts discovered in the embedding space of the model and are not grounded in natural language. As a form of parameter-efficient fine-tuning \citep{parameff}, this approach requires training the prompt embeddings and benefits from initialization from LM-adaptation, both of which require performing weight updates. The nature of soft prompts lacking grounding in natural language makes their use and flexibility limited, a stark difference from the instruction following capabilities of unidirectional models  \citep{promptingsurvey}.
+
+\paragraph{Instruction-tuning}
+
+Language models can be fine-tuned on a supervised dataset consisting of natural language prompts and their respective target completions \citep{flan,t0,instructgpt,metalicl}. This ``instruction-tuning'' technique allows these models to improve performance on instruction following and therefore exhibit few-shot and zero-shot capabilities through prompting. The T0 model in particular is an instruction-tuned version of the T5+LM model~\citep{lester-etal-2021-power}, augmenting it with prompting capabilities. While instruction-tuning likely bolsters the instruction following performance of a model, we hypothesize that by instruction-tuning, the T0 model is to some degree surfacing the innate prompting ability that the bidirectional model already has. We provide evidence towards this hypothesis by demonstrating that bidirectional models can be prompted without instruction-tuning.
+
+\subsection{Unsupervised Machine Translation through Prompting}
+
+GPT-2~\citep{gpt2}  and GPT-3~\citep{gpt3} have shown it is possible to perform few-shot machine translation and unsupervised zero-shot machine translation with large language models using prompting and in-context learning. The XGLM model~\citep{xglm} trains a similar architecture to GPT-3 on a diverse multilingual corpus, resulting in improvements on few-shot, low-resource machine translation. \citet{gpt3unsupervised} introduce bootstrapping and self-amplification techniques to further improve unsupervised zero-shot performance on machine translation.
+
+\firstwordablationtable
+\section{Few-shot Machine Translation}
+\label{sec:few-shot}
+
+To motivate our method for enabling few-shot in-context learning in bidirectional language models, we first focus on applying $\text{mT5}_\text{3.7B}$ (mT5-XL) \citep{xue-etal-2021-mt5} to the machine translation task as an in-depth case study since this task benefits greatly from bidirectionality \citep{xlm,xglm}. We largely follow the procedure of \citet{xglm}, except with mT5 and \textsc{Sap}. mT5 is a massively multilingual bidirectional model trained on random span corruption, a variant of masked language modeling.  We demonstrate that with \textsc{Sap}, mT5 can perform few-shot machine translation using prompting and in-context examples with no fine-tuning. We first formulate a prompt format that utilizes its random span masking scheme to complete the translation task, such as:
+\\[.5em]\centerline{\fbox{\begin{minipage}{15.5em}
+\small{
+Translate Spanish to English.\\
+Spanish: El clima es soleado.\textcolor{gray}{</s>}\\
+English: The weather is sunny.\textcolor{gray}{</s>}\\
+Spanish: Mi perro es un cachorro.\textcolor{gray}{</s>}\\
+English: My dog is a puppy.\textcolor{gray}{</s>}\\
+Spanish: Los árboles son importantes.\textcolor{gray}{</s>}\\
+English: \textcolor{red}{<X>}
+}
+\end{minipage}}}
+
+\subsection{Sequential Autoregressive Prompting (\textsc{Sap}) Technique}
+
+By requiring mT5 to in-fill \textcolor{red}{<X>}\footnote{We use the first sentinel token from the mT5 vocabulary as our mask token.}, we are effectively asking it to translate the Spanish sentence. However, due to the limitations of the denoising pre-training objective on prompting (described in Section \ref{sec:directionality}), we observe mT5 often outputs a partial translation of the beginning of the source sentence, rather than the full translation. To overcome this, we prompt mT5 $T$ times until the model generates a stop token \textcolor{gray}{</s>}\footnote{We repurpose the 100th sentinel token from the mT5 vocabulary as our stop token.}, resulting in a longer translation. At each time step of iteration, we keep the first word generated (using the space character as delimiter) and concatenate it into the last line of the prompt to use in the next time step. This iterative prompting enables us to extract longer generations. Formally, we denote the generation at each time step $t$ as $G_t$. We denote the first word generated at each time step as $F_t$, where $F_t = \texttt{SPLIT}(G_t, \texttt{" "})\texttt{[0]}$. We update the prompt at each time step $P_t$ to include the cumulative generation from all previous time steps concatenated in the last line of the prompt. The prompt used at each time step $P_t$ is as follows:
+\\[.5em]\centerline{\fbox{\begin{minipage}{15.5em}
+\small{
+Translate Spanish to English.\\
+Spanish: El clima es soleado.\textcolor{gray}{</s>}\\
+English: The weather is sunny.\textcolor{gray}{</s>}\\
+Spanish: Mi perro es un cachorro.\textcolor{gray}{</s>}\\
+English: My dog is a puppy.\textcolor{gray}{</s>}\\
+Spanish: Los árboles son importantes.\textcolor{gray}{</s>}\\
+English: \texttt{CONCAT}($F_0$, \ldots,  $F_{t-1})$
+\textcolor{red}{<X>}
+}
+\end{minipage}}}\\[.5em]
+In Table \ref{table:firstword-ablation}, we also consider sequential prompting---concatenating the entire generation $G_t$ instead of just the first word of the generation $F_t$---but find that it produces significantly inferior results as low-quality tokens are generated after the first word. By conditioning the model to generate the next word in the translation based on previous words generated, this technique resembles autoregression. mT5 is already autoregressive, but it is autoregressive only at the decoder level. Adding previously generated words back into the prompt allows them to pass through the encoder layers as well. For this reason, we call this technique \textsc{Sap} (\textbf{S}equential \textbf{A}utoregressive \textbf{P}rompting). To provide a signal to stop generation, we add our stop token at the end of each example in the prompt.  We stop prompting after the model generates a stop token.\footnote{We also implement a basic post-processing step to strip any generated text after a repeated sequence of three or more tokens following settings available in common decoding implementations \citep{transformers}.} The overall process is graphically depicted, with stop tokens omitted, in Figure \ref{fig:fewshot}.
+
+
+\subsection{Results}
+\label{sec:fewshot-results}
+Following \citet{xglm}, we evaluate our technique on 14 languages from the FLORES-101 dataset \citep{flores101} that span high-resource and low-resource languages\footnote{HR: English (en), German (de), French (fr), Catalan (ca), Finish (fi), Russian (ru), Bulgarian (bg), Chinese (zh); LR: Korean (ko), Arabic (ar), Swahili (sw), Hindi (hi), Malayalam (my), Tamil (ta)}. We evaluate SentencePiece BLEU (spBLEU) \citep{flores101} in every direction, leading to an evaluation over 182 language pairs in total. Abbreviated results can be found in Table \ref{table:fewshot-flores-results-abbrev}, and the matrix of full results can be found in Appendix \ref{sec:flores-results}. Examples generations can be found in Appendix \ref{sec:examplegenerations}.
+
+On an average spBLEU score over all 182 pairs, our model matches the performance of the unidirectional XGLM and GPT-3 models---with approximately 50\% fewer parameters and 16x fewer examples. Notably, our technique has significant improved performance on language pairs with at least one low-resource language, while trailing only slightly on high-resource pairs.
+
+\bootstrapfigure
+
+\section{Unsupervised Zero-shot Machine Translation}
+\label{sec:zero-shot}
+
+To extend our in-depth case study on the machine translation task, we now perform fully unsupervised zero-shot machine translation with \textsc{Sap} and mT5 following the procedure of \citet{gpt3unsupervised}, which uses a self-amplification technique to boost performance. A comparison of zero-shot performance without self-amplification can be found in Appendix \ref{sec:selfamp-ablation}. We ultimately will replace the examples in the few-shot prompt with synthetic parallel examples. These synthetic parallel examples are bootstrapped in a completely unsupervised fashion using a zero-shot translation prompt with no examples. The zero-shot prompt format looks like:
+\\[.5em]\centerline{\fbox{\begin{minipage}{15.5em}
+\small{
+Translate Spanish to English.\\
+Spanish: Los árboles son importantes.\textcolor{gray}{</s>}\\
+English: \textcolor{red}{<X>}
+}
+\end{minipage}}}\\[.5em]
+We adapt the bootstrap process of \citet{gpt3unsupervised} to retrieve these synthetic parallel examples. The process, as depicted in Figure \ref{fig:bootstrap}, consists of three steps:
+
+\begin{itemize}[leftmargin=*]
+\item[] \textbf{Step 1 (sampling)}: Generate synthetic parallel examples using a zero-shot translation prompt (with no examples) to translate sentences from a monolingual source language corpus.
+
+\item[] \textbf{Step 2 (filtering)}: Filter out low-quality synthetic examples to keep only high-quality synthetic examples using an unsupervised scoring technique (discussed in Section \ref{sec:mt5score}).
+
+\item[] \textbf{Step 3 (self-amplification)}: Translate any source language sentence desired using these synthetic parallel examples in the few-shot prompt.
+
+\end{itemize}
+
+We iteratively run multiple rounds of this bootstrap by repeating step 2 and step 3 to form a better few-shot prompt. The few-shot prompt after self-amplification is used to translate more source language sentences. These are then filtered using the scoring technique used in step 2 and so on. In our experiments, we run four bootstrapping rounds and sample 100 source language sentences from the training dataset in each round. Note that none of the target language parallel sentences from the training dataset are used in this zero-shot setting; following \citet{gpt3unsupervised}, only the source language sentences are used.
+
+\subsection{Filtering Down to High-quality Translations}
+\label{sec:mt5score}
+
+The filtering step of the bootstrap requires an unsupervised scoring method for assessing the quality of translations. We first use \texttt{{langdetect}}\footnote{\url{https://pypi.org/project/langdetect/}}, a language identifier,  as a simple rule-based filter to ensure the generated text is in the desired target language. We then score the remaining generated translations against their corresponding original sentence in the source language. For this unsupervised multilingual similarity metric, we utilize the BERTScore~\citep{bertscore} algorithm with $\text{mT5}_{\text{300M}}$ (mT5-small)\footnote{The BERTScore Python library~\citep{bertscore} directly supports using mT5 instead of BERT.}, dubbing it ``mT5Score''. We ablate the use of mT5Score as a filter in Appendix \ref{sec:mt5score-ablation}.
+
+We take the top two synthetic parallel examples with the highest mT5Score in the filtering step and use those as synthetic few-shot examples in the prompt in the self-amplification step.
+
+\subsection{Translating with an Ensemble of Prompts}
+
+Because the two examples used in the prompt can greatly affect the quality of the generated translations, some prompts containing low-quality synthetic examples may cause poor translations for certain sentences. To combat this and reduce variation in performance,  we keep the top $N$ synthetic examples instead of two synthetic examples. We use these to form $\frac{N}{2}$ different few-shot prompts with two synthetic parallel examples each. Each sentence in the test set is then translated with these $\frac{N}{2}$ different prompts to produce $\frac{N}{2}$ translations. The best translation of the $\frac{N}{2}$ translations is chosen in a fully unsupervised manner with mT5Score, as done in the filtering step of the bootstrap.
+
+We find this ensembling technique helps make unsupervised zero-shot performance competitive with few-shot performance. Experiments varying the number of prompts in the ensemble can be found in Appendix \ref{sec:promptensemble-ablation}. Unless otherwise stated, we use a 4 prompt ensemble in this paper: $\frac{N}{2} = 4$.
+
+In sum, we sample and zero-shot translate 100 sentences from a monolingual corpus, keep the top eight synthetic parallel examples scored by mT5Score, and use them to form four few-shot prompts, each of which has two synthetic examples. 
+
+\fewshotfloresresultstableabbrev
+\subsection{English-centric Bootstrapping}
+\label{sec:englishcentric}
+
+While \citet{gpt3unsupervised} only performed a bootstrap on English-French and French-English pairs, we perform bootstrapping on some language pairs which may contain at least one low-resource language or non-English language.
+
+It has been found that multilingual language models perform best in English,  due to  imbalance of languages in the pre-training corpus where English has the highest amount of data \citep{xglm}. Therefore, when running the bootstrap on various language pairs, we modify the bootstrap to favor generating English, or pivot through English when neither the source nor target language is English. Ablation experiments can be found in Appendix \ref{sec:englishcentric-ablation}. We outline examples of our modified English-centric bootstrapping process for various language pairs in Appendix \ref{sec:englishcentric-examples}.
+
+
+\subsection{Results}
+We report results with the same method used for our few-shot evaluation. Abbreviated results can be found in Table \ref{table:fewshot-flores-results-abbrev} and the matrix of full results can be found in Appendix \ref{sec:flores-results}.
+
+In this unsupervised setting, we find our zero-shot results exceed our 2-shot results; furthermore, they significantly exceed the performance of the XGLM and GPT-3 results reported in \citet{xglm} on an average spBLEU score over all 182 pairs (+1.0 spBLEU). Again, we note strong performance on language pairs that contain one or more low-resource languages.
+
+Intuitively, we can explain the zero-shot performance surpassing the few-shot performance through our use of prompt ensembling in the zero-shot setting. As prompt ensembling utilizes four prompts with two synthetic parallel examples each, it essentially uses eight synthetic examples, instead of just two real examples in the few-shot setting. Our synthetic examples are nearly as high-quality as real examples (similar to the findings of \citet{gpt3unsupervised}) as demonstrated by Appendix \ref{sec:promptensemble-ablation}. Prompt ensembling not only reduces performance variation if low-quality synthetic examples are selected during the bootstrap, but it also boosts performance beyond the few-shot setting as demonstrated by Table \ref{table:firstword-ablation} and the Appendix \ref{sec:promptensemble-ablation} experiments (Russian-English 26.9 $\rightarrow$ 27.9 spBLEU).
+
+In Appendix \ref{sec:zeroshot-results}, we also evaluate on WMT14~\citep{wmt14} to compare with the results reported in \citet{gpt3unsupervised} using $\text{GPT-3}_\text{175B}$.
+
+\section {Other Language Generation Tasks}
+\label{sec:other-tasks}
+
+We next demonstrate that bidirectional models have a generalized ability, beyond machine translation, to be prompted for arbitrary tasks. We evaluate their performance on question answering and summarization language generation tasks. Example generations can be found in Appendix \ref{sec:examplegenerations}.
+
+
+
+
+
+\subsection{Question Answering}
+
+We compare the zero-shot question answering performance of mT5 against XGLM on the XQuAD dataset \citep{xquad}, a multilingual question answering dataset, in Table \ref{table:xquad}. We find mT5 with \textsc{Sap} outperforms XGLM significantly (+1.7 EM, +12.3 F1). 
+
+In Table \ref{table:squad}, we also compare against T5+LM~\citep{lester-etal-2021-power}. As T5+LM is English-only, we compare using the English-only SQuAD v1.1 dataset \citep{squad}. We still utilize the multilingual mT5 with \textsc{Sap} due to observations that the English-only T5 v1.1 model does not perform as well as mT5 in prompt-based learning\footnote{We discuss this observation in more detail in Appendix \ref{sec:t5v11observation}.}. \textsc{Sap} achieves +6.7 EM and +5.6 F1 over T5+LM.
+
+\textsc{Sap}, as an iterative technique, is useful for producing long generations from a bidirectional model for tasks such as machine translation. We find, however, it still has utility on tasks like question answering where answer generations are shorter spans of text. We ablate utilizing \textsc{Sap} with mT5 against the simple approach of prompting mT5 once and using the mask in-fill generated on SQuAD v1.1. In the few-shot (16-shot) setting, we find that utilizing \textsc{Sap} still markedly improves performance (+12.5 EM, +5.5 F1) even on short-form generation tasks like question answering.
+
+\xquadtable
+\squadandsummarizationtable
+
+\subsection{Summarization}
+
+We next perform summarization on the CNN/Daily Mail dataset \citep{cnndailymail,cnndailymail2,cnndailymail3} as another long-form text generation task. We compare mT5 with T5+LM and ablate the usage of \textsc{Sap} once again in Table \ref{table:summarization}. In the few-shot setting, we find a significant lead against T5+LM (+7.1 ROUGE-L). Of that +7.1 ROUGE-L boost, the ablation of our usage of \textsc{Sap} finds the technique itself is responsible for a large component of the boost (+5.3).
+
+
+\section {Conclusion and Future Directions}
+\label{sec:conclusion}
+
+We demonstrate \textsc{Sap} with the bidirectional mT5 model enables few-shot and zero-shot machine translation and zero-shot multilingual question answering, outperforming unidirectional models despite using far fewer parameters and examples. Our results suggest that the bidirectional representations learned by models such as mT5 contribute to this improved performance. Still, we concede that our results do not conclusively prove bidirectionality explains the difference in performance. Beyond bidirectionality and pre-training objectives, mT5, XGLM, and GPT-3 further differ in architecture, pre-training corpus, and hyperparameters. A complete ablation experiment would be computationally expensive, and we leave this as future work. The main limitation of \textsc{Sap} lies in its computational efficiency, discussed further in Appendix \ref{sec:limitations} along with potential mitigations.
+
+Importantly, these results demonstrate bidirectional models possess few-shot in-context learning and zero-shot instruction following capabilities innately, without the post-hoc modifications required by prior work. Our results finally contribute strong evidence towards the strength and efficiency of bidirectional pre-training objectives and motivate further research into bidirectional architectures, pre-training objectives, and language models designed and optimized for prompting and few-shot learning. We hypothesize these future bidirectional training schemes could yield an approach that overcomes the efficiency limitations of \textsc{Sap}, while maintaining the performance and parameter size reduction benefits. Concurrent recent work that compares or mixes unidirectional and bidirectional pre-training objectives \citep{bigsciencearchobjective,unifying,alexatm} already provide some early evidence towards this hypothesis.
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,503 @@
+\section{Introduction}
+\label{sec:intro}
+Image-to-text generation, also known as image captioning~\citep[e.g.,][]{karpathy2015deep}, plays a vital role in understanding visual information and enhancing human-AI interaction. This task has a wide range of practical applications such as gaming, virtual reality, and robotics~\cite{luo2019visual, zhao2021high,liu2021region}. 
+To address this problem, in recent years, numerous methods have been proposed and have obtained great success \citep[e.g.,][]{alayrac2022flamingo, wang2021simvlm, hu2022scaling, chen2022pali, chen2022visualgpt, wang2022image}. 
+
+
+Among them, visual language models~(LMs) build on top of pretrained autoregressive LMs~\citep[e.g., GPT-3,][]{brown2020language}, and inherit its powerful text generation ability.
+In particular, the pretrained LM parameters are usually frozen and only some trainable layers~(e.g., adaptor) are added into the large LM during multimodal pretraining~\citep{eichenberg2021magma, mokady2021clipcap, tsimpoukelli2021multimodal, alayrac2022flamingo}. 
+This frozen LM strategy can avoid catastrophic forgetting when the visual LM is trained on paired  $\langle$\emph{image, text}$  \rangle$ data, where the text quality is usually lower than the text-only corpus to pretrain LM. In addition, it enables the compelling zero-shot or few-shot capability of pretrained LM~\citep[e.g., Flamingo,][]{alayrac2022flamingo}.
+
+However, such methods have two major limitations: 1) They store all acquired knowledge within the model parameters, making them parameter inefficient in modeling the abundant visual concepts~(e.g., uncommon objects) and rich textual descriptions~(e.g., alternative descriptions for the same scene).
+2) They are inefficient in incorporating new data, typically requiring computationally expensive fine-tuning~\cite{chen2022visualgpt}  or pertaining on increasingly more parameters and interleaved $\langle$\emph{image, text}$  \rangle$ data~\cite{alayrac2022flamingo}. 
+
+\begin{figure*}
+  \vspace{-3em}
+\centering
+  \includegraphics[width=\textwidth]{figures/illustrative_samples.pdf}
+  \vspace{-2em}
+  \caption{Examples of input images and output captions from 2.1B Flamingo~(re-implemented) and 2.4B Re-ViLM. Re-ViLM can utilize the retrieved captions to generate more informative and accurate captions.}
+  \label{fig:illustrative-samples}
+\end{figure*}
+
+In the past few years, retrieval-augmented LMs~\citep{guu2020retrieval, lewis2020retrieval, karpukhin2020dense, borgeaud2022improving} have shown notable success in improving accuracy while reducing model parameters by retrieving large-scale text corpus. 
+Despite their success, there are several issues to be addressed before we apply retrieval technique to visual LMs for image-to-text generation:
+\emph{{i)}} The visual LM needs to seamlessly retrieve and encode external knowledge at the beginning of multi-modal pretraining. Otherwise, the powerful pretrained autoregressive LM tends to ignore the poorly encoded external knowledge.
+\emph{{ii)}} In multi-modal datasets, there are cases where multiple captions describing the same image~(e.g., from different annotators~\citep{lin2014microsoft}), and multiple images having the same caption~(e.g., see images in Figure~\ref{fig:same-caption-for-multi-image} in Appendix). Thus, simply performing standard nearest neighbor retrieval tends to make the model take a shortcut and copy-paste retrieval examples during training.
+\emph{{iii)}} Training the model on large-scale interleaved $\langle$\emph{image, text}$  \rangle$ dataset facilitates few-shot learning capability~(e.g., M3W in ~\citet{alayrac2022flamingo}), but it is really expensive to collect such dataset.
+
+
+
+
+
+In this work, we propose a \textbf{Re}trieval-augmented \textbf{Vi}sual \textbf{L}anguage \textbf{M}odel, \textbf{Re-ViLM}, which enhances the state-of-the-art visual language model, Flamingo for zero-shot and in-context few-shot image captioning,\footnote{Note that, no official implementation of \emph{Flamingo} is available, which is trained on large-scale in-house dataset~\cite{alayrac2022flamingo}. We re-implement the model on public available dataset.} by seamlessly  incorporating a multimodal retriever and retrieval-augmented LM layers that cross-attend to a text encoder~(see selected samples in Figure~\ref{fig:illustrative-samples}, and model framework in Figure~\ref{fig:pipeline}). 
+Specifically, we make the following contributions:
+\begin{enumerate}[itemsep=-0.00pt, topsep=0pt, leftmargin=1.1em]
+    \item  
+    In contrast to previous work, we initialize Re-ViLM  with RETRO, a pretrained retrieval-augmented LM~\citep{borgeaud2022improving}, thus it can seamlessly integrate the retrieval capability at the beginning of  multimodal pretraining and result in improved performance.
+   
+    %
+    \item 
+    We investigate the retrieval strategy to build the multimodal retriever.
+    At multimodal pretraining, we find the best performance is obtained by retrieving \emph{k}-nearest neighbor captions based on \emph{cosine} similarity between image CLIP~\citep{radford2021learning} embeddings, while circumventing ``copy-and-paste'' behavior in training by filtering out retrieved candidates with the same caption as the training instance.
+    %
+    \item We construct both pretraining and evaluation datasets consisting of interleaved  $\langle$\emph{image, text}$  \rangle$ pairs for multimodal pretraining, using existing public datasets. This facilitates in-context learning where few-shot examples are given as interleaved $\langle$\emph{image, text}$  \rangle$ pairs.
+    %
+   
+     \item  We conduct extensive experiments for image-to-text generation under zero-shot, few-shot, and fine-tuning settings on various benchmarks including MSCOCO~\cite{lin2014microsoft}, Flickr30k~\cite{plummer2015flickr30k}, and NoCaps~\cite{agrawal2019nocaps}. Re-ViLM  consistently outperforms the baseline Flamingo model across all settings. 
+     The improvements are particularly notable in zero-shot and few-shot settings, e.g., our Re-ViLM can outperform the Flamingo model containing even $4\times$ more parameters in zero-shot evaluation.
+    
+\end{enumerate}
+We organize the rest of the paper as follows. In \S~\ref{sec:related_work}, we discuss related work. We introduce Re-ViLM  model in \S~\ref{sec:architecture} and multimodal dataset for pretraining and retrieval in \S~\ref{sec:data}. 
+We present our experimental results in \S~\ref{sec:experiment} and conclude the paper in \S~\ref{sec:conclusion}.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+\begin{figure*}
+  \vspace{-3em}
+  \includegraphics[width=\textwidth]{figures/re-vilm-pipeline_3.pdf}
+  \vspace{-2em}
+  \caption{The framework of Re-ViLM. The model first extracts CLIP embedding of the input image, and use it to retrieve similar image-text pairs from the database. Within some predetermined layers, the \emph{retrieval-augmented LM} will cross-attend the visual representation from the image encoder, and the textual representation from text encoder, which encodes the retrieved captions.}
+  \label{fig:pipeline}
+\end{figure*}
+
+\section{Related Work}
+\label{sec:related_work}
+Our work builds upon the state-of-the-art in visual language models~(LMs) and retrieval-augmented LMs.
+\paragraph{Visual Language Models}
+Many recent work tackle the problem of generating text captions for given images~\citep[e.g.,][]{wang2021simvlm, alayrac2022flamingo, aghajanyan2022cm3, wang2022image, hu2022scaling, li2022blip, chen2022pali, yu2022coca}. 
+Among these work, visual language models~\citep{tsimpoukelli2021multimodal, alayrac2022flamingo} directly augment pretrained LMs with visual component, achieving strong results in both zero-shot and few-shot generation.
+
+
+
+
+\textbf{Retrieval-augmented Models}
+Retrieval has been successfully applied in various NLP tasks, including question answering~\cite{guu2020retrieval, karpukhin2020dense}, autoregressive language modeling~\cite{borgeaud2022improving}, and other knowledge-intensive tasks~\citep[e.g.,][]{lewis2020retrieval}.
+In computer vision, retrieval has also been applied for image recognition with long-tail distribution of classes~\cite{long2022retrieval}.
+In this work, we apply retrieval for image captioning.
+
+
+
+
+
+There two concurrent work~\citep{yasunaga2022retrieval, chen2022murag} that apply retrieval for multi-modal generation.
+\citet{chen2022murag} propose MuRAG, a retrieval-augmented multi-modal model for open question answering over images and text. They evaluate their method on two QA datasets: WebQA, and MultimodalQA.
+
+
+RA-CM3~\citep{yasunaga2022retrieval} augments the CM3 backbone~\citep{aghajanyan2022cm3} with retrieval, which can perform both image-to-text generation and text-to-image synthesis.
+In contrast to our ReViLM, there are the following differences:
+1) We investigate the ``copy-and-paste'' behavior of retrieval-augmented model during training, and propose a simple filtering strategy during retrieval. In contrast, RA-CM3 proposes a query-dropout strategy that drops some tokens of the query caption used in retrieval. In our ablation study, we find our simple strategy works better than the dropout regularization as shown in \S~\ref{sec:abl-filtering}. 
+2) Our Re-ViLM  uses retrieval-augmented LM decoder layer with cross-attention module to attend to the retrieved similar captions. In contrast, RA-CM3 appends the retrieved captions as the prefix context on the decoder side.  In our ablation study, we find ours are more effective, as shown in \S~\ref{sec:abl-other-retrieval}.
+3) For image-to-text generation, RA-CM3 only provides the result of 2-shot in-context image captioning on MSCOCO~\citep{lin2014microsoft}. In contrast, we perform extensive evaluations of our Re-ViLM on various benchmarks under zero-shot, few-shot and fine-tuning settings.
+
+
+
+
+
+
+
+\section{Re-ViLM Architecture}
+\label{sec:architecture}
+In this section, we begin by outlining the framework of Re-ViLM. After that, we delve into the details of each component in depth.
+
+\subsection{Framework} 
+We illustrate our {Re-ViLM} framework for image captioning in  Figure~\ref{fig:pipeline}. It consists of three essential components: 
+\begin{itemize}[itemsep=-0.00pt, topsep=0pt, leftmargin=1.1em]
+    %
+    \item \emph{Image encoder} begins with a pretrained vision transformer from CLIP~\citep{radford2021learning} to extract visual features from the input images. These features are subsequently fed into a trainable perceiver resampler~\citep{jaegle2021perceiver} to unify the image features into the textual representation used in the retrieval-augmented LM.
+    %
+    \item \emph{Retrieval-augmented LM} is initialized with a pretrained RETRO model~\citep{borgeaud2021improving} to generate corresponding captions based on the image features and retrieved evidence. Among some LM layers, the module cross-attend the hidden representations from the image encoder or the shared text encoder. The bidirectional text encoder encodes the retrieved captions obtained from the multimodal retriever.
+    %
+    \item \emph{Multimodal retriever} consists of  a retrieval database storing $\langle$\emph{image, text}$\rangle$ pairs indexed by Faiss, a fast similarity search library~\citep{johnson2019billion} using their CLIP embeddings.
+    Given a query image, the retriever extracts its embedding using the CLIP-ViT module within the image encoder. It then returns the top-\emph{k} $\langle$\emph{image, text}$\rangle$ pairs, measured by the cosine similarity of embeddings between the query image and the retrieved images.
+    After that, the retrieved captions are encoded by the LM to generate relevant captions.
+   
+   
+\end{itemize}
+In the following subsections, we provide more details about each component of our model. 
+
+
+\subsection{Image Encoder}
+\label{sec:vilm-structure}
+ To fully leverage the existing pretrained model, we initialize the image encoder with CLIP-ViT~\cite{radford2021learning}, a pretrained vision transformer that processes images by dividing them into a grid of patches and then processing each patch with a transformer encoder. 
+ In our experiments, we used two different sizes of the CLIP-ViT model: ViT-B/32 and ViT-L/14.
+ We freeze the CLIP-ViT part during multimodal pretraining to avoid catastrophic forgetting while making it trainable during fine-tuning for better results.
+We then use a perceiver resampler to obtain fixed-length hidden representations from the CLIP-ViT token embeddings.
+The perceiver is trainable during both the multimodal pretraining and future fine-tuning, allowing it to adapt the visual representations for the text decoder and connects the two modalities.
+
+
+\subsection{Multimodal Retriever} 
+\label{sec:retrieval}
+Our Multimodal Retriever consists of three steps: (1) building the database, (2) retrieval and (3) filtering. 
+ \paragraph{Building Database.} 
+The retrieval database is built upon a image-text paired dataset and is structured as a key-value map, where the keys are CLIP ViT-B/32 image embeddings for images, and the values are the corresponding text descriptions.  The database is indexed by Faiss library~\citep{johnson2019billion}. 
+
+
+\textbf{Retrieval\quad} 
+Given an input query image $I$, we perform $k$-nearest neighbor retrieval with cosine similarity of embeddings between query image and  database images.\footnote{We also tried to use embeddings of query image and database captions with the same CLIP model, and the empirical results are very similar.}
+The retrieval results are denoted as $\mathcal{R}(I) = \{(i_1, c_1), \cdots, (i_k, c_k)\}$, where $i_j$ and $c_j$ with $j\in [1, k]$ represents the retrieved image and caption, respectively. 
+
+\textbf{Filtering strategy\quad} 
+There can be multiple captions for the same image from different annotators in some datasets ~(e.g., MSCOCO~\citep{lin2014microsoft}). In this case, these retrieved captions, which are highly correlated~(even near-duplicate) with the ground-truth caption, could give a false sense of retrieved evidence quality to the model, resulting in potentially degraded test performance due to the discrepancy between the training and evaluation setting.  To avoid it, we  filter out the retrieved image-text pairs if the retrieved image is identical to the query image $I$~(e.g., $i_1 = I$) during both training and inference.
+
+Furthermore, in the image-text datasets (e.g., Conceptual Captions~\citep{sharma2018conceptual, changpinyo2021conceptual}), multiple images can have identical captions. For example, one annotator may provide the same caption or alt-text for similar images (see Figure~\ref{fig:same-caption-for-multi-image} in Appendix for examples).  
+If the retrieved caption from database is the same as the ground-truth caption during training, it will encourage the model to take a short path and simply copy-and-paste the retrieved caption to the model output, hindering the training of Re-ViLM. 
+To address this issue, we employ a filtering strategy that filters out the retrieved image-text pair if its text is identical to the training image's caption that is used as the teacher-forced input at the LM decoder layer.  
+
+
+
+Thus, if the corresponding ground-truth caption of $I$ is $C$,  the filtered retrieval results $\mathcal{R}(I)$ is,
+\vspace{-0.5em}
+\quad
+$$\{
+(i_1, c_1), \cdots, (i_k, c_k) \mid c_j \neq C, i_j \neq I, \forall j \in [1, k] \}
+$$
+In \S~\ref{sec:abl-filtering}, we show that Re-ViLM can be largely improved by using this simple and effective filtering strategy.
+
+
+
+\subsection{Retrieval-augmented LM} 
+To facilitate the model using the retrieved captions,  
+the visual LM needs to seamlessly retrieve and encode the external knowledge at the beginning of multimodal pretraining. 
+Thus, we initialize  our text encoder and LM decoder layer with pretrained RETRO~\cite{borgeaud2021improving}, a state-of-the-art retrieval-augmented LM. In our experiments, we use three different sizes of RETRO models: RETRO$_{\textrm{\small base}}$  with 148M parameters, RETRO$_{\textrm{\small medium}}$ with 405M, and RETRO$_{\textrm{\small large}}$ with 1.5B parameters.
+To generate captions conditioned on visual input, we interleave the LM decoder layers with gated cross-attention dense layers~(gated xttn-dense) as in \emph{Flamingo}~\cite{alayrac2022flamingo}, which take the output of perceiver resampler as the \emph{key} and \emph{value} for cross-attention.
+To incorporate the retrieved captions as evidence, we interleave the LM decoder layers with retrieval-augmentation layers, which take text encoder output as \emph{key} and \emph{value} for cross-attention. Note that, the text encoder is shared across retrieval-augmentation layers. 
+We freeze the retrieval-augmented LM at multimodal pretraining, and make it trainable at fine-tuning. 
+
+ \textbf{Text encoder\quad} 
+Given the retrieved $k$-nearest neighbor captions, we use a transformer-based bidirectional encoder model, to obtain the hidden representations.
+Specifically, our text encoder shares the subword embedding table with the LM decoder. 
+We concatenate $k$ embeddings along with the length dimension to form the retrieval raw embedding tensor $\mathcal{E}\in \mathbb{R}^{(k\times m)\times d}$, where $m$ is sequence length, $d$ is hidden dimension.
+After applying transformer layers, the encoder output is cross-attended by the LM decoder layers.
+We initialize the text encoder with a pretrained RETRO language model~\citep{borgeaud2021improving} instead of training from scratch to improve model performance.
+
+
+
+
+
+
+ 
+
+
+
+
+
+
+\subsection{Trainable Modules at Pretraining and Finetuning}
+Similar to Flamingo, our training objective is to maximize the conditional likelihood of the captions given the images.  
+At pretraining, we follow Flamingo's strategy by freezing the pretrained components, including CLIP-ViT in image encoder and retrieval-augmented LM, training only the perceiver resampler from scratch. 
+At finetuning, we unfreeze all the pretrained components and increase image resolution from $224\times224$ to $480 \times 480$, as suggested in~\cite{alayrac2022flamingo}. This has been shown to improve overall performance.
+
+
+\section{Multimodal Data for Pretraining and Retrieval}
+\label{sec:data}
+\subsection{Image-Text Pair Data}
+In this work, we pretrain our models using two multi-modal datasets: 1)~\textbf{CC3M + CC12M + SBU}, which consists of overall 15 million high-quality image-text pairs from the Conceptual Dataset~\cite{sharma2018conceptual, changpinyo2021conceptual} and SBU Captions~\cite{ordonez2011im2text}; 
+2)~\textbf{COYO-700M}~\cite{kakaobrain2022coyo-700m}, which contains 747 million image-text pairs after filtering out low-quality samples from a collection of 10 billion web image-text sources. 
+In our experiment, we find that the high-quality captions are essential for pretraining in image captioning task. Thus, we further filter out instances with irregular textual tokens or low CLIP similarity scores between image and text, and obtain 104M high-quality image-text pairs. 
+For simplicity, we refer to the CC3M + CC12M + SBU dataset as \textcolor{purple}{\bf CCS} and the COYO-104M dataset as \textcolor{blue}{\bf COYO}. 
+
+At retrieval, we use \textcolor{purple}{\bf CCS} and  \textcolor{blue}{\bf COYO}
+ as the main sources for our retrieval database, and utilize the Faiss library~\cite{johnson2019billion} to support fast similarity-based retrieval.
+
+
+\subsection{Interleaved Image-Text Data}
+\label{sec:interleaved-pretraining}
+In this subsection, we discuss our proposed pretraining method for enhancing the in-context few-shot ability of our model.
+In this scenario, the model needs to be highly conditioned on the previous few-shot samples (image-text pairs) to effectively generate captions of test images. 
+However, existing multimodal models generally do not use multiple image-text pairs as inputs for pretraining~\cite{tsimpoukelli2021multimodal, yasunaga2022retrieval}. This makes the in-context few-shot learning at inference time challenging, as there is no such supervision during pretraining.
+While \citet{alayrac2022flamingo} built an in-house large-scale multimodal corpora with interleaved images and text, collecting such a dataset is expensive.
+
+We construct our image-text interleaved datasets using publicly available image-text pair datasets. We make the image-text pairs in each interleaved sample relevant, in order to explicitly teach the model how to condition on previous data samples for generating the caption of the current image.
+
+Our interleaved dataset is constructed by using \textcolor{purple}{\bf CCS}. For each image-text pair (query) in \textcolor{purple}{\bf CCS}, we select four relevant data pairs from the same corpus to construct each interleaved sample, which results in five data pairs for each interleaved sample.
+The data selection process for each query consists of two steps.
+\textbf{Step-1}:
+We use $L_2$ metric to measure the distances between the CLIP embeddings of the query image and the rest of images in \textcolor{purple}{\bf CCS}. After that, we choose those data pairs where the images have a normalized distance score between $0.4$ and $0.6$ to the query image. 
+\textbf{Step-2}: To ensure the captions in an interleaved sample are similar, we further use CLIP embeddings to calculate the distances between the query caption and the captions from the selected data pairs in Step-1. Then, we pick the top-4 data pairs where the captions are most similar to the query caption.
+Note that we don't choose the most similar images in Step-1, because there are lots of near-duplicate images, e.g., they have very few differences in terms of resizing, cropping, color, rotation, watermark. Hence, we set thresholds (in practice, [0.4, 0.6]) to filter out these cases, increase the diversity of the data pairs in one interleaved sample, and still make sure the selected images are relevant.
+
+
+
+
+
+
+\section{Experiments}
+\label{sec:experiment}
+
+In this section, we evaluate the performance of Re-ViLM under three different settings: zero-shot, few-shot and fine-tuning, on various image captioning benchmarks. We aim to demonstrate the superiority of our retrieval augmentation technique in improving the quality and relevance of generated captions through retrieving relevant knowledge from external databases.  We compare our results to several widely-used image captioning models such as Enc-Dec~\cite{changpinyo2021conceptual}, SimVLM~\cite{wang2021simvlm}, and Flamingo~\cite{alayrac2022flamingo}. Through extensive evaluation of Re-ViLM, we conclude that Re-ViLM is compelling under zero-shot and few-shot settings.
+
+
+
+\subsection{Experimental setup}
+
+
+ \textbf{Evaluation Dataset.}  We conduct our image captioning evaluation on three multi-modal datasets: \textbf{1) MSCOCO}~\cite{lin2014microsoft} is a dataset for image captioning, object detection, and segmentation. We use the Karpathy split~\cite{karpathy2015deep}, with 82k/5k/5k images for training, validation, and testing respectively. Each image is annotated with at most 5 human-generated captions. 
+ \textbf{2) Flickr30k}~\cite{plummer2015flickr30k} is a standard benchmark for sentence-based image captioning, which includes 29k/1k/1k images in its Karpathy split. 
+ \textbf{3) NoCaps} contains 15k images containing nearly 400 additional novel classes to original MSCOCO, which can be used to evaluate novel object captioning performance after finetuning on MSCOCO. 
+ 
+ For zero-shot setting, we focus on the evaluation under MSCOCO and Flickr30k datasets. For fine-tuning setting, we evaluate on MSCOCO, Flickr30k and NoCaps datasets. We conduct our few-shot experiments on MSCOCO dataset only to assess Re-ViLM's generalization and adaptability. Throughout our experiments, we report BLEU@4, CIDEr, and SPICE scores~\cite{lin2014microsoft} to measure the quality and relevance of the generated captions given input images. 
+
+
+
+ \textbf{Implementation.} We develop Re-ViLM with three different sizes based on different size of CLIP-ViT and RETRO~\citep{borgeaud2021improving}, named Re-ViLM$_{\textrm{\small base}}$ (ViT-B/32, RETRO-148M),  Re-ViLM$_{\textrm{\small medium}}$(ViT-L/14, RETRO-410M) and Re-ViLM$_{\textrm{\small large}}$(ViT-B/32, RETRO-1.5B). Compared to Flamingo model with the same CLIP-ViT and comparable GPT-3 configuration~\citep{brown2020language}, Re-ViLM introduces up to $16\%$ additional parameters while largely boosting the performance. We build our model with Megatron-LM infrastructure to support large visual language model training and evaluation. 
+ We set global batch size as $256$ and use Adam optimizer at training. We use beam search with beam size as $3$, maximum generation length as 10 for inference.
+
+ 
+
+
+\begin{table*}
+\centering
+\vspace{-1em}
+\caption{Zero-shot evaluation results on MSCOCO, Flickr30k benchmarks, compared with different image captioning baselines. We report BLEU@4, CIDer, SPICE scores for different methods. Note that MSCOCO, Flickr30k were excluded from pretraining set in the following MSCOCO and Flickr30k results. We replicate Flamingo models with the same image encoder and text decoder as Re-ViLM based on original paper.
+}
+\vspace{0.1em}
+\begin{minipage}{\textwidth}
+\renewcommand*{\thempfootnote}{\fnsymbol{mpfootnote}}
+\centering
+\scalebox{0.87}{
+\begin{tabular}{l|c|c|cc|cc
+\toprule
+\multirow{2}{*}{\bf Method} & {\bf Total} & {\bf Trainable} & \multicolumn{2}{c|}{\bf MSCOCO karpathy test} & \multicolumn{2}{c}{\bf Flickr30k karpathy test}
+\\
+                        &                 \bf params.   &   \bf params.                     & \bf BLEU@4                 & \bf CIDer               & \bf CIDer                 & \bf SPICE         
+                        \\ \hline
+VL-T5~\cite{cho2021unifying}                     &     224M    & 224M                         & -                   & 4.9                   & 2.6                  & 2.0            
+\\ \hline
+Unfied VLP~\cite{zhou2020unified}                  &   122M   & 122M                 & - & -            & 24.9                & 7.2   
+\\ \hline
+
+SimVLM$_{\textrm{\small base}}$~\cite{wang2021simvlm}                              &      -    & -        & 9.5                 & 24.0                & -                     & -   
+\\
+SimVLM$_{\textrm{\small large}}$                          &     -   & -            & 10.5                & 24.9                & -                     & -         
+\\
+SimVLM$_{\textrm{\small huge}}$                             &      $\sim$ 1.4B      & $\sim$1.4B     & 11.2                & 32.2                & -                     & -     
+\\ \hline
+Flamingo$_{\textrm{\small base}}$(re-impl)                &       364M    & 102M             & 12.4                & 39.6                & 42.2                  & 7.9      
+\\
+Flamingo$_{\textrm{\small medium}}$(re-impl)            &             894M        & 233M         & 15.6                & 44.3                & 43.2                  & 8.8          
+\\
+Flamingo$_{\textrm{\small large}}$(re-impl)          &   2.1B                   & 489M           & 16.5                   & 49.2                   & 46.4                     & 9.4             
+\\ \hline \hline
+Re-ViLM$_{\textrm{\small base}}$                     &      420M   & 158M                & {17.0}       & {51.2}       & {45.2}         & {9.2} 
+\\
+Re-ViLM$_{\textrm{\small medium}}$               &     1.0B  & 347M                     & {17.9}       & {53.6}       & {52.0}         & {9.8}   
+\\
+Re-ViLM$_{\textrm{\small large}}$              &    2.4B     & 806M                    &  18.6                   &  60.8                   &  52.1                     &  10.0           
+\\ \bottomrule
+    \end{tabular}}
+\end{minipage}
+\vspace{-2em}
+\label{tab:zs-main}
+\end{table*}
+
+
+\begin{table*}[!htbp]
+\centering
+\vspace{-.2em}
+\caption{Few-shot evaluation results on MSCOCO benchmarks, compared with vanilla Flamingo models as our baseline. We report BLEU@4, CIDer scores for different methods. We pretrain our Re-ViLM on constructed \textcolor{purple}{\textbf{CCS}} interleaved dataset and evaluate on constructed COCO interleaved dataset respectively. We adopt \textcolor{purple}{\textbf{CCS}} as our retrieval set during both pretraining and evaluate stage.}
+\vspace{0.1em}
+\scalebox{0.85}{
+\begin{tabular}{l|c|c|cc|cc|cc}
+\toprule
+\multirow{2}{*}{\bf Method} &   {\bf Total} &   {\bf Trainable}   & \multicolumn{2}{c|}{\bf 2 shots} & \multicolumn{2}{c|}{\bf 4 shots} & \multicolumn{2}{c}{\bf 8 shots}
+\\
+                        &         {\bf params.}    &         {\bf params.}                & \bf BLEU@4           & \bf CIDer            & \bf BLEU@4           & \bf CIDer            & \bf BLEU@4           &\bf  CIDer  \\ \hline       
+Flamingo-3B~\cite{alayrac2022flamingo}        & 3.2B    & 1.3B    & -                    & -          & -         & 85.0          & -         & -     \\
+Flamingo-9B                 & 9.3B        & 1.6B            & -          & -       & -          &  93.1        & -        & - \\
+                        \hline\hline
+Flamingo$_{\textrm{\small base}}$(re-impl)                & 364M              & 102M      & 13.7          & 53.9         & 19.5          & 66.0         & 22.1          & 71.8       
+\\
+\rowcolor{Gray} Re-ViLM$_{\textrm{\small base}}$                 & 420M       & 158M             &  14.8          &  60.1         &  20.8          &  72.2         & 21.8          &  72.6      
+\\ \hline\hline
+Flamingo$_{\textrm{\small medium}}$(re-impl)                & 894M           & 233M         & 17.9          & 69.0         & 23.3          & 80.2         & 23.1          & 76.8     
+\\
+\rowcolor{Gray} Re-ViLM$_{\textrm{\small medium}}$                & 1.0B         & 347M           &  18.2          &  73.6         &  24.0          &  84.5         &  24.1          &  81.0      
+\\ \hline\hline
+Flamingo$_{\textrm{\small large}}$(re-impl)                & 2.1B             & 489M       & 18.2          & 71.6         &  25.7          & 89.2         &  26.3          & 89.1       
+\\
+\rowcolor{Gray} Re-ViLM$_{\textrm{\small large}}$                 & 2.4B     & 806M               &  18.4          &  77.2         &  25.5          &   90.5         & 26.2          &  90.2       
+\\ \bottomrule
+\end{tabular}}
+\vspace{-1em}
+\label{tab:few-shot-main}
+\end{table*}
+
+\begin{table*}
+\centering
+\vspace{-1em}
+\caption{Finetuning evaluation results on MSCOCO, Flickr30k, and NoCaps benchmarks, compared with different image captioning baselines. Note that, for NoCaps, we finetune on MSCOCO karpathy train, following prior works~\cite{li2022blip}, while some work mentioning this setting as zero-shot evaluation.  We finetune our Re-ViLM on MSCOCO/Flickr30k karpathy train split respectively for MSCOCO and Flick30k evaluation. We report BLEU@4, CIDer, SPICE scores for different methods. }
+\vspace{.1em}
+\begin{minipage}{\textwidth}
+\renewcommand*{\thempfootnote}{\fnsymbol{mpfootnote}}
+\centering
+\scalebox{0.82}{
+\begin{tabular}{l|c|cc|cc|cc}
+\toprule
+\multirow{2}{*}{\bf Method}  & \multirow{2}{*}{\bf params.} & \multicolumn{2}{c|}{\bf MSCOCO karpathy test} & \multicolumn{2}{c|}{\bf Flickr30k karpathy test} & \multicolumn{2}{c}{\bf NoCaps validation} \\
+                        &                                         & \bf BLEU@4                 & \bf CIDer               & \bf BLEU@4                 & \bf SPICE                & \bf CIDer             & \bf SPICE             \\ \hline
+Enc-Dec~\cite{changpinyo2021conceptual}                 &    -                                 & -                   & 110.9               & -                    & -      & 90.2 & 12.1              \\ \hline
+VinVL~\cite{zhang2021vinvl}                         &     -                        & 38.2                & 129.3               & -                    & -              & 92.5 & 13.1      \\ \hline
+VL-T5~\cite{cho2021unifying}                    &     172M                             & 34.6                   & 116.1               & -                    & -             & 4.4 & 5.3       \\ \hline
+MetaLM~\cite{hao2022language}                    &    545M                             & 37.6                & 126.6               & -                    & -               & 58.7 & 8.6     \\ \hline
+Unfied VLP~\cite{zhou2020unified}                 &   122M                                & 36.5                & 116.9               & 30.1                 & 17.0          & - & -       \\ \hline
+BUTD~\cite{anderson2018bottom}                     &  -                                  & 36.2                & 113.5               & 27.3                 & 16.0         & - & -        \\ \hline
+NBT~\cite{lu2018neural}                       &       -                             & 34.7                & 107.2               & 27.1                 & 15.6             & - & -    
+\\ 
+\hline
+SimVLM$_{\textrm{\small huge}}$~\cite{wang2021simvlm}                     &     $\sim$1.4B                           & 40.6                   &  143.3                   & -                     & -                    & 110.3             & 14.5   \\ 
+\hline
+BLIP~\cite{li2022blip}                       &     252M                           & 38.6                   & 129.7                   & -                     & -                    & 105.1             & 14.4    
+\\ 
+BLIP$_{\textrm{\small CapFilt-L}}$~\cite{li2022blip}                         &     252M                     & 40.4                   & 136.7                   & -                     & -                    & 113.2             & 14.8           
+\\ \hline
+Flamingo$_{\textrm{\small base}}$(re-impl)                   &       364M                  & 37.0                & 128.0               & 30.4                 & 16.5            & 102.8 & 14.0     \\
+
+Flamingo$_{\textrm{\small medium}}$(re-impl)         &    894M                                 & 37.4                & 129.0               & 30.7                 & 17.2  & 105.6 & 14.4               \\
+Flamingo$_{\textrm{\small large}}$(re-impl)        &  2.1B                                  & 38.2                   & 129.4                   & 31.2                    & 17.4        & 109.2 & 14.5            \\ \hline \hline
+Re-ViLM$_{\textrm{\small base}}$                    &     420M                    & {37.8}       & {129.1}      & {30.6}        & {17.3}      &  105.2 &  14.2  \\
+Re-ViLM$_{\textrm{\small medium}}$                &     1.0B                      & {38.2}       & {131.2}      & {31.0}        & {17.5}     &  
+ 106.8 &  14.4   \\
+Re-ViLM$_{\textrm{\small large}}$                &        2.4B                       &  39.4                   &   134.2                   &  31.6                    &  18.0               &  109.5 &  14.7     \\ \bottomrule
+\end{tabular}}
+\end{minipage}
+\vspace{-1em}
+\label{tab:ft-main}
+\end{table*}
+
+
+
+
+\subsection{Zero-shot Evaluation} 
+
+We conduct zero-shot evaluation on MSCOCO and Flickr30k datasets. During pretraining, we include both \textcolor{purple}{\textbf{CCS}} and \textcolor{blue}{\textbf{COYO}} as our retrieval database and report the best number among all different settings. Results are shown in~\Cref{tab:zs-main}. We find that, Re-ViLM could achieve significant boosts (around $10.0$ on CIDer score) compared to the Flamingo model, by introducing up to $16\%$ additional parameters. 
+Even Re-ViLM$_{\textrm{\small base}}$ outperforms the largest SimVLM by a large margin. We leave the full results containing Re-ViLM's performance under different pretraining and retrieval database combination in \Cref{adx:full-results}.
+
+
+\subsection{Few-shot Evaluation} 
+
+We evaluate the few-shot learning capability of Re-ViLM by pretraining it on the constructed interleaved \textcolor{purple}{\textbf{CCS}} dataset, and evaluating it under the interleaved MSCOCO dataset, constructed by the same process described in \S~\ref{sec:interleaved-pretraining}, with $\{2, 4, 8\}$-shots.  Results are shown in~\Cref{tab:few-shot-main}. 
+
+While the significant improvements on $\{2, 4\}$-shots setting compared with the comparable size Flamingo model are clearly observed, we notice that the retrieval augmentation benefits becomes less when the number of shots increases (i.e., 8-shot).
+This is not surprising as the few-shot in-domain examples from MSCOCO has more useful information to boost the model performance on MSCOCO, than the out-of-domain samples from our retrieval database, \textcolor{purple}{\textbf{CCS}} and \textcolor{blue}{\textbf{COYO}}.
+As the number of in-domain examples increases, the benefit of retrieval from out-of-domain examples becomes marginal. 
+
+
+
+
+
+
+
+
+
+
+
+
+\subsection{Fine-tuning Evaluation} 
+
+We conduct fine-tuning evaluation of Re-ViLM on MSCOCO, Flickr30K and NoCaps benchmarks. For evaluation on MSCOCO and Flickr30k, we fine-tune our pretrained Re-ViLM with smaller learning rate and early-stop strategy on MSCOCO and Flickr30k dataset respectively. For NoCaps evaluation, we fine-tune our model on MSCOCO dataset, following prior works~\cite{li2022blip}. Results are shown in~\Cref{tab:ft-main}. 
+We observe that Re-ViLM still consistently outperforms Flamingo, although the relative improvements becomes smaller compared to the zero-shot and few-shot settings. We leave the full results containing Re-ViLM's performance under different pretraining and retrieval database combination in \Cref{adx:full-results}.
+
+
+
+\subsection{Ablation Study}
+
+\begin{table}[!htbp]
+\centering
+\caption{Comparison between ReViLM with simple filtering strategy, query-dropout strategy, and without any filtering method during retrieval. Models are pretrained on \textcolor{purple}{\textbf{CCS}} dataset, and evaluated on MSCOCO, Flickr30k under zero-shot setting. We report B@4: BLEU@4, C: CIDer, S: SPICE scores for different methods.}
+\vspace{1em}
+\scalebox{0.88}{
+\begin{tabular}{c|cc|cc}
+\toprule
+\multirow{2}{*}{\bf Method}        & \multicolumn{2}{c|}{\bf MSCOCO} & \multicolumn{2}{c}{\bf Flickr30k}\\
+                               & \bf B@4             & \bf C              &\bf  C                 &\bf  S                       \\ \hline
+Re-ViLM$_{\textrm{\small base}}$ [No filtering] & 12.3            & 35.5           & 41.4              & 8.1                      \\
+Re-ViLM$_{\textrm{\small base}}$ [Query-dropout] & 16.5            & 48.6           & 43.4              & 9.1                      \\
+Re-ViLM$_{\textrm{\small base}}$                        & \bf 17.0            & \bf 51.2           & \bf 45.2              & \bf 9.2                      \\ \hline \hline
+Re-ViLM$_{\textrm{\small medium}}$ [No filtering] & 12.3            & 35.5           & 41.4              & 8.1                      \\
+Re-ViLM$_{\textrm{\small medium}}$ [Query-dropout] & 17.5            & 52.1           & 50.5              & 9.6                      \\
+Re-ViLM$_{\textrm{\small medium}}$                        & \bf 17.9            & \bf 53.6           & \bf 52.0              & \bf 9.8                      \\ \bottomrule
+\end{tabular}}
+\vspace{-.2em}
+\label{tab:brutal-filtering}
+\end{table}
+
+
+
+\subsubsection{Filtering during Retrieval}
+\label{sec:abl-filtering}
+
+There could exist two different types of duplication scenarios in multi-modal datasets: \textbf{Same image with multiple captions}, which is commonly found in MSCOCO, Flickr30k and NoCaps datasets, could lead to label leakage during training. 
+\textbf{Multiple images with identical caption}, which is common in multimodal datasets such as Conceptual Captions, as shown in \Cref{fig:same-caption-for-multi-image} in Appendix~\ref{adx:multiple-image}.~\footnote{We find that the ratio of identical captions in Conceptual Captions can be as high as $15.7\%$. }
+Both of these duplication can lead to a severe issue that Re-ViLM can simply copy and paste the retrieved captions to achieve $100\%$ match to the ground-truth captions.
+See Appendix~\ref{adx:multiple-image} for more in-depth discussion.
+
+To mitigate these above issues, we develop a simple filtering strategy that discards retrieved samples that matches the training query image $I$ or its caption $C$ at training (i.e. $\mathcal{R}(I)=\{(i_1, c_1), \cdots, (i_k, c_k) \mid c_j \neq C, i_j \neq I, \forall j \in [1, k] \}$). We notice that another concurrent work RA-CM3, has also proposed the \emph{query-dropout} strategy which mitigates such duplication issue by randomly dropping out retrieved caption tokens based on their similarity to the query image and text. We conduct ablation study to compare our simple filtering method with the query-dropout method. The results, as shown in \Cref{tab:brutal-filtering}, indicates that our simple filtering strategy leads to consistent improvement in the performance of Re-ViLM, while the query-dropout strategy achieves competitive but slightly worse results than simple filtering strategy.
+
+
+
+
+
+
+\subsubsection{Retrieval Augmentation as In-Context Prepending}
+\label{sec:abl-other-retrieval}
+Our Re-ViLM incorporate retrieved captions through the cross attention between the bidirectional text encoder and LM decoder layers. 
+A concurrent work, RA-CM3, proposed an alternative retrieval augmentation method by appending the retrieved captions as the prefix context on decoder side as a simpler way to utilize retrieved evidence without introducing additional parameters. 
+We investigate this prompt-like augmentation method, and replicate it by appending the top 2 retrieved evidence as prefix during pretraining and inference of Flamingo model. We compare this retrieval augmentation method with our retrieval-augmented LM layer approach. The results are shown in  in~\Cref{tab:alt-retrieve}. We can observe that our retrieval-augmented design  has better zero-shot captioning performance than the retrieval augmentation method in ~\citet{yasunaga2022retrieval}. It reveals the importance of our retrieval-based architecture design. 
+
+\begin{table}[!tbp]
+\centering
+\caption{Comparison between different retrieval augmentation methods: retrieval-augmented LM layers (Re-ViLM) and in-context prepending as prompt (Flamingo + prepend), along with vanilla Flamingo model. Models are pretrained on \textcolor{purple}{\textbf{CCS}} dataset, and evaluated on MSCOCO, Flickr30k under zero-shot setting.
+We report B@4: BLEU@4, C: CIDer, S: SPICE scores for different methods.}
+\vspace{1em}
+\scalebox{0.87}{
+\begin{tabular}{c|cc|cc}
+\toprule
+\multirow{2}{*}{\bf Method}   & \multicolumn{2}{c|}{\bf MSCOCO} & \multicolumn{2}{c}{\bf Flickr30k}  \\ 
+                          & \bf B@4             & \bf C              & \bf C                 & \bf S                    \\ \hline
+Flamingo$_{\textrm{\small base}}$ & 12.4            & 39.6           & 42.2              & 7.9                    \\
+Flamingo$_{\textrm{\small base}}$ + prepend & 13.4            &         43.4  & 43.5              & 8.2                    \\
+Re-ViLM$_{\textrm{\small base}}$                   & \bf 17.0            & \bf 51.2           & \bf 45.2              & \bf 9.2                 \\ \hline \hline
+Flamingo$_{\textrm{\small medium}}$ & 15.6            & 44.3           & 43.2             & 8.8                      \\
+Flamingo$_{\textrm{\small medium}}$ + prepend & 16.4            & 45.6           & 46.6              & 9.2                      \\
+Re-ViLM$_{\textrm{\small medium}}$                   & \bf 17.9            & \bf 53.6           &\bf  52.0              &\bf  9.8                   \\ \bottomrule
+\end{tabular}}
+\label{tab:alt-retrieve}
+\end{table}
+
+
+
+
+
+
+\section{Limitations}
+\label{sec:limitation}
+In this paper, we focus on exploring emergent zero-shot and in-context few-shot image captioning. To achieve this, we designed our retrieval augmented model mainly based on the Flamingo framework~\cite{alayrac2022flamingo}, and leave the application of our retrieval design to other image-to-text frameworks~\cite {bao2021beit,chen2022pali,wang2022git} as future work. Furthermore, 
+since there is no official implementation of Flamingo and its training datasets, our framework is based on a reimplemented version of Flamingo, trained on publicly available datasets and manually crafted interleaved image-text datasets. 
+
+\section{Conclusion}
+\label{sec:conclusion}
+In this work, we propose Re-ViLM, a retrieval-augmented image-to-text model,  with strong zero-shot and few-shot image captioning results. 
+Our Re-ViLM architecture is built on Flamingo, providing substantial reduction in the number of parameters while obtaining compelling results across different settings, as it does not need to store all knowledge within the parameters.
+In particular, we fist initialize Re-ViLM with RETRO, a pretrained retrieval-augmented language model, thus it can seamlessly integrate the retrieval capability at the beginning of multimodal pretraining.  
+We also propose a simple yet effective filtering strategy at retrieval to circumvent the ``copy-and-paste'' behavior of retrieval-augmented model.
+Furthermore, we construct an interleaved image-text dataset for pretraining, which is crucial for in-context few-shot learning. We conduct extensive experiments on diverse image-captioning datasets and evaluate their zero-shot and in-context few-shot performance. Our results show that Re-ViLM consistently outperform the baseline Flamingo model across all settings. Additionally, we conduct experiments on fine-tuning settings and show promising results. 
+
+

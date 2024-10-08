@@ -1,0 +1,1255 @@
+\section{Introduction}
+Large language models (LLMs) \cite{gpt3,palm} can be applied in various ways to do in-context learning (ICL). One line of work shows including \emph{explanations} can boost the prompting performance on a diverse of reasoning tasks \cite{scratch,chain,lampinen2022}.\footnote{Our paper uses the general term \emph{explanation} to denote both chain-of-thought demonstrations for multi-step reasoning tasks as well as rationales for tasks like commonsense question answering, which do not involve chains of intermediate steps in the same way.} Despite the utility of such explanations, they often require manual engineering \cite{chain,LeasttoMostPE} to reach their full potential; past work has demonstrated that different combinations of explanations can lead to widely varying model performance~\cite{interpicl,Wang2022Rationale}.
+Furthermore, these explanations are typically written in natural language~\cite{madaan2022text,ye2022comp} and there are naturally many variants to explain the answer to a single question. Explanations in standard datasets written by crowdworkers may not be optimal, and even expert ``prompt engineers'' may not be able to easily elicit the best behavior. 
+
+\begin{figure}
+    \includegraphics[scale=0.35,trim=0mm 130mm 20mm 30mm,]{figures/xi-icml2023-intro.pdf}
+    \caption{Optimizing explanations given a candidate set. We generate candidate explanations in a leave-one-out fashion (not shown), prioritize combinations of explanations using a surrogate score $\mathcal{S}$, then evaluate them on silver data to optimize accuracy.}
+    \label{fig:framework}
+   
+\end{figure}
+
+This paper studies the problem of optimizing explanations for better downstream performance on textual reasoning tasks. Inspired by recent work that boostraps LLMs to improve reasoning~\cite{star,huang2022}, we propose an approach that can bootstrap a set of seed explanations (e.g., crowdworker annotated explanations) using an unlabeled development data set. As shown in Figure~\ref{fig:framework}, we first prompt LLMs to construct alternative candidate explanations from the seed explanations. We then search over possible combinations of candidate explanations to find a combination that has high accuracy on the  development set, which is silver-labeled using seed explanations.
+
+Evaluating one candidate combination of explanation requires inference over the development set to compare against the silver labels. Given the cost of running LLMs, evaluating a large number of candidates is impractical. We propose a two-stage approach to efficiently search over potentially high-scoring combinations. We first evaluate each candidate explanation \emph{in isolation} based on silver accuracy on the development set or the log likelihood on the few-shot training exemplar set. Scores of these individual explanations can be combined to compute scores of combinations, which gives a proxy of that combination's performance against silver set. We then can allocate our search budget to evaluate better-performing candidate combinations based on the proxy metrics.
+
+We apply our approach to optimize explanations on four datasets:  \textsc{GSM}{},  \textsc{ECQA}{},  \textsc{e-SNLI}{}, and  \textsc{StrategyQA}{}, covering a spectrum of textual reasoning tasks. Across the four datasets, our approach is able to find explanations that achieve a performance gain of 4\% higher accuracy on average compared to initial seed explanations. In addition, we show an extension of our approach to the few-show setting (where we only have few-shot examples), which successfully improves the performance on  \textsc{ECQA}{} and  \textsc{e-SNLI}{}.\looseness=-1
+
+
+ 
+
+
+To summarize, our contributions are: (1) We propose a framework for optimizing explanations for in-context learning by optimizing over combinations of explanations. (2) We show that pseudo-labeling an unlabeled dataset can be used to evaluate such combinations. (3) We propose two proxy metrics to prioritize exploring better combinations given a limited computation budget.
+
+
+
+
+
+\section{Problem Formulation}
+
+\subsection{Problem Statement}
+
+Following the standard chain-of-thought setting \cite{chain}, e assume access to a set of \emph{exemplars} (input-output pairs) $T=\{(q_i,a_i)\}_{i=1:K}$ and \emph{seed explanations} $\tilde{E}=\{\tilde{e}_i\}_{i=1:K}$ annotated for each exemplar in $T$ (one per exemplar). In addition to $T$, some of our approaches assume access to an \emph{unlabeled development set} $V$ that only includes the inputs, i.e., $V=\{q_i\}_{i=1:M}$. Let $\theta$ be the parameters of an LLM.
+
+Our goal is to find an explanation set $E=\{e_i\}_{i=1:K}$ that maximizes the accuracy when evaluating on unseen test data. Each $e_i \in \Sigma^*$ is a natural language explanation expressed in the subword vocabulary $\Sigma$ of the pre-trained language model.
+Past work has optimized many aspects of the in-context learning process, for example, the verbalization of prompts~\cite{deng2022rlprompt,zhang2022tempera}, exemplar selection \cite{fu2022complexity,ye2022comp}, and exemplar order~\cite{lu2022fan}. Ours is the first work to optimize the format of explanations in this articular way.
+
+
+
+Because we assume a very small number of training examples, all of which are going to be included in the prompt, our notion of optimization (our ``training objective'') cannot rely on maximizing the likelihood of labeled training data. As we discuss in future sections, we will explore both likelihood-based measures as well as accuracy against pseudo-labeled versions of $V$. These objectives are also expensive to evaluate using LLMs, so we will operate under an additional constraint of cost in our methods.
+
+
+
+
+
+
+
+
+\paragraph{Candidate explanations}
+Directly searching over the combinatorial explanation space of $E$ is intractable. Practically, we constrain the space of each $e_i$ by selecting each from a \emph{candidate explanation set} $\hat{E_{i}}=\{\hat{e}_i^{(1)}\ldots \hat{e}_i^{(|\hat{E_{i}}|)}\}$, where each $\hat{e}_i^{(j)}$ denotes a candidate explanation associated with each exemplar $q_i$. The candidate explanation sets $\hat{E_{1}}\ldots\hat{E}_{K}$ can be generated by the LLM using a set of manually annotated seed explanations annotated by human $\tilde{E}=\{\tilde{e}_i\}_{i=1:K}$. That is, we use the exemplar set $T$ and the seed sets $\tilde{E}$ excluding $(q_i,\tilde{e}_i,a_i)$ to prompt the LLM and draw $N$ (40 in our implementation) samples for $\hat{E}_i$:
+
+\small
+\begin{equation}
+\label{eq:gen_can_expl}
+    (\hat{e}, \hat{a})\ \sim p(e,a_i \mid \{(q_j,\tilde{e}_j,a_j)\}_{j=1:K\land j\neq i},q_i; \theta)
+\end{equation}
+\normalsize
+
+Put another way, we use a leave-one-out approach to sample explanations and answers for each example using chain-of-thought prompting with $K-1$ examples. We reject any samples that do not have the correct answer for the example.
+
+A combination $C$ is a set of $\{e_i\}$ that contains one explanation $e_i$ from the candidate explanation set $\hat{E}_i$, i.e., $C=\{e_i\}_{i=1:K} \land \forall i, e_i\in \hat{E}_i$. Now we can restate our problem: our goal is to find an explanation set $C$ that maximizes the accuracy when evaluating on unseen test data.
+
+
+\begin{table}[t]
+\caption{Statistics of the performance of 16 different random combinations of explanations on four datasets, as well as the performance of the seed explanations from crowdworkers. All tasks show substantial variation in performance.}
+\label{tab:per_var}
+\begin{center}
+\begin{small}
+    \begin{sc}
+\begin{tabular}{lcccc}
+\toprule
+ & Min & Avg & Max & Seed \\
+\midrule
+
+ \textsc{GSM}{} & 57.7 &	61.8	&66.0	&61.9\\
+ \textsc{ECQA}{} & 72.7&	76.1	&78.6	&74.9\\
+ \textsc{e-SNLI}{} & 60.3	&72.3	&80.1	&71.8\\
+ \textsc{StrategyQA}{}  &69.8&	73.8	&76.5&	74.0\\
+\bottomrule
+\end{tabular}
+\end{sc}
+\end{small}
+\end{center}
+\end{table}
+
+
+\subsection{Performance Varies Across Explanations}
+\label{sec:performance_var}
+To illustrate the potential of our approach, we briefly analyze how using different explanations, for the same set of exemplars, can impact the downstream performance. As mentioned earlier, we generate candidate explanation sets according to Eq~(\ref{eq:gen_can_expl}). Concretely, we use temperature scaling 0.7 and sample 40 completions for each $q_i$, only retaining an $\bar{e}$ if it is paired with a correct answer $\bar{a}=a_i$. Note that for different $q_i$, we may find varying number of valid $\bar{e}$ (ranging from 0 to 40). We keep at most 10 for each $q_i$ to save the search cost.
+
+
+
+For each dataset, we randomly sample 16 combinations using the augmented candidate explanation sets, and report the statistics of the performance in Table~\ref{tab:per_var}. 
+We see substantial variance in performance with different $C$: the average gap between the maximum performance and minimum performance exceeds 5\% and is as large as 20\% (on  \textsc{e-SNLI}{}).  In addition, we show the performance of seed explanations annotated by crowdworkers ({\sc Seed} in Table~\ref{tab:per_var}), which perform roughly on par with the average among the random combinations, indicating substantial headroom for improvement.  
+
+
+\begin{figure}
+    \includegraphics[scale=0.5,trim=0mm 145mm 20mm 30mm,]{figures/silverlabel.pdf}
+    \caption{Silver labeling of unlabeled test example given several sampled combinations. The example shown is for a binary task with True or False labels (e.g., StrategyQA).}
+    \label{fig:silver}
+    \vspace{-0.15in}
+\end{figure}
+
+\section{Method Overview}
+
+Having candidate explanations for each question, we have reduced the search space from practically infinite to merely $N^K$. We then search over possible combinations of explanations. We describe our method for scoring combinations and the constraints under which our search takes place.
+
+\paragraph{Pseudo-labeling development set} We do not assume access to labeled examples beyond the $K$ few-shot examples provided. However, we can take advantage of unlabeled data in $V$. We use a \emph{pseudo-labeling} approach to derive labels for $V$ following past work \citep{selfcons}. This approach is depicted in Figure~\ref{fig:silver}; given $q\in V$, we sample random combinations of explanations to get predictions and use the majority-voted answer as the pseudo label $\hat{a}$:
+
+
+\small
+$$ \hat{a} = \argmax_{a} \sum_{C=\{e_i\}} \mathbbm{1}[a=\argmax_{\bar{a}} p(\bar{a} \mid \{(q_i,e_i,a_i)\}_{i=1:K},q;\theta)]$$
+\normalsize
+
+We now use the accuracy against the silver label as a surrogate objective $\mathcal{O}$, searching for $C$ that maximizes accuracy with respect to the $\hat{a}$:
+
+\small
+\begin{multline}
+\label{eq:obj_dev}
+    \mathcal{O}(C) =
+     \argmax_{C=\{e_i\}_{i=1:K}} \sum_{q_j\in V} \mathbbm{1}[ \hat{a}_j =  \\ \argmax_{\bar{a}} p(\bar{a} \mid \{(q_i,e_i,a_i)\}_{i=1:K},q_j;\theta)].
+\end{multline}
+\normalsize
+
+
+\paragraph{Searching over combinations}
+
+
+
+One further complicating factor is that evaluating a combination $C$ using $\mathcal{O}$ is expensive, as it requires running inference over the development set.  We measure the budget of search $B$ by the number of combinations needed to be scored using $\mathcal{O}$.
+
+A naive approach is to randomly select $B$ combinations to search, but this is inefficient. We propose additional surrogate metrics $\mathcal{S}$ to serve as a proxy for $\mathcal{O}$ for scoring combinations. We design $\mathcal{S}$ so that it can cost-efficiently score all combinations, with high $\mathcal{S}(C)$ indicating a combination $C$ likely to obtain high $\mathcal{O}(C)$ score. In this way, $\mathcal{S}$ can be used to propose promising candidate combinations, only a few of which are scored using the actual objective $\mathcal{O}$ to save search budget
+ 
+
+
+
+
+
+
+
+\section{Proxy for Finding Promising Combinations}
+\label{sec:strategy}
+
+
+Owning to the high cost, we only evaluate a small number (tens of combinations) of combinations against development set using $\mathcal{O}$ (Eq~(\ref{eq:obj_dev}).
+We first extract a set of promising combinations according to two proxy metrics, then evaluate those using our silver data.
+
+\subsection{One-shot Silver Accuracy}
+To optimize the silver accuracy of a combination of explanations (our objective $\mathcal{O}$), we hypothesize that \emph{the prediction of a combination can be approximated with the prediction of the each explanation used one-shot.} That is, we expect $p(a\mid \{(q_i,e_i,a_i)\}_{i=1:K},q;\theta)$ to be higher when $\sum_{i=1:K}p(a\mid (q_i,e_i,a_i),q;\theta)$ is higher. We draw this hypothesis based on recent work on example selection for ICL, which shows that combining examples that individually perform well will yield better performance from the combination \cite{ye2022comp,rubinlearning}.
+
+We define the average one-shot silver accuracy as a proxy metric $\mathcal{S}_{\mathrm{OSAcc}}$:
+
+\small
+\begin{multline}
+    \mathcal{S}_{\mathrm{OSAcc}}(C=\{e_i\}_{i=1:K})=\sum_{i=1:K} \sum_{q_j\in V} \mathbbm{1}[ \hat{a}_j =  \\ \argmax_{\bar{a}} p(\bar{a} \mid (q_i,e_i,a_i),q_j;\theta)]
+\end{multline}
+\normalsize
+
+By computing the one-shot silver performance for $ \forall \hat{e}^{(i)}_j\in \hat{E}^{(i)}$ for $\forall i=1:K$, we can efficiently compute the proxy metric ${{\mathcal{S}_{\mathrm{OSAcc}}}}$ for any combination $C$.\footnote{While this involves $NK$ evaluations on the silver set, note that these evaluations are one-shot and also significantly less computationally expensive than using higher numbers of shots.}
+
+
+\subsection{One-shot Log Likelihood}
+Besides using silver accuracy, another principle is to optimize the held-out log likelihood of the exemplar set:
+
+\small
+$$\sum_{j=1:K} \log p(a_j\mid \{(q_i,e_i,a_i)\}_{i=1:K \land i\neq j},q_j;\theta).$$
+\normalsize
+
+We apply a similar hypothesis and use the one-shot performance $\sum_{i=1:K\land i\neq j} p(a_j, \mid (q_i,e_i,a_i),q_j;\theta) $ as the surrogate of $ p(a_j \mid \{(q_i,e_i,a_i)\}_{i=1:K \land i\neq j},q_j;\theta)$. We can then score a candidate combination by:
+
+\small
+$$\sum_{j=1:K}\sum_{i=1:K\land i\neq j} \log \sum_e p(a_j,e \mid (q_i,e_i,a_i),q_j;\theta).$$
+\normalsize
+
+Since summing over explanations is intractable, we approximate this sum using the single sample of $e$ to estimate the one-shot performance, leading to:
+
+\small
+\begin{equation}
+\label{eq:pplscore}
+{{\mathcal{S}_{\mathrm{OSLL}}}} =  \sum_{j=1:K}\sum_{i=1:K\land i\neq j} \log  p(e_j,a_j \mid (q_i,e_i,a_i),q_j;\theta).
+\end{equation}
+\normalsize
+
+
+
+We can compute ${{\mathcal{S}_{\mathrm{OSLL}}}}$ for any $C$ by only computing all the pairwise probabilities, $p(e_j,a_j \mid (q_i,e_i,a_i),q_j;\theta)$, for $\forall e_i \in \hat{E}_i,e_j\in \hat{E}_j\forall i=1:K,j=1:K \land i\neq j  $, which is computationally feasible. Note that this metric does not require a development set.
+
+
+
+
+\section{Experimental Setup}
+\subsection{Language Models}
+We primarily use \ttsmall{code-davinci-002} \cite{codex}, a state-of-the-art LLM API, throughout our experiments, given its strong performance on various reasoning tasks \cite{li2022advance,madaan2022language}. In addition, we use \ttsmall{text-davinci-003} to verify the effectiveness of the proxy metrics. \ttsmall{code-davinci-002} is a base model, and \ttsmall{text-davinci-003} is an Instruct-series model fine-tuned to align with human preferences \cite{instructgpt}.\footnote{The differences are described in  \url{https://platform.openai.com/docs/model-index-for-researchers}}
+
+\paragraph{Inference}
+Ideally, inference when using explanations in prompts requires marginalizing over all possible latent explanations, which involves an intractable sum. We follow past work to employ \emph{greedy decoding} (greedily selecting the most probable token autoregressively) \cite{chain,interpicl} or self-consistency decoding (sampling tens of outputs from LLMs via temperature scaling and using popularity voting to assign a label) \cite{selfcons}.
+
+\paragraph{Cost}
+Querying LLMs is computationally intensive. We aim to search for better explanations within a reasonable budget. Our evaluation of cost is based on the \emph{number of tokens} processed by LLMs, including both tokens in the prompts and the tokens generated by LLMs. We further bucket the measurement of cost by number of combinations $C$ that are scored by $\mathcal{O}$, which involves processing $M(K+1)$ examples.
+
+
+\begin{table*}[t]
+\caption{Oracle maximum accuracies achievable with 8 or 16 candidate combinations using different selection strategies. Using log likelihood-based or silver accuracy-based proxy metrics can find more promising candidate combinations than random candidates.}
+\label{tab:comp_stg}
+\vskip 0.015in
+\begin{center}
+\begin{small}
+\begin{sc}
+\begin{tabular}{lcccccccc}
+\toprule
+     & \multicolumn{2}{c}{GSM} & \multicolumn{2}{c}{ECQA} & \multicolumn{2}{c}{ESNLI} & \multicolumn{2}{c}{STRATEGYQA}\\
+     Metrics & Max@8 & Max@16 & Max@8 & Max@16 & Max@8 & Max@16 & Max@8 & Max@16 \\
+\midrule
+Naive & 65.1 & 66.0 & 78.6 & 78.6 & 79.5 & 80.1 & 76.2 & 76.5 \\
+\cmidrule{1-1}
+${{\mathcal{S}_{\mathrm{OSAcc}}}}$ & \bf 66.4 & \bf 67.0 & 79.7 & 80.5 & \bf 80.4 & \bf 81.2 & 74.3 & 74.9\\
+${{\mathcal{S}_{\mathrm{OSLL}}}}$ & 65.7 & 65.9 & \bf 80.2 & \bf 80.6 & 75.8 & 76.5 & \bf 77.1 & \bf 77.4 \\
+\bottomrule
+\end{tabular}
+\end{sc}
+\end{small}
+\end{center}
+\end{table*}
+
+
+
+\subsection{Datasets}
+\label{sec:dataset}
+We experiment with four datasets covering four distinct tasks, including:
+
+     $\sbullet[0.75]$  \textsc{GSM}{}~\cite{gsm8k} consists of grade school math questions. Each is paired with a human-written explanation for the answer. We choose this particular arithmetic reasoning dataset as it contains real-world math problems paired with diverse natural language texts as opposed to synthetically generated problems \cite{roy-roth2015}.
+     
+     $\sbullet[0.75]$  \textsc{ECQA}{} \cite{ecqa, commonsenseqa} contains multiple-choice questions which test models' commonsense knowledge.
+
+      $\sbullet[0.75]$  \textsc{e-SNLI}{} \cite{esnli} studies the task of natural language inference which is to classify the relation between a premise and a hypothesis
+    
+     $\sbullet[0.75]$ \textsc{StrategyQA} \cite{stqa} asks Yes-No questions requiring steps. The dataset does not have explanation annotations, but it provide facts \cite{stqa} which are supporting evidence (albeit noisy ones) for the answers, so we use them as explanations.
+     
+For each of the datasets, we choose prompt formats commonly used in past work~\cite{chain,Wang2022Rationale}. We show one example in the corresponding prompt format in Appendix~\ref{app:data_exs}. We use 8 exemplars in prompts for  \textsc{GSM}{},  \textsc{ECQA}{}, and  \textsc{StrategyQA}{}, and 9 exemplars (3 for each class) for  \textsc{e-SNLI}{}; recent work suggests that using more exemplars would not lead to further performance gains~\cite{chain,selfcons}.
+
+
+
+
+\begin{figure*}[t]
+     \centering
+          \begin{subfigure}[h]{0.49\linewidth}
+         \centering
+         \includegraphics[width=0.95\linewidth,trim=85 0 105 20,clip]{figures/stg_plots/gsm-0.png}
+         \vspace{-0.065in}
+        \caption{ \textsc{GSM}{}: random exemplar set 1.}
+        \label{fig:gsmexa}
+        \vspace{0.035in}
+     \end{subfigure}
+     \hfill
+     \begin{subfigure}[h]{0.49\linewidth}
+         \centering
+         \includegraphics[width=0.95\linewidth,trim=85 0 105 20,clip]{figures/stg_plots/gsm-3072.png}
+         \vspace{-0.065in}
+        \caption{ \textsc{GSM}{}: random exemplar set 2.}
+        \label{fig:gsmexb}
+        \vspace{0.035in}
+     \end{subfigure}
+     
+     \begin{subfigure}[h]{0.49\linewidth}
+         \centering
+         \includegraphics[width=0.95\linewidth,trim=85 0 105 20,clip]{figures/stg_plots/ecqa-0.png}
+         \vspace{-0.065in}
+        \caption{ \textsc{ECQA}{}: random exemplar set 1.}
+        \vspace{0.035in}
+     \end{subfigure}
+     \hfill
+     \begin{subfigure}[h]{0.49\linewidth}
+         \centering
+         \includegraphics[width=0.95\linewidth,trim=85 0 105 20,clip]{figures/stg_plots/ecqa-1024.png}
+         \vspace{-0.065in}
+        \caption{ \textsc{ECQA}{}: random exemplar set 2.}
+        \vspace{0.035in}
+     \end{subfigure}
+
+     \begin{subfigure}[h]{0.49\linewidth}
+         \centering
+         \includegraphics[width=0.95\linewidth,trim=85 0 105 20,clip]{figures/stg_plots/esnli-2048.png}
+         \vspace{-0.065in}
+        \caption{ \textsc{e-SNLI}{}: random exemplar set 1.}
+        \vspace{0.035in}
+     \end{subfigure}
+     \hfill
+     \begin{subfigure}[h]{0.49\linewidth}
+         \centering
+         \includegraphics[width=0.95\linewidth,trim=85 0 105 20,clip]{figures/stg_plots/esnli-3072.png}
+         \vspace{-0.065in}
+        \caption{ \textsc{e-SNLI}{}: random exemplar set 2.}
+        \label{fig:esnliex2}
+        \vspace{0.035in}
+     \end{subfigure}
+
+        \begin{subfigure}[h]{0.49\linewidth}
+         \centering
+         \includegraphics[width=0.95\linewidth,trim=85 0 105 20,clip]{figures/stg_plots/strategyqa-0.png}
+         \vspace{-0.065in}
+        \caption{ \textsc{StrategyQA}{}: random exemplar set 1.}
+        \label{fig:stqa_exa}
+        \vspace{0.035in}
+     \end{subfigure}
+     \hfill
+     \begin{subfigure}[h]{0.49\linewidth}
+         \centering
+         \includegraphics[width=0.95\linewidth,trim=85 0 105 20,clip]{figures/stg_plots/strategyqa-512.png}
+         \vspace{-0.065in}
+        \caption{ \textsc{StrategyQA}{}: random exemplar set 2.}
+        \label{fig:stqa_exb}
+        \vspace{0.035in}
+     \end{subfigure}
+     \caption{Gold test set accuracy (y-axis) vs.~various surrogate proxy scores for explanation sets. Points of three different colors denotes combinations selected using three metrics. There is a positive correlation between ${{\mathcal{S}_{\mathrm{OSAcc}}}}$ and performance on these datasets except for  \textsc{StrategyQA}{} (Pearson above 0.3 is highlighted in purple). ${{\mathcal{S}_{\mathrm{OSLL}}}}$ also shows positives correlation on  \textsc{ECQA}{} and  \textsc{StrategyQA}{} and occasionally fails on the others.}
+    \label{fig:stg_acc}
+
+\end{figure*}
+
+\section{Verifying the Effectiveness of Proxy Metrics}
+\label{sec:stg_exp}
+
+
+Before showing the results of the complete system, we first present experiments for verifying the effectiveness of the two proxy metrics. We evaluate them on the basis of the best oracle accuracy on a small (gold) labeled test set that we can reach using the top-$X$ candidates, referred to as {\sc Max@$X$}, ranked by ${{\mathcal{S}_{\mathrm{OSAcc}}}}$ or  ${{\mathcal{S}_{\mathrm{OSLL}}}}$. This gives an oracle upper bound for the performance that silver reranking via $\mathcal{O}$ can yield.
+
+\paragraph{Setup} We compare our metrics against a baseline which randomly scores combinations ({\sc Naive}). We mainly 
+use \ttsmall{code-davinci-002} for this experiment; please refer to Appendix~\ref{app:stg_003} for additional results on \ttsmall{text-davinci-003}. For ${{\mathcal{S}_{\mathrm{OSAcc}}}}$, we silver-labeled 256 randomly drawn development with 48 samples of combinations. For each dataset, we experiment with four different exemplar sets $T$ to control for randomness and report the average number.
+
+\paragraph{Results} Table~\ref{tab:comp_stg} shows the maximum reachable performance within 8 (Max@8)  and 16 (Max@16) candidate combinations. For each dataset, using one of our metrics can find more promising candidate combinations than randomly proposed candidates. Among the top 16 combinations, combinations preferred by ${{\mathcal{S}_{\mathrm{OSAcc}}}}$ can achieve better performance than randomly selected combinations by 1.0\%, 0.9\%, and 1.4\% on  \textsc{GSM}{},  \textsc{ECQA}{}, and  \textsc{e-SNLI}{}, respectively. ${{\mathcal{S}_{\mathrm{OSLL}}}}$ is the most effective strategy on  \textsc{ECQA}{}, and  \textsc{StrategyQA}{}, surpassing {\sc Naive} by 2.0\% and 0.9\% on the basis of 16 candidate combinations. Nonetheless, we do not find one metric consistently gives the best performance.
+
+
+\paragraph{Proxy metrics vs downstream accuracy}
+In Figure~\ref{fig:stg_acc}, we show a series of graphs for intuitive understanding of how the proxy metrics relates to the downstream accuracy. Each group of graphs shows the downstream accuracy vs.~the surrogate proxy scores of combinations preferred by different metrics. For each dataset, we show two groups of graphs for two different exemplar sets out of four. Each group contains three graphs with different values on the x-axis. The first graph of a triple shows ${{\mathcal{S}_{\mathrm{OSAcc}}}}$ on the x-axis and the second one shows one-shot likelihood on the exemplar set (positively correlates with ${{\mathcal{S}_{\mathrm{OSLL}}}}$). In addition to the two proxy metrics, we show the completion likelihood on the third graph (probability of the the predictions on the development set), i.e., $\sum_{q_i\in V}  p(\bar{a}_i,\bar{e}_i| \{(q_j,e_j,a_j)\}_{j=1:K},q_i;\theta)$ where $ p(\bar{a}_i,\bar{e}_i)$ is the actual predicted explanation and answer for $q_i$.\looseness=-1
+
+We show that the two surrogate scores we define mostly positively correlate with the downstream accuracy. ${{\mathcal{S}_{\mathrm{OSAcc}}}}$ (left) works uniformly well except on  \textsc{StrategyQA}{}. ${{\mathcal{S}_{\mathrm{OSLL}}}}$ works well except for Figure~\ref{fig:gsmexa} from  \textsc{GSM}{} and  Figure~\ref{fig:esnliex2} from  \textsc{e-SNLI}{}.
+In particular, on  \textsc{ECQA}{}, both of our them highly positively correlate with the downstream accuracy. 
+
+Furthermore, we show the candidate combinations preferred by our proxy metrics lead to, in most cases, better perplexity on the development set (third graph in each triple), which indicates these combinations are more ``optimized'' for a specific task; past work suggests that better perplexity generally correlates with better downstream performance \cite{hila2022}.\looseness=-1
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+\begin{table*}[t]
+\caption{Greedy decoding and self-consistency decoding (10 samples) performance of the seed explanations and the explanations obtained using our framework from the seed explanations. In few-shot setting, ${{\mathcal{S}_{\mathrm{OSLL}}}}$ proxy metric find combinations of candidate explanations that improve the performance on  \textsc{ECQA}{} and  \textsc{e-SNLI}{}. Using a development set, we can further improve the performance, especially with the ensemble of ${{\mathcal{S}_{\mathrm{OSLL}}}}$ and ${{\mathcal{S}_{\mathrm{OSAcc}}}}$. Note that standard deviations are with respect to \textbf{deltas} between the seed and improved accuracy.}
+\label{tab:main002}
+\vspace{-0.05in}
+\begin{center}
+\begin{small}
+\begin{sc}
+\begin{tabular}{llccccc}
+\toprule
+  & &  \textsc{GSM}{} &  \textsc{ECQA}{} &  \textsc{e-SNLI}{} &  \textsc{StrategyQA}{} & Avg \\
+\midrule
+& \multicolumn{5}{c}{\textbf{\textit{ Baseline: initial seed explanations}}} \vspace{0.025in}\\
+\multirow{2}{*}{Seed}    & Greedy & 62.8\phantom{\textsubscript{0.0}}	 & 77.0\phantom{\textsubscript{0.0}}	& 75.2\phantom{\textsubscript{0.0}}	& 71.3\phantom{\textsubscript{0.0}}	&71.6\\
+& Consistency & 75.4\phantom{\textsubscript{0.0}}&80.9\phantom{\textsubscript{0.0}}&	80.9\phantom{\textsubscript{0.0}}&	75.2\phantom{\textsubscript{0.0}}	&78.1\\
+
+\midrule
+& \multicolumn{5}{c}{\textbf{\textit{ True Few-shot setting: using $T$}}} \vspace{0.025in}\\
+\multirow{2}{*}{${{\mathcal{S}_{\mathrm{OSLL}}}}$(Ours)}  & Greedy& 64.4\textsubscript{0.4}& 81.6\textsubscript{2.3}	& 76.8\textsubscript{7.6}	&71.1\textsubscript{0.8}	&73.5\\
+& Consistency & 75.2\textsubscript{1.3} &	82.7\textsubscript{1.5}& 81.7\textsubscript{3.5} &	75.0\textsubscript{1.4} &78.8\\
+\midrule
+&\multicolumn{5}{c}{\textbf{\textit{ Few-shot + Unlabeled setting: using $T$ and $V$}}}\vspace{0.025in}\\
+
+\multirow{2}{*}{Naive (Ours)}& Greedy& 64.7\textsubscript{1.5}	& 79.8\textsubscript{1.4}	& 82.1\textsubscript{2.5} &	71.3\textsubscript{0.9} & 74.5\\
+& Consistency & 76.5\textsubscript{0.8} &	81.4\textsubscript{1.5} &	83.6\textsubscript{2.0}	& 74.5\textsubscript{0.9}	& 79.0 \\
+\cmidrule{1-2}
+\multirow{2}{*}{${{\mathcal{S}_{\mathrm{OSLL}}}}$(Ours)} & Greedy& 64.7\textsubscript{1.6} & \bf 81.7\textsubscript{3.7} 	& 79.2\textsubscript{5.4} &	71.8\textsubscript{1.0} & 74.2\\
+& Consistency & 76.3\textsubscript{1.1} & \bf 82.5\textsubscript{1.2}  & 82.2\textsubscript{3.0} & \bf 75.4\textsubscript{0.9} & 79.0\\
+\cmidrule{1-2}
+\multirow{2}{*}{${{\mathcal{S}_{\mathrm{OSAcc}}}}$(Ours)} & Greedy& 64.8\textsubscript{1.1}	& 81.0\textsubscript{2.1} 	& \bf 83.0\textsubscript{2.6} &	71.0\textsubscript{0.6} & 74.9\\
+& Consistency & 76.8\textsubscript{0.6} &	82.0\textsubscript{1.3}  & \bf 85.2\textsubscript{1.8} & 73.6\textsubscript{1.6} & 79.4\\
+\cmidrule{1-2}
+Ensemble of & Greedy& \bf 65.4\textsubscript{2.2} & 81.3\textsubscript{3.4} 	& 83.0\textsubscript{5.6}	& \bf 72.1\textsubscript{2.0} 	&\bf 75.4\\
+${{\mathcal{S}_{\mathrm{OSLL}}}}$ and ${{\mathcal{S}_{\mathrm{OSAcc}}}}$ (Ours) & Consistency & \bf 77.2\textsubscript{1.5} &82.4\textsubscript{0.9}  & 84.9\textsubscript{2.4} & 74.9\textsubscript{1.2}  &\bf  79.9\\
+\bottomrule
+\end{tabular}
+\end{sc}
+\end{small}
+\end{center}
+\vskip -0.1in
+\end{table*}
+
+
+
+\section{Main Experiments}
+
+
+We now test the effectiveness of our approach by comparing the performance of searched explanations against the seed explanations. We consider two settings:
+
+A \textbf{True Few-shot} setting, where we only have access to exemplars $T$. Even without a development set, we can use ${{\mathcal{S}_{\mathrm{OSLL}}}}$ which operates on $T$ to propose candidate combinations. However, because we do not have silver-labeled data to use $\mathcal{O}$ to score combinations, we directly take the top combination preferred by ${{\mathcal{S}_{\mathrm{OSLL}}}}$ as the optimized explanations.
+
+A \textbf{Few-shot + Unlabeled} setting, where we assume assumes access to unlabeled set $V$ in addition to $T$. In this setting, we can apply our full framework which first proposes candidate combinations and then selects the best candidate using $\mathcal{O}$ (the accuracy against silver-labeled $V$). We can use ${{\mathcal{S}_{\mathrm{OSAcc}}}}$ or ${{\mathcal{S}_{\mathrm{OSLL}}}}$ (or both) as a proxy to prioritize search.  
+
+
+\subsection{Using Few-shot Exemplars}
+\label{sec:exp_without_val}
+
+
+
+\paragraph{Setup}
+As mentioned before, we use \ttsmall{code-davinci-002} for our experiments given its state-of-the-art performance. For each set of explanations, we test both greedy decoding and self-consistency decoding (with 10 samples and temperature set as 0.7). For each dataset, we experiment with 4 sets of randomly sampled exemplar sets to alleviate the influence of randomness. We report the average and standard deviation over the 4 different exemplar sets for each setting. We note we report the standard deviation of the \textbf{delta} between the performance of optimized explanations and seed explanations (instead of the actual performance), since our main focus is to establish to what extent our framework can improve upon a seed explanation set. We note we use a randomly sampled test set of size 1,000 for all datasets.
+
+\paragraph{Results}
+We show the performance of the top combination scored according to ${{\mathcal{S}_{\mathrm{OSLL}}}}$ proxy metric in Table~\ref{tab:main002}. Without silver-labeled data, our ${{\mathcal{S}_{\mathrm{OSLL}}}}$ can still improve the greedy decoding performance on  \textsc{GSM}{},  \textsc{ECQA}{}, and  \textsc{e-SNLI}{} by 1.6\%, 4.8\% and 1.6\%, respectively. It also improves the self-consistency performance on  \textsc{ECQA}{} and  \textsc{e-SNLI}{} by 1.9\% and 0.8\%, respectively. The results confirms the effectiveness of the ${{\mathcal{S}_{\mathrm{OSLL}}}}$ metric in finding generally better-performing candidate combinations.
+
+\subsection{Using Development Sets}
+\label{sec:exp_with_val}
+Having an unlabeled development set $V$ allows us to score combinations using $\mathcal{O}$ for improving explanations.
+We compare the performance of optimized explanation sets against the baseline consisting of the seed explanations.\footnote{Note that in spite of the similarities of this approach to LMSI \cite{huang2022}, we cannot compare to this explicitly as it requires fine-tuning the LLM parameters, which is not applicable on \ttsmall{code-davinci-002}.}
+We test 4 ways of finding candidate combinations to search over using $\mathcal{O}$. The combinations can be obtained by random sampling ({\sc Naive}) or according to our proxy metrics (${{\mathcal{S}_{\mathrm{OSAcc}}}}$ and ${{\mathcal{S}_{\mathrm{OSLL}}}}$). 
+In Section~\ref{sec:strategy}, our analysis shows the choice of the most effective metric is task specific. Therefore, we additionally test the {\sc Ensemble} of the ${{\mathcal{S}_{\mathrm{OSLL}}}}$ and ${{\mathcal{S}_{\mathrm{OSAcc}}}}$, where we score the union of candidate combinations found by the two proxy metrics and select the best one according to $\mathcal{O}$. We note that this {\sc Ensemble} method only selects one combination, as opposed to the ensemble of outputs of two combinations obtained using two metrics.
+
+\paragraph{Setup}
+For all datasets, we use a unlabeled set $V$ of 256 randomly selected examples. We sample 48 combinations to silver label the validation set. Our final results are computed based on 4 different exemplar set groups and report the average and standard deviation of the delta with respect to the seed sets.
+
+We constrain the budget of search $B$ to be 50; this was the highest point feasible given limitations and was also where we found the performance of {\sc Naive} to be nearly saturated.
+We note that using ${{\mathcal{S}_{\mathrm{OSAcc}}}}$ or  ${{\mathcal{S}_{\mathrm{OSLL}}}}$ requires overhead computation for scoring the combinations; we adjust the budget $B$ accordingly for different methods.
+Using $\mathcal{O}$ to score one combination requires processing $M(K+1)$ examples (ruining inference $M$ data points with $K$ examples in prompts and 1 example in output), which we use as a unit, called one {\sc Pass}. The overhead for computing ${{\mathcal{S}_{\mathrm{OSLL}}}}$ for all combinations is roughly equivalent to 3 {\sc Passes}; the overhead for ${{\mathcal{S}_{\mathrm{OSAcc}}}}$ is roughly 14 {\sc Passes}. Please refer to Appendix~\ref{app:overhead} for details of the computation overhead. Therefore, we allow {\sc Naive} to rank 50 combinations, ${{\mathcal{S}_{\mathrm{OSLL}}}}$ to rank 48 combinations, ${{\mathcal{S}_{\mathrm{OSAcc}}}}$ to rank 32 combinations, and {\sc Ensemble} to rank 32 combinations (16 of each), which roughly equalizes the computation needed for each approach.
+
+
+\paragraph{Results}
+As shown in Table~\ref{tab:main002}, using our framework with a development set can find substantially better explanations measured by prompting performance. Applying our approach in a {\sc Naive} way can already lead to around 3.0\% greedy decoding accuracy improvement on average across all datasets compared to seed set. Under the same budget, using proxy metrics to prioritize search strategy can further improve the performance of the searched explanations. Using either ${{\mathcal{S}_{\mathrm{OSLL}}}}$ or ${{\mathcal{S}_{\mathrm{OSAcc}}}}$ can improves the overall greedy decoding accuracy by more than 2.5\%. ${{\mathcal{S}_{\mathrm{OSLL}}}}{}$ is especially effective on  \textsc{ECQA}{}, whereas ${{\mathcal{S}_{\mathrm{OSAcc}}}}{}$ achieves the best performance on  \textsc{e-SNLI}{}. Using an ensemble of the two strategies leads to the best overall performance, improving greedy decoding and self-consistency accuracy by around 4\% and 2\% on average. 
+
+\subsection{Analysis}
+\begin{table*}[t]
+\caption{Results of searching with a reduced budget. Our framework can still substantially improve the performance upon the seed explanations (see Table~\ref{tab:main002}).}
+\label{tab:less_budget}
+\vspace{-0.075in}
+\begin{center}
+\begin{scriptsize}
+\begin{sc}
+\begin{tabular}{llccccc}
+\toprule
+  & &  \textsc{GSM}{} &  \textsc{ECQA}{} &  \textsc{e-SNLI}{} &  \textsc{StrategyQA}{} & Avg \\
+\midrule
+
+&\multicolumn{5}{c}{\textbf{\textit{ Search under a budget of 20 passes}}}\vspace{0.025in}\\
+
+\multirow{2}{*}{Naive} & Greedy& 64.4\textsubscript{2.0} &	79.3\textsubscript{2.2}&	80.2\textsubscript{3.0}	&71.4\textsubscript{1.2}	&73.8\\% 64.7	& 79.8	& 82.1 &	71.3 & 74.5\\
+& Consistency & 76.0\textsubscript{1.4} &	81.0\textsubscript{2.2}	&83.2\textsubscript{1.2}	&74.7\textsubscript{1.3}	&78.7\\%76.5 &	81.4 &	83.6	& 74.5	& 79.0 \\
+\cmidrule{1-2}
+Ensemble of & Greedy& 64.5\textsubscript{1.1} & 	81.5\textsubscript{2.7}	&81.5\textsubscript{2.6}	&71.2\textsubscript{0.7}&	74.7\\
+${{\mathcal{S}_{\mathrm{OSLL}}}}$ and ${{\mathcal{S}_{\mathrm{OSLL}}}}$  & Consistency &76.9\textsubscript{0.7}	&82.2\textsubscript{1.3}&	83.9\textsubscript{1.5}	&75.0\textsubscript{1.5}&79.5\\
+\bottomrule
+\end{tabular}
+\end{sc}
+\end{scriptsize}
+\end{center}
+\vskip -0.15in
+\end{table*}
+
+\paragraph{Results with reduced search budget}
+We expect search with our proxy metrics can still work well without high $B$, since they already extract potentially high-scoring combinations. We test a setting that spends a reduced search budget compared to the experiments in Section~\ref{sec:exp_with_val}. In this setting, we set budget to be 20 {\sc Passes}, which exactly allows ranking two combinations between the top combination scored by ${{\mathcal{S}_{\mathrm{OSAcc}}}}$ and the top combination scored by ${{\mathcal{S}_{\mathrm{OSLL}}}}$. (17 {\sc Passes} for computation overhead of the two metrics together plus 2 for ranking the two combinations).
+
+As shown in Table~\ref{tab:less_budget}, picking between the two top candidate measured by the two metrics allows finding a high-performing explanations on  \textsc{GSM}{},  \textsc{ECQA}{}, and  \textsc{e-SNLI}{}, improving overall the greedy decoding by 3.1\%. We note that under such a budget (20), the {\sc Ensemble} performance still surpasses {\sc Naive} when using a budget of 50 (Table~\ref{tab:main002}) as well as seed explanations.
+
+\paragraph{Results of using varying number of samples for self-consistency decoding}
+We study how the number of samples for self-consistency decoding impacts the performance. We vary the number of samples from 5 to 40, and compare the explanations obtained via search based on {\sc Ensemble} from (Table~\ref{tab:main002}) against the seed explanations. We note that the results are on a basis of one random exemplar set for each of the datasets, owning to the high computational cost of running self-consistency decoding. As shown in Table~\ref{tab:selfcons}, the optimized explanations consistently outperform the seed explanations under different numbers of samples. The gap is especially significant with smaller number of samples.
+
+
+
+
+\begin{table}[t]
+\caption{Results of using varying number of samples for self-consistency decoding. }
+\label{tab:selfcons}
+\label{tab:num_cons}
+\vspace{-0.075in}
+\begin{center}
+\scriptsize
+\begin{sc}
+\begin{tabular}{lcccccc}
+\toprule
+ Num & Expl &  \textsc{GSM}{} &  \textsc{ECQA}{} &  \textsc{e-SNLI}{} &StQA& Avg \\
+\midrule
+
+
+
+
+
+\multirow{2}{*}{5} & Seed&  70.4&79.8 &	80.0 &	72.9 &	75.8\\
+&  Ensemble &  73.5	& 81.5 & 85.1 &	71.9 &	78.0\\
+\cmidrule{1-2}
+\multirow{2}{*}{10} & Seed&  77.1&81.1&	82.5&	73.5	&78.5 \\
+&  Ensemble &  78.9 &	82.1	& 85.5	& 73.1	& 79.9 \\
+\cmidrule{1-2}
+\multirow{2}{*}{20} & Seed& 80.8 & 81.2	 & 83.7 &	74.4 &	80.0\\% 64.7	& 79.8	& 82.1 &	71.3 & 74.5\\
+&  Ensemble & 81.5	& 82.5 &	86.3 &	74.0	& 81.0\\%76.5 &	81.4 &	83.6	& 74.5	& 79.0 \
+\cmidrule{1-2}
+\multirow{2}{*}{40} & Seed& 81.7	& 81.5	& 84.6 &	75.0 &	80.7\\% 64.7	& 79.8	& 82.1 &	71.3 & 74.5\\
+&  Ensemble & 82.1 & 82.5 &	87.2 &	75.4	& 81.9\\%76.5 &	81.4 &	83.6	& 74.5	& 79.0 \\
+\bottomrule
+\end{tabular}
+\end{sc}
+
+\end{center}
+\vskip -0.15in
+\end{table}
+
+\paragraph{Failure analysis of search strategies}
+
+In Section~\ref{sec:stg_exp}, we see that the ${{\mathcal{S}_{\mathrm{OSLL}}}}$ and ${{\mathcal{S}_{\mathrm{OSAcc}}}}$ do not always positively correlate with the performance on certain datasets. While we show such uncertainty can be handled by using an ensemble of them and scoring based on $\mathcal{O}$, we briefly analyze the failure of the two metrics for a better understanding of them.
+
+In Table~\ref{tab:comp_stg}, ${{\mathcal{S}_{\mathrm{OSAcc}}}}$ performs very poorly on  \textsc{StrategyQA}{}, yielding lower performance than the \textsc{Naive} selection strategy. The silver accuracy on this dataset is very poor: almost all one-shot accuracy is below 50\% (see Figure~\ref{fig:stqa_exa}), worse than random guessing. One reason is that the binary nature of the task causes a single demonstration to be less suitable and representative than a single demonstration on more complex tasks like GSM. Under such circumstances, the averaged one-shot accuracy is no longer indicative of the full-prompt silver accuracy. On the other datasets, one-shot accuracy is meaningful (better than random guess), and the ${{\mathcal{S}_{\mathrm{OSAcc}}}}$ correlates well with the full-prompt accuracy.
+
+Furthermore, combinations scored highly by ${{\mathcal{S}_{\mathrm{OSLL}}}}$ in Figure~\ref{fig:esnliex2} are not better than random combinations in terms of downstream accuracy. Such combinations also lead to a mediocre completion likelihood, which is unusual as optimizing ${{\mathcal{S}_{\mathrm{OSLL}}}}$ typically leads to the highest completion likelihood in other cases in Figure~\ref{fig:stg_acc}. We hypothesize this can be attributed to the distribution gap between the exemplar set and the test set. Since ${{\mathcal{S}_{\mathrm{OSLL}}}}$ optimizes the log likelihood only based on the exemplar set, it might not generalize well to the test set under severe distribution shift, which is indicated by the suboptimal completion likelihood.
+
+\paragraph{Output Examples} We include examples of the original explanations and the search outputs in Appendix~\ref{app:output_exs}.
+ We note that not all optimized explanations necessarily look much better or more plausible as perceived by humans. The optimization objective here is designed to induce better test predictions in the final model. Part of the effects of this optimization may also be in the combination of the different explanations, so explanations may also be selected because they are more ``compatible'' with others in the final $\mathcal{O}$ ranking function.
+
+
+\paragraph{Limitations}
+Our approach highly relies on the capabilities of the LLMs. We use LLMs to generate candidate explanations, to silver-label development set, as well as to score combinations. To that end, we hypothesize less capable LMs might see limited benefits from our approach, and it is more suitable in a setting that involves finetuning using a large number of labeled set~\cite{star}.
+
+
+\section{Related Work}
+
+We study prompting LLMs with of chain-of-thought \cite{scratch,chain,shi2022language,wei2022emergent} or textual explanations more generally \cite{Marasovi2021,interpicl}. Much of the past work focuses on exemplar selection in the presence of explanations \cite{fu2022complexity,ye2022comp} or developing prompting methods for various reasoning tasks \cite{jung2022maieutic,gao2022pal}, which typically require manually engineered explanations. We focus instead on searching for better-performing explanations.
+
+
+Our approach leverages data without explanation annotations. Similarly, prior work also explores the means of using few-show explanations together with data points without explanations annotations for improving the downstream performance \cite{star,li2022advance,ye2022comp,li2022explanations,pinto,huang2022}. Many of these techniques need large amount of fully labeled data to train the models used for generating explanations \cite{star} or smaller models used as verifiers \cite{li2022advance,li2022explanations,pinto}, whereas our work only uses a small unlabeled set. There is also work on automatically constructing CoTs \cite{zhang2023automatic} starting ZoTs \cite{zerocot}, which also requires a
+fully labeled dataset. In particular, \citet{huang2022} also use LLMs to silver labeled data points for finetuning the LLMs; our work instead treats LLMs as black-boxes and searches for better explanations instead of tuning the parameters. 
+
+Our work also closely relates to prompt optimization. One line of prompt engineering work requires interacting with gradients \cite{shin-etal-2020-autoprompt,hu2021knowledgeable} or continuous embeddings \cite{sun2022black}. Another line uses LMs as black-boxes \cite{Prasad2022GrIPS,deng2022rlprompt,zhang2022tempera,zhou2022humanengineer}. However, this past work either optimizes over discrete templates (not applicable for the explanation optimization setting) or optimizes over string verbalizations (a search space too large for our setting).
+
+\section{Conclusion}
+We have presented an approach that can search for better-performing explanations for ICL starting from a set of seed explanations. Our approach first proposes promising candidate combinations of alternative explanations generated using LLMs, then finds explanation combinations using proxy metrics before using a silver-labeled validation set to select the best candidate. Our results highlight the substantial variance in the performance of different sets of explanations, paving the way for future work to further optimize explanations in this paradigm.
+
+\section*{Acknowledgments}
+
+This work was supported by NSF CAREER Award IIS-2145280 and the NSF Institute for Foundations of Machine Learning. We would like to thank Eunsol Choi, Chenglei Si, Qiaochu Chen, Huancheng Chen, Yasumasa Onoe, Jiacheng Xu, Jifan Chen, Zhen Chen, and Lemeng Wu for their help with various aspects of this work.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+\nocite{langley00}
+
+
+\section{Introduction}
+Large language models (LLMs) \cite{gpt3,palm} can be applied in various ways to do in-context learning (ICL). One line of work shows including \emph{explanations} can boost the prompting performance on a diverse of reasoning tasks \cite{scratch,chain,lampinen2022}.\footnote{Our paper uses the general term \emph{explanation} to denote both chain-of-thought demonstrations for multi-step reasoning tasks as well as rationales for tasks like commonsense question answering, which do not involve chains of intermediate steps in the same way.} Despite the utility of such explanations, they often require manual engineering \cite{chain,LeasttoMostPE} to reach their full potential; past work has demonstrated that different combinations of explanations can lead to widely varying model performance~\cite{interpicl,Wang2022Rationale}.
+Furthermore, these explanations are typically written in natural language~\cite{madaan2022text,ye2022comp} and there are naturally many variants to explain the answer to a single question. Explanations in standard datasets written by crowdworkers may not be optimal, and even expert ``prompt engineers'' may not be able to easily elicit the best behavior. 
+
+\begin{figure}
+    \includegraphics[scale=0.35,trim=0mm 130mm 20mm 30mm,]{figures/xi-icml2023-intro.pdf}
+    \caption{Optimizing explanations given a candidate set. We generate candidate explanations in a leave-one-out fashion (not shown), prioritize combinations of explanations using a surrogate score $\mathcal{S}$, then evaluate them on silver data to optimize accuracy.}
+    \label{fig:framework}
+   
+\end{figure}
+
+This paper studies the problem of optimizing explanations for better downstream performance on textual reasoning tasks. Inspired by recent work that boostraps LLMs to improve reasoning~\cite{star,huang2022}, we propose an approach that can bootstrap a set of seed explanations (e.g., crowdworker annotated explanations) using an unlabeled development data set. As shown in Figure~\ref{fig:framework}, we first prompt LLMs to construct alternative candidate explanations from the seed explanations. We then search over possible combinations of candidate explanations to find a combination that has high accuracy on the  development set, which is silver-labeled using seed explanations.
+
+Evaluating one candidate combination of explanation requires inference over the development set to compare against the silver labels. Given the cost of running LLMs, evaluating a large number of candidates is impractical. We propose a two-stage approach to efficiently search over potentially high-scoring combinations. We first evaluate each candidate explanation \emph{in isolation} based on silver accuracy on the development set or the log likelihood on the few-shot training exemplar set. Scores of these individual explanations can be combined to compute scores of combinations, which gives a proxy of that combination's performance against silver set. We then can allocate our search budget to evaluate better-performing candidate combinations based on the proxy metrics.
+
+We apply our approach to optimize explanations on four datasets:  \textsc{GSM}{},  \textsc{ECQA}{},  \textsc{e-SNLI}{}, and  \textsc{StrategyQA}{}, covering a spectrum of textual reasoning tasks. Across the four datasets, our approach is able to find explanations that achieve a performance gain of 4\% higher accuracy on average compared to initial seed explanations. In addition, we show an extension of our approach to the few-show setting (where we only have few-shot examples), which successfully improves the performance on  \textsc{ECQA}{} and  \textsc{e-SNLI}{}.\looseness=-1
+
+
+ 
+
+
+To summarize, our contributions are: (1) We propose a framework for optimizing explanations for in-context learning by optimizing over combinations of explanations. (2) We show that pseudo-labeling an unlabeled dataset can be used to evaluate such combinations. (3) We propose two proxy metrics to prioritize exploring better combinations given a limited computation budget.
+
+
+
+
+
+\section{Problem Formulation}
+
+\subsection{Problem Statement}
+
+Following the standard chain-of-thought setting \cite{chain}, e assume access to a set of \emph{exemplars} (input-output pairs) $T=\{(q_i,a_i)\}_{i=1:K}$ and \emph{seed explanations} $\tilde{E}=\{\tilde{e}_i\}_{i=1:K}$ annotated for each exemplar in $T$ (one per exemplar). In addition to $T$, some of our approaches assume access to an \emph{unlabeled development set} $V$ that only includes the inputs, i.e., $V=\{q_i\}_{i=1:M}$. Let $\theta$ be the parameters of an LLM.
+
+Our goal is to find an explanation set $E=\{e_i\}_{i=1:K}$ that maximizes the accuracy when evaluating on unseen test data. Each $e_i \in \Sigma^*$ is a natural language explanation expressed in the subword vocabulary $\Sigma$ of the pre-trained language model.
+Past work has optimized many aspects of the in-context learning process, for example, the verbalization of prompts~\cite{deng2022rlprompt,zhang2022tempera}, exemplar selection \cite{fu2022complexity,ye2022comp}, and exemplar order~\cite{lu2022fan}. Ours is the first work to optimize the format of explanations in this articular way.
+
+
+
+Because we assume a very small number of training examples, all of which are going to be included in the prompt, our notion of optimization (our ``training objective'') cannot rely on maximizing the likelihood of labeled training data. As we discuss in future sections, we will explore both likelihood-based measures as well as accuracy against pseudo-labeled versions of $V$. These objectives are also expensive to evaluate using LLMs, so we will operate under an additional constraint of cost in our methods.
+
+
+
+
+
+
+
+
+\paragraph{Candidate explanations}
+Directly searching over the combinatorial explanation space of $E$ is intractable. Practically, we constrain the space of each $e_i$ by selecting each from a \emph{candidate explanation set} $\hat{E_{i}}=\{\hat{e}_i^{(1)}\ldots \hat{e}_i^{(|\hat{E_{i}}|)}\}$, where each $\hat{e}_i^{(j)}$ denotes a candidate explanation associated with each exemplar $q_i$. The candidate explanation sets $\hat{E_{1}}\ldots\hat{E}_{K}$ can be generated by the LLM using a set of manually annotated seed explanations annotated by human $\tilde{E}=\{\tilde{e}_i\}_{i=1:K}$. That is, we use the exemplar set $T$ and the seed sets $\tilde{E}$ excluding $(q_i,\tilde{e}_i,a_i)$ to prompt the LLM and draw $N$ (40 in our implementation) samples for $\hat{E}_i$:
+
+\small
+\begin{equation}
+\label{eq:gen_can_expl}
+    (\hat{e}, \hat{a})\ \sim p(e,a_i \mid \{(q_j,\tilde{e}_j,a_j)\}_{j=1:K\land j\neq i},q_i; \theta)
+\end{equation}
+\normalsize
+
+Put another way, we use a leave-one-out approach to sample explanations and answers for each example using chain-of-thought prompting with $K-1$ examples. We reject any samples that do not have the correct answer for the example.
+
+A combination $C$ is a set of $\{e_i\}$ that contains one explanation $e_i$ from the candidate explanation set $\hat{E}_i$, i.e., $C=\{e_i\}_{i=1:K} \land \forall i, e_i\in \hat{E}_i$. Now we can restate our problem: our goal is to find an explanation set $C$ that maximizes the accuracy when evaluating on unseen test data.
+
+
+\begin{table}[t]
+\caption{Statistics of the performance of 16 different random combinations of explanations on four datasets, as well as the performance of the seed explanations from crowdworkers. All tasks show substantial variation in performance.}
+\label{tab:per_var}
+\begin{center}
+\begin{small}
+    \begin{sc}
+\begin{tabular}{lcccc}
+\toprule
+ & Min & Avg & Max & Seed \\
+\midrule
+
+ \textsc{GSM}{} & 57.7 &	61.8	&66.0	&61.9\\
+ \textsc{ECQA}{} & 72.7&	76.1	&78.6	&74.9\\
+ \textsc{e-SNLI}{} & 60.3	&72.3	&80.1	&71.8\\
+ \textsc{StrategyQA}{}  &69.8&	73.8	&76.5&	74.0\\
+\bottomrule
+\end{tabular}
+\end{sc}
+\end{small}
+\end{center}
+\end{table}
+
+
+\subsection{Performance Varies Across Explanations}
+\label{sec:performance_var}
+To illustrate the potential of our approach, we briefly analyze how using different explanations, for the same set of exemplars, can impact the downstream performance. As mentioned earlier, we generate candidate explanation sets according to Eq~(\ref{eq:gen_can_expl}). Concretely, we use temperature scaling 0.7 and sample 40 completions for each $q_i$, only retaining an $\bar{e}$ if it is paired with a correct answer $\bar{a}=a_i$. Note that for different $q_i$, we may find varying number of valid $\bar{e}$ (ranging from 0 to 40). We keep at most 10 for each $q_i$ to save the search cost.
+
+
+
+For each dataset, we randomly sample 16 combinations using the augmented candidate explanation sets, and report the statistics of the performance in Table~\ref{tab:per_var}. 
+We see substantial variance in performance with different $C$: the average gap between the maximum performance and minimum performance exceeds 5\% and is as large as 20\% (on  \textsc{e-SNLI}{}).  In addition, we show the performance of seed explanations annotated by crowdworkers ({\sc Seed} in Table~\ref{tab:per_var}), which perform roughly on par with the average among the random combinations, indicating substantial headroom for improvement.  
+
+
+\begin{figure}
+    \includegraphics[scale=0.5,trim=0mm 145mm 20mm 30mm,]{figures/silverlabel.pdf}
+    \caption{Silver labeling of unlabeled test example given several sampled combinations. The example shown is for a binary task with True or False labels (e.g., StrategyQA).}
+    \label{fig:silver}
+    \vspace{-0.15in}
+\end{figure}
+
+\section{Method Overview}
+
+Having candidate explanations for each question, we have reduced the search space from practically infinite to merely $N^K$. We then search over possible combinations of explanations. We describe our method for scoring combinations and the constraints under which our search takes place.
+
+\paragraph{Pseudo-labeling development set} We do not assume access to labeled examples beyond the $K$ few-shot examples provided. However, we can take advantage of unlabeled data in $V$. We use a \emph{pseudo-labeling} approach to derive labels for $V$ following past work \citep{selfcons}. This approach is depicted in Figure~\ref{fig:silver}; given $q\in V$, we sample random combinations of explanations to get predictions and use the majority-voted answer as the pseudo label $\hat{a}$:
+
+
+\small
+$$ \hat{a} = \argmax_{a} \sum_{C=\{e_i\}} \mathbbm{1}[a=\argmax_{\bar{a}} p(\bar{a} \mid \{(q_i,e_i,a_i)\}_{i=1:K},q;\theta)]$$
+\normalsize
+
+We now use the accuracy against the silver label as a surrogate objective $\mathcal{O}$, searching for $C$ that maximizes accuracy with respect to the $\hat{a}$:
+
+\small
+\begin{multline}
+\label{eq:obj_dev}
+    \mathcal{O}(C) =
+     \argmax_{C=\{e_i\}_{i=1:K}} \sum_{q_j\in V} \mathbbm{1}[ \hat{a}_j =  \\ \argmax_{\bar{a}} p(\bar{a} \mid \{(q_i,e_i,a_i)\}_{i=1:K},q_j;\theta)].
+\end{multline}
+\normalsize
+
+
+\paragraph{Searching over combinations}
+
+
+
+One further complicating factor is that evaluating a combination $C$ using $\mathcal{O}$ is expensive, as it requires running inference over the development set.  We measure the budget of search $B$ by the number of combinations needed to be scored using $\mathcal{O}$.
+
+A naive approach is to randomly select $B$ combinations to search, but this is inefficient. We propose additional surrogate metrics $\mathcal{S}$ to serve as a proxy for $\mathcal{O}$ for scoring combinations. We design $\mathcal{S}$ so that it can cost-efficiently score all combinations, with high $\mathcal{S}(C)$ indicating a combination $C$ likely to obtain high $\mathcal{O}(C)$ score. In this way, $\mathcal{S}$ can be used to propose promising candidate combinations, only a few of which are scored using the actual objective $\mathcal{O}$ to save search budget
+ 
+
+
+
+
+
+
+
+\section{Proxy for Finding Promising Combinations}
+\label{sec:strategy}
+
+
+Owning to the high cost, we only evaluate a small number (tens of combinations) of combinations against development set using $\mathcal{O}$ (Eq~(\ref{eq:obj_dev}).
+We first extract a set of promising combinations according to two proxy metrics, then evaluate those using our silver data.
+
+\subsection{One-shot Silver Accuracy}
+To optimize the silver accuracy of a combination of explanations (our objective $\mathcal{O}$), we hypothesize that \emph{the prediction of a combination can be approximated with the prediction of the each explanation used one-shot.} That is, we expect $p(a\mid \{(q_i,e_i,a_i)\}_{i=1:K},q;\theta)$ to be higher when $\sum_{i=1:K}p(a\mid (q_i,e_i,a_i),q;\theta)$ is higher. We draw this hypothesis based on recent work on example selection for ICL, which shows that combining examples that individually perform well will yield better performance from the combination \cite{ye2022comp,rubinlearning}.
+
+We define the average one-shot silver accuracy as a proxy metric $\mathcal{S}_{\mathrm{OSAcc}}$:
+
+\small
+\begin{multline}
+    \mathcal{S}_{\mathrm{OSAcc}}(C=\{e_i\}_{i=1:K})=\sum_{i=1:K} \sum_{q_j\in V} \mathbbm{1}[ \hat{a}_j =  \\ \argmax_{\bar{a}} p(\bar{a} \mid (q_i,e_i,a_i),q_j;\theta)]
+\end{multline}
+\normalsize
+
+By computing the one-shot silver performance for $ \forall \hat{e}^{(i)}_j\in \hat{E}^{(i)}$ for $\forall i=1:K$, we can efficiently compute the proxy metric ${{\mathcal{S}_{\mathrm{OSAcc}}}}$ for any combination $C$.\footnote{While this involves $NK$ evaluations on the silver set, note that these evaluations are one-shot and also significantly less computationally expensive than using higher numbers of shots.}
+
+
+\subsection{One-shot Log Likelihood}
+Besides using silver accuracy, another principle is to optimize the held-out log likelihood of the exemplar set:
+
+\small
+$$\sum_{j=1:K} \log p(a_j\mid \{(q_i,e_i,a_i)\}_{i=1:K \land i\neq j},q_j;\theta).$$
+\normalsize
+
+We apply a similar hypothesis and use the one-shot performance $\sum_{i=1:K\land i\neq j} p(a_j, \mid (q_i,e_i,a_i),q_j;\theta) $ as the surrogate of $ p(a_j \mid \{(q_i,e_i,a_i)\}_{i=1:K \land i\neq j},q_j;\theta)$. We can then score a candidate combination by:
+
+\small
+$$\sum_{j=1:K}\sum_{i=1:K\land i\neq j} \log \sum_e p(a_j,e \mid (q_i,e_i,a_i),q_j;\theta).$$
+\normalsize
+
+Since summing over explanations is intractable, we approximate this sum using the single sample of $e$ to estimate the one-shot performance, leading to:
+
+\small
+\begin{equation}
+\label{eq:pplscore}
+{{\mathcal{S}_{\mathrm{OSLL}}}} =  \sum_{j=1:K}\sum_{i=1:K\land i\neq j} \log  p(e_j,a_j \mid (q_i,e_i,a_i),q_j;\theta).
+\end{equation}
+\normalsize
+
+
+
+We can compute ${{\mathcal{S}_{\mathrm{OSLL}}}}$ for any $C$ by only computing all the pairwise probabilities, $p(e_j,a_j \mid (q_i,e_i,a_i),q_j;\theta)$, for $\forall e_i \in \hat{E}_i,e_j\in \hat{E}_j\forall i=1:K,j=1:K \land i\neq j  $, which is computationally feasible. Note that this metric does not require a development set.
+
+
+
+
+\section{Experimental Setup}
+\subsection{Language Models}
+We primarily use \ttsmall{code-davinci-002} \cite{codex}, a state-of-the-art LLM API, throughout our experiments, given its strong performance on various reasoning tasks \cite{li2022advance,madaan2022language}. In addition, we use \ttsmall{text-davinci-003} to verify the effectiveness of the proxy metrics. \ttsmall{code-davinci-002} is a base model, and \ttsmall{text-davinci-003} is an Instruct-series model fine-tuned to align with human preferences \cite{instructgpt}.\footnote{The differences are described in  \url{https://platform.openai.com/docs/model-index-for-researchers}}
+
+\paragraph{Inference}
+Ideally, inference when using explanations in prompts requires marginalizing over all possible latent explanations, which involves an intractable sum. We follow past work to employ \emph{greedy decoding} (greedily selecting the most probable token autoregressively) \cite{chain,interpicl} or self-consistency decoding (sampling tens of outputs from LLMs via temperature scaling and using popularity voting to assign a label) \cite{selfcons}.
+
+\paragraph{Cost}
+Querying LLMs is computationally intensive. We aim to search for better explanations within a reasonable budget. Our evaluation of cost is based on the \emph{number of tokens} processed by LLMs, including both tokens in the prompts and the tokens generated by LLMs. We further bucket the measurement of cost by number of combinations $C$ that are scored by $\mathcal{O}$, which involves processing $M(K+1)$ examples.
+
+
+\begin{table*}[t]
+\caption{Oracle maximum accuracies achievable with 8 or 16 candidate combinations using different selection strategies. Using log likelihood-based or silver accuracy-based proxy metrics can find more promising candidate combinations than random candidates.}
+\label{tab:comp_stg}
+\vskip 0.015in
+\begin{center}
+\begin{small}
+\begin{sc}
+\begin{tabular}{lcccccccc}
+\toprule
+     & \multicolumn{2}{c}{GSM} & \multicolumn{2}{c}{ECQA} & \multicolumn{2}{c}{ESNLI} & \multicolumn{2}{c}{STRATEGYQA}\\
+     Metrics & Max@8 & Max@16 & Max@8 & Max@16 & Max@8 & Max@16 & Max@8 & Max@16 \\
+\midrule
+Naive & 65.1 & 66.0 & 78.6 & 78.6 & 79.5 & 80.1 & 76.2 & 76.5 \\
+\cmidrule{1-1}
+${{\mathcal{S}_{\mathrm{OSAcc}}}}$ & \bf 66.4 & \bf 67.0 & 79.7 & 80.5 & \bf 80.4 & \bf 81.2 & 74.3 & 74.9\\
+${{\mathcal{S}_{\mathrm{OSLL}}}}$ & 65.7 & 65.9 & \bf 80.2 & \bf 80.6 & 75.8 & 76.5 & \bf 77.1 & \bf 77.4 \\
+\bottomrule
+\end{tabular}
+\end{sc}
+\end{small}
+\end{center}
+\end{table*}
+
+
+
+\subsection{Datasets}
+\label{sec:dataset}
+We experiment with four datasets covering four distinct tasks, including:
+
+     $\sbullet[0.75]$  \textsc{GSM}{}~\cite{gsm8k} consists of grade school math questions. Each is paired with a human-written explanation for the answer. We choose this particular arithmetic reasoning dataset as it contains real-world math problems paired with diverse natural language texts as opposed to synthetically generated problems \cite{roy-roth2015}.
+     
+     $\sbullet[0.75]$  \textsc{ECQA}{} \cite{ecqa, commonsenseqa} contains multiple-choice questions which test models' commonsense knowledge.
+
+      $\sbullet[0.75]$  \textsc{e-SNLI}{} \cite{esnli} studies the task of natural language inference which is to classify the relation between a premise and a hypothesis
+    
+     $\sbullet[0.75]$ \textsc{StrategyQA} \cite{stqa} asks Yes-No questions requiring steps. The dataset does not have explanation annotations, but it provide facts \cite{stqa} which are supporting evidence (albeit noisy ones) for the answers, so we use them as explanations.
+     
+For each of the datasets, we choose prompt formats commonly used in past work~\cite{chain,Wang2022Rationale}. We show one example in the corresponding prompt format in Appendix~\ref{app:data_exs}. We use 8 exemplars in prompts for  \textsc{GSM}{},  \textsc{ECQA}{}, and  \textsc{StrategyQA}{}, and 9 exemplars (3 for each class) for  \textsc{e-SNLI}{}; recent work suggests that using more exemplars would not lead to further performance gains~\cite{chain,selfcons}.
+
+
+
+
+\begin{figure*}[t]
+     \centering
+          \begin{subfigure}[h]{0.49\linewidth}
+         \centering
+         \includegraphics[width=0.95\linewidth,trim=85 0 105 20,clip]{figures/stg_plots/gsm-0.png}
+         \vspace{-0.065in}
+        \caption{ \textsc{GSM}{}: random exemplar set 1.}
+        \label{fig:gsmexa}
+        \vspace{0.035in}
+     \end{subfigure}
+     \hfill
+     \begin{subfigure}[h]{0.49\linewidth}
+         \centering
+         \includegraphics[width=0.95\linewidth,trim=85 0 105 20,clip]{figures/stg_plots/gsm-3072.png}
+         \vspace{-0.065in}
+        \caption{ \textsc{GSM}{}: random exemplar set 2.}
+        \label{fig:gsmexb}
+        \vspace{0.035in}
+     \end{subfigure}
+     
+     \begin{subfigure}[h]{0.49\linewidth}
+         \centering
+         \includegraphics[width=0.95\linewidth,trim=85 0 105 20,clip]{figures/stg_plots/ecqa-0.png}
+         \vspace{-0.065in}
+        \caption{ \textsc{ECQA}{}: random exemplar set 1.}
+        \vspace{0.035in}
+     \end{subfigure}
+     \hfill
+     \begin{subfigure}[h]{0.49\linewidth}
+         \centering
+         \includegraphics[width=0.95\linewidth,trim=85 0 105 20,clip]{figures/stg_plots/ecqa-1024.png}
+         \vspace{-0.065in}
+        \caption{ \textsc{ECQA}{}: random exemplar set 2.}
+        \vspace{0.035in}
+     \end{subfigure}
+
+     \begin{subfigure}[h]{0.49\linewidth}
+         \centering
+         \includegraphics[width=0.95\linewidth,trim=85 0 105 20,clip]{figures/stg_plots/esnli-2048.png}
+         \vspace{-0.065in}
+        \caption{ \textsc{e-SNLI}{}: random exemplar set 1.}
+        \vspace{0.035in}
+     \end{subfigure}
+     \hfill
+     \begin{subfigure}[h]{0.49\linewidth}
+         \centering
+         \includegraphics[width=0.95\linewidth,trim=85 0 105 20,clip]{figures/stg_plots/esnli-3072.png}
+         \vspace{-0.065in}
+        \caption{ \textsc{e-SNLI}{}: random exemplar set 2.}
+        \label{fig:esnliex2}
+        \vspace{0.035in}
+     \end{subfigure}
+
+        \begin{subfigure}[h]{0.49\linewidth}
+         \centering
+         \includegraphics[width=0.95\linewidth,trim=85 0 105 20,clip]{figures/stg_plots/strategyqa-0.png}
+         \vspace{-0.065in}
+        \caption{ \textsc{StrategyQA}{}: random exemplar set 1.}
+        \label{fig:stqa_exa}
+        \vspace{0.035in}
+     \end{subfigure}
+     \hfill
+     \begin{subfigure}[h]{0.49\linewidth}
+         \centering
+         \includegraphics[width=0.95\linewidth,trim=85 0 105 20,clip]{figures/stg_plots/strategyqa-512.png}
+         \vspace{-0.065in}
+        \caption{ \textsc{StrategyQA}{}: random exemplar set 2.}
+        \label{fig:stqa_exb}
+        \vspace{0.035in}
+     \end{subfigure}
+     \caption{Gold test set accuracy (y-axis) vs.~various surrogate proxy scores for explanation sets. Points of three different colors denotes combinations selected using three metrics. There is a positive correlation between ${{\mathcal{S}_{\mathrm{OSAcc}}}}$ and performance on these datasets except for  \textsc{StrategyQA}{} (Pearson above 0.3 is highlighted in purple). ${{\mathcal{S}_{\mathrm{OSLL}}}}$ also shows positives correlation on  \textsc{ECQA}{} and  \textsc{StrategyQA}{} and occasionally fails on the others.}
+    \label{fig:stg_acc}
+
+\end{figure*}
+
+\section{Verifying the Effectiveness of Proxy Metrics}
+\label{sec:stg_exp}
+
+
+Before showing the results of the complete system, we first present experiments for verifying the effectiveness of the two proxy metrics. We evaluate them on the basis of the best oracle accuracy on a small (gold) labeled test set that we can reach using the top-$X$ candidates, referred to as {\sc Max@$X$}, ranked by ${{\mathcal{S}_{\mathrm{OSAcc}}}}$ or  ${{\mathcal{S}_{\mathrm{OSLL}}}}$. This gives an oracle upper bound for the performance that silver reranking via $\mathcal{O}$ can yield.
+
+\paragraph{Setup} We compare our metrics against a baseline which randomly scores combinations ({\sc Naive}). We mainly 
+use \ttsmall{code-davinci-002} for this experiment; please refer to Appendix~\ref{app:stg_003} for additional results on \ttsmall{text-davinci-003}. For ${{\mathcal{S}_{\mathrm{OSAcc}}}}$, we silver-labeled 256 randomly drawn development with 48 samples of combinations. For each dataset, we experiment with four different exemplar sets $T$ to control for randomness and report the average number.
+
+\paragraph{Results} Table~\ref{tab:comp_stg} shows the maximum reachable performance within 8 (Max@8)  and 16 (Max@16) candidate combinations. For each dataset, using one of our metrics can find more promising candidate combinations than randomly proposed candidates. Among the top 16 combinations, combinations preferred by ${{\mathcal{S}_{\mathrm{OSAcc}}}}$ can achieve better performance than randomly selected combinations by 1.0\%, 0.9\%, and 1.4\% on  \textsc{GSM}{},  \textsc{ECQA}{}, and  \textsc{e-SNLI}{}, respectively. ${{\mathcal{S}_{\mathrm{OSLL}}}}$ is the most effective strategy on  \textsc{ECQA}{}, and  \textsc{StrategyQA}{}, surpassing {\sc Naive} by 2.0\% and 0.9\% on the basis of 16 candidate combinations. Nonetheless, we do not find one metric consistently gives the best performance.
+
+
+\paragraph{Proxy metrics vs downstream accuracy}
+In Figure~\ref{fig:stg_acc}, we show a series of graphs for intuitive understanding of how the proxy metrics relates to the downstream accuracy. Each group of graphs shows the downstream accuracy vs.~the surrogate proxy scores of combinations preferred by different metrics. For each dataset, we show two groups of graphs for two different exemplar sets out of four. Each group contains three graphs with different values on the x-axis. The first graph of a triple shows ${{\mathcal{S}_{\mathrm{OSAcc}}}}$ on the x-axis and the second one shows one-shot likelihood on the exemplar set (positively correlates with ${{\mathcal{S}_{\mathrm{OSLL}}}}$). In addition to the two proxy metrics, we show the completion likelihood on the third graph (probability of the the predictions on the development set), i.e., $\sum_{q_i\in V}  p(\bar{a}_i,\bar{e}_i| \{(q_j,e_j,a_j)\}_{j=1:K},q_i;\theta)$ where $ p(\bar{a}_i,\bar{e}_i)$ is the actual predicted explanation and answer for $q_i$.\looseness=-1
+
+We show that the two surrogate scores we define mostly positively correlate with the downstream accuracy. ${{\mathcal{S}_{\mathrm{OSAcc}}}}$ (left) works uniformly well except on  \textsc{StrategyQA}{}. ${{\mathcal{S}_{\mathrm{OSLL}}}}$ works well except for Figure~\ref{fig:gsmexa} from  \textsc{GSM}{} and  Figure~\ref{fig:esnliex2} from  \textsc{e-SNLI}{}.
+In particular, on  \textsc{ECQA}{}, both of our them highly positively correlate with the downstream accuracy. 
+
+Furthermore, we show the candidate combinations preferred by our proxy metrics lead to, in most cases, better perplexity on the development set (third graph in each triple), which indicates these combinations are more ``optimized'' for a specific task; past work suggests that better perplexity generally correlates with better downstream performance \cite{hila2022}.\looseness=-1
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+\begin{table*}[t]
+\caption{Greedy decoding and self-consistency decoding (10 samples) performance of the seed explanations and the explanations obtained using our framework from the seed explanations. In few-shot setting, ${{\mathcal{S}_{\mathrm{OSLL}}}}$ proxy metric find combinations of candidate explanations that improve the performance on  \textsc{ECQA}{} and  \textsc{e-SNLI}{}. Using a development set, we can further improve the performance, especially with the ensemble of ${{\mathcal{S}_{\mathrm{OSLL}}}}$ and ${{\mathcal{S}_{\mathrm{OSAcc}}}}$. Note that standard deviations are with respect to \textbf{deltas} between the seed and improved accuracy.}
+\label{tab:main002}
+\vspace{-0.05in}
+\begin{center}
+\begin{small}
+\begin{sc}
+\begin{tabular}{llccccc}
+\toprule
+  & &  \textsc{GSM}{} &  \textsc{ECQA}{} &  \textsc{e-SNLI}{} &  \textsc{StrategyQA}{} & Avg \\
+\midrule
+& \multicolumn{5}{c}{\textbf{\textit{ Baseline: initial seed explanations}}} \vspace{0.025in}\\
+\multirow{2}{*}{Seed}    & Greedy & 62.8\phantom{\textsubscript{0.0}}	 & 77.0\phantom{\textsubscript{0.0}}	& 75.2\phantom{\textsubscript{0.0}}	& 71.3\phantom{\textsubscript{0.0}}	&71.6\\
+& Consistency & 75.4\phantom{\textsubscript{0.0}}&80.9\phantom{\textsubscript{0.0}}&	80.9\phantom{\textsubscript{0.0}}&	75.2\phantom{\textsubscript{0.0}}	&78.1\\
+
+\midrule
+& \multicolumn{5}{c}{\textbf{\textit{ True Few-shot setting: using $T$}}} \vspace{0.025in}\\
+\multirow{2}{*}{${{\mathcal{S}_{\mathrm{OSLL}}}}$(Ours)}  & Greedy& 64.4\textsubscript{0.4}& 81.6\textsubscript{2.3}	& 76.8\textsubscript{7.6}	&71.1\textsubscript{0.8}	&73.5\\
+& Consistency & 75.2\textsubscript{1.3} &	82.7\textsubscript{1.5}& 81.7\textsubscript{3.5} &	75.0\textsubscript{1.4} &78.8\\
+\midrule
+&\multicolumn{5}{c}{\textbf{\textit{ Few-shot + Unlabeled setting: using $T$ and $V$}}}\vspace{0.025in}\\
+
+\multirow{2}{*}{Naive (Ours)}& Greedy& 64.7\textsubscript{1.5}	& 79.8\textsubscript{1.4}	& 82.1\textsubscript{2.5} &	71.3\textsubscript{0.9} & 74.5\\
+& Consistency & 76.5\textsubscript{0.8} &	81.4\textsubscript{1.5} &	83.6\textsubscript{2.0}	& 74.5\textsubscript{0.9}	& 79.0 \\
+\cmidrule{1-2}
+\multirow{2}{*}{${{\mathcal{S}_{\mathrm{OSLL}}}}$(Ours)} & Greedy& 64.7\textsubscript{1.6} & \bf 81.7\textsubscript{3.7} 	& 79.2\textsubscript{5.4} &	71.8\textsubscript{1.0} & 74.2\\
+& Consistency & 76.3\textsubscript{1.1} & \bf 82.5\textsubscript{1.2}  & 82.2\textsubscript{3.0} & \bf 75.4\textsubscript{0.9} & 79.0\\
+\cmidrule{1-2}
+\multirow{2}{*}{${{\mathcal{S}_{\mathrm{OSAcc}}}}$(Ours)} & Greedy& 64.8\textsubscript{1.1}	& 81.0\textsubscript{2.1} 	& \bf 83.0\textsubscript{2.6} &	71.0\textsubscript{0.6} & 74.9\\
+& Consistency & 76.8\textsubscript{0.6} &	82.0\textsubscript{1.3}  & \bf 85.2\textsubscript{1.8} & 73.6\textsubscript{1.6} & 79.4\\
+\cmidrule{1-2}
+Ensemble of & Greedy& \bf 65.4\textsubscript{2.2} & 81.3\textsubscript{3.4} 	& 83.0\textsubscript{5.6}	& \bf 72.1\textsubscript{2.0} 	&\bf 75.4\\
+${{\mathcal{S}_{\mathrm{OSLL}}}}$ and ${{\mathcal{S}_{\mathrm{OSAcc}}}}$ (Ours) & Consistency & \bf 77.2\textsubscript{1.5} &82.4\textsubscript{0.9}  & 84.9\textsubscript{2.4} & 74.9\textsubscript{1.2}  &\bf  79.9\\
+\bottomrule
+\end{tabular}
+\end{sc}
+\end{small}
+\end{center}
+\vskip -0.1in
+\end{table*}
+
+
+
+\section{Main Experiments}
+
+
+We now test the effectiveness of our approach by comparing the performance of searched explanations against the seed explanations. We consider two settings:
+
+A \textbf{True Few-shot} setting, where we only have access to exemplars $T$. Even without a development set, we can use ${{\mathcal{S}_{\mathrm{OSLL}}}}$ which operates on $T$ to propose candidate combinations. However, because we do not have silver-labeled data to use $\mathcal{O}$ to score combinations, we directly take the top combination preferred by ${{\mathcal{S}_{\mathrm{OSLL}}}}$ as the optimized explanations.
+
+A \textbf{Few-shot + Unlabeled} setting, where we assume assumes access to unlabeled set $V$ in addition to $T$. In this setting, we can apply our full framework which first proposes candidate combinations and then selects the best candidate using $\mathcal{O}$ (the accuracy against silver-labeled $V$). We can use ${{\mathcal{S}_{\mathrm{OSAcc}}}}$ or ${{\mathcal{S}_{\mathrm{OSLL}}}}$ (or both) as a proxy to prioritize search.  
+
+
+\subsection{Using Few-shot Exemplars}
+\label{sec:exp_without_val}
+
+
+
+\paragraph{Setup}
+As mentioned before, we use \ttsmall{code-davinci-002} for our experiments given its state-of-the-art performance. For each set of explanations, we test both greedy decoding and self-consistency decoding (with 10 samples and temperature set as 0.7). For each dataset, we experiment with 4 sets of randomly sampled exemplar sets to alleviate the influence of randomness. We report the average and standard deviation over the 4 different exemplar sets for each setting. We note we report the standard deviation of the \textbf{delta} between the performance of optimized explanations and seed explanations (instead of the actual performance), since our main focus is to establish to what extent our framework can improve upon a seed explanation set. We note we use a randomly sampled test set of size 1,000 for all datasets.
+
+\paragraph{Results}
+We show the performance of the top combination scored according to ${{\mathcal{S}_{\mathrm{OSLL}}}}$ proxy metric in Table~\ref{tab:main002}. Without silver-labeled data, our ${{\mathcal{S}_{\mathrm{OSLL}}}}$ can still improve the greedy decoding performance on  \textsc{GSM}{},  \textsc{ECQA}{}, and  \textsc{e-SNLI}{} by 1.6\%, 4.8\% and 1.6\%, respectively. It also improves the self-consistency performance on  \textsc{ECQA}{} and  \textsc{e-SNLI}{} by 1.9\% and 0.8\%, respectively. The results confirms the effectiveness of the ${{\mathcal{S}_{\mathrm{OSLL}}}}$ metric in finding generally better-performing candidate combinations.
+
+\subsection{Using Development Sets}
+\label{sec:exp_with_val}
+Having an unlabeled development set $V$ allows us to score combinations using $\mathcal{O}$ for improving explanations.
+We compare the performance of optimized explanation sets against the baseline consisting of the seed explanations.\footnote{Note that in spite of the similarities of this approach to LMSI \cite{huang2022}, we cannot compare to this explicitly as it requires fine-tuning the LLM parameters, which is not applicable on \ttsmall{code-davinci-002}.}
+We test 4 ways of finding candidate combinations to search over using $\mathcal{O}$. The combinations can be obtained by random sampling ({\sc Naive}) or according to our proxy metrics (${{\mathcal{S}_{\mathrm{OSAcc}}}}$ and ${{\mathcal{S}_{\mathrm{OSLL}}}}$). 
+In Section~\ref{sec:strategy}, our analysis shows the choice of the most effective metric is task specific. Therefore, we additionally test the {\sc Ensemble} of the ${{\mathcal{S}_{\mathrm{OSLL}}}}$ and ${{\mathcal{S}_{\mathrm{OSAcc}}}}$, where we score the union of candidate combinations found by the two proxy metrics and select the best one according to $\mathcal{O}$. We note that this {\sc Ensemble} method only selects one combination, as opposed to the ensemble of outputs of two combinations obtained using two metrics.
+
+\paragraph{Setup}
+For all datasets, we use a unlabeled set $V$ of 256 randomly selected examples. We sample 48 combinations to silver label the validation set. Our final results are computed based on 4 different exemplar set groups and report the average and standard deviation of the delta with respect to the seed sets.
+
+We constrain the budget of search $B$ to be 50; this was the highest point feasible given limitations and was also where we found the performance of {\sc Naive} to be nearly saturated.
+We note that using ${{\mathcal{S}_{\mathrm{OSAcc}}}}$ or  ${{\mathcal{S}_{\mathrm{OSLL}}}}$ requires overhead computation for scoring the combinations; we adjust the budget $B$ accordingly for different methods.
+Using $\mathcal{O}$ to score one combination requires processing $M(K+1)$ examples (ruining inference $M$ data points with $K$ examples in prompts and 1 example in output), which we use as a unit, called one {\sc Pass}. The overhead for computing ${{\mathcal{S}_{\mathrm{OSLL}}}}$ for all combinations is roughly equivalent to 3 {\sc Passes}; the overhead for ${{\mathcal{S}_{\mathrm{OSAcc}}}}$ is roughly 14 {\sc Passes}. Please refer to Appendix~\ref{app:overhead} for details of the computation overhead. Therefore, we allow {\sc Naive} to rank 50 combinations, ${{\mathcal{S}_{\mathrm{OSLL}}}}$ to rank 48 combinations, ${{\mathcal{S}_{\mathrm{OSAcc}}}}$ to rank 32 combinations, and {\sc Ensemble} to rank 32 combinations (16 of each), which roughly equalizes the computation needed for each approach.
+
+
+\paragraph{Results}
+As shown in Table~\ref{tab:main002}, using our framework with a development set can find substantially better explanations measured by prompting performance. Applying our approach in a {\sc Naive} way can already lead to around 3.0\% greedy decoding accuracy improvement on average across all datasets compared to seed set. Under the same budget, using proxy metrics to prioritize search strategy can further improve the performance of the searched explanations. Using either ${{\mathcal{S}_{\mathrm{OSLL}}}}$ or ${{\mathcal{S}_{\mathrm{OSAcc}}}}$ can improves the overall greedy decoding accuracy by more than 2.5\%. ${{\mathcal{S}_{\mathrm{OSLL}}}}{}$ is especially effective on  \textsc{ECQA}{}, whereas ${{\mathcal{S}_{\mathrm{OSAcc}}}}{}$ achieves the best performance on  \textsc{e-SNLI}{}. Using an ensemble of the two strategies leads to the best overall performance, improving greedy decoding and self-consistency accuracy by around 4\% and 2\% on average. 
+
+\subsection{Analysis}
+\begin{table*}[t]
+\caption{Results of searching with a reduced budget. Our framework can still substantially improve the performance upon the seed explanations (see Table~\ref{tab:main002}).}
+\label{tab:less_budget}
+\vspace{-0.075in}
+\begin{center}
+\begin{scriptsize}
+\begin{sc}
+\begin{tabular}{llccccc}
+\toprule
+  & &  \textsc{GSM}{} &  \textsc{ECQA}{} &  \textsc{e-SNLI}{} &  \textsc{StrategyQA}{} & Avg \\
+\midrule
+
+&\multicolumn{5}{c}{\textbf{\textit{ Search under a budget of 20 passes}}}\vspace{0.025in}\\
+
+\multirow{2}{*}{Naive} & Greedy& 64.4\textsubscript{2.0} &	79.3\textsubscript{2.2}&	80.2\textsubscript{3.0}	&71.4\textsubscript{1.2}	&73.8\\% 64.7	& 79.8	& 82.1 &	71.3 & 74.5\\
+& Consistency & 76.0\textsubscript{1.4} &	81.0\textsubscript{2.2}	&83.2\textsubscript{1.2}	&74.7\textsubscript{1.3}	&78.7\\%76.5 &	81.4 &	83.6	& 74.5	& 79.0 \\
+\cmidrule{1-2}
+Ensemble of & Greedy& 64.5\textsubscript{1.1} & 	81.5\textsubscript{2.7}	&81.5\textsubscript{2.6}	&71.2\textsubscript{0.7}&	74.7\\
+${{\mathcal{S}_{\mathrm{OSLL}}}}$ and ${{\mathcal{S}_{\mathrm{OSLL}}}}$  & Consistency &76.9\textsubscript{0.7}	&82.2\textsubscript{1.3}&	83.9\textsubscript{1.5}	&75.0\textsubscript{1.5}&79.5\\
+\bottomrule
+\end{tabular}
+\end{sc}
+\end{scriptsize}
+\end{center}
+\vskip -0.15in
+\end{table*}
+
+\paragraph{Results with reduced search budget}
+We expect search with our proxy metrics can still work well without high $B$, since they already extract potentially high-scoring combinations. We test a setting that spends a reduced search budget compared to the experiments in Section~\ref{sec:exp_with_val}. In this setting, we set budget to be 20 {\sc Passes}, which exactly allows ranking two combinations between the top combination scored by ${{\mathcal{S}_{\mathrm{OSAcc}}}}$ and the top combination scored by ${{\mathcal{S}_{\mathrm{OSLL}}}}$. (17 {\sc Passes} for computation overhead of the two metrics together plus 2 for ranking the two combinations).
+
+As shown in Table~\ref{tab:less_budget}, picking between the two top candidate measured by the two metrics allows finding a high-performing explanations on  \textsc{GSM}{},  \textsc{ECQA}{}, and  \textsc{e-SNLI}{}, improving overall the greedy decoding by 3.1\%. We note that under such a budget (20), the {\sc Ensemble} performance still surpasses {\sc Naive} when using a budget of 50 (Table~\ref{tab:main002}) as well as seed explanations.
+
+\paragraph{Results of using varying number of samples for self-consistency decoding}
+We study how the number of samples for self-consistency decoding impacts the performance. We vary the number of samples from 5 to 40, and compare the explanations obtained via search based on {\sc Ensemble} from (Table~\ref{tab:main002}) against the seed explanations. We note that the results are on a basis of one random exemplar set for each of the datasets, owning to the high computational cost of running self-consistency decoding. As shown in Table~\ref{tab:selfcons}, the optimized explanations consistently outperform the seed explanations under different numbers of samples. The gap is especially significant with smaller number of samples.
+
+
+
+
+\begin{table}[t]
+\caption{Results of using varying number of samples for self-consistency decoding. }
+\label{tab:selfcons}
+\label{tab:num_cons}
+\vspace{-0.075in}
+\begin{center}
+\scriptsize
+\begin{sc}
+\begin{tabular}{lcccccc}
+\toprule
+ Num & Expl &  \textsc{GSM}{} &  \textsc{ECQA}{} &  \textsc{e-SNLI}{} &StQA& Avg \\
+\midrule
+
+
+
+
+
+\multirow{2}{*}{5} & Seed&  70.4&79.8 &	80.0 &	72.9 &	75.8\\
+&  Ensemble &  73.5	& 81.5 & 85.1 &	71.9 &	78.0\\
+\cmidrule{1-2}
+\multirow{2}{*}{10} & Seed&  77.1&81.1&	82.5&	73.5	&78.5 \\
+&  Ensemble &  78.9 &	82.1	& 85.5	& 73.1	& 79.9 \\
+\cmidrule{1-2}
+\multirow{2}{*}{20} & Seed& 80.8 & 81.2	 & 83.7 &	74.4 &	80.0\\% 64.7	& 79.8	& 82.1 &	71.3 & 74.5\\
+&  Ensemble & 81.5	& 82.5 &	86.3 &	74.0	& 81.0\\%76.5 &	81.4 &	83.6	& 74.5	& 79.0 \
+\cmidrule{1-2}
+\multirow{2}{*}{40} & Seed& 81.7	& 81.5	& 84.6 &	75.0 &	80.7\\% 64.7	& 79.8	& 82.1 &	71.3 & 74.5\\
+&  Ensemble & 82.1 & 82.5 &	87.2 &	75.4	& 81.9\\%76.5 &	81.4 &	83.6	& 74.5	& 79.0 \\
+\bottomrule
+\end{tabular}
+\end{sc}
+
+\end{center}
+\vskip -0.15in
+\end{table}
+
+\paragraph{Failure analysis of search strategies}
+
+In Section~\ref{sec:stg_exp}, we see that the ${{\mathcal{S}_{\mathrm{OSLL}}}}$ and ${{\mathcal{S}_{\mathrm{OSAcc}}}}$ do not always positively correlate with the performance on certain datasets. While we show such uncertainty can be handled by using an ensemble of them and scoring based on $\mathcal{O}$, we briefly analyze the failure of the two metrics for a better understanding of them.
+
+In Table~\ref{tab:comp_stg}, ${{\mathcal{S}_{\mathrm{OSAcc}}}}$ performs very poorly on  \textsc{StrategyQA}{}, yielding lower performance than the \textsc{Naive} selection strategy. The silver accuracy on this dataset is very poor: almost all one-shot accuracy is below 50\% (see Figure~\ref{fig:stqa_exa}), worse than random guessing. One reason is that the binary nature of the task causes a single demonstration to be less suitable and representative than a single demonstration on more complex tasks like GSM. Under such circumstances, the averaged one-shot accuracy is no longer indicative of the full-prompt silver accuracy. On the other datasets, one-shot accuracy is meaningful (better than random guess), and the ${{\mathcal{S}_{\mathrm{OSAcc}}}}$ correlates well with the full-prompt accuracy.
+
+Furthermore, combinations scored highly by ${{\mathcal{S}_{\mathrm{OSLL}}}}$ in Figure~\ref{fig:esnliex2} are not better than random combinations in terms of downstream accuracy. Such combinations also lead to a mediocre completion likelihood, which is unusual as optimizing ${{\mathcal{S}_{\mathrm{OSLL}}}}$ typically leads to the highest completion likelihood in other cases in Figure~\ref{fig:stg_acc}. We hypothesize this can be attributed to the distribution gap between the exemplar set and the test set. Since ${{\mathcal{S}_{\mathrm{OSLL}}}}$ optimizes the log likelihood only based on the exemplar set, it might not generalize well to the test set under severe distribution shift, which is indicated by the suboptimal completion likelihood.
+
+\paragraph{Output Examples} We include examples of the original explanations and the search outputs in Appendix~\ref{app:output_exs}.
+ We note that not all optimized explanations necessarily look much better or more plausible as perceived by humans. The optimization objective here is designed to induce better test predictions in the final model. Part of the effects of this optimization may also be in the combination of the different explanations, so explanations may also be selected because they are more ``compatible'' with others in the final $\mathcal{O}$ ranking function.
+
+
+\paragraph{Limitations}
+Our approach highly relies on the capabilities of the LLMs. We use LLMs to generate candidate explanations, to silver-label development set, as well as to score combinations. To that end, we hypothesize less capable LMs might see limited benefits from our approach, and it is more suitable in a setting that involves finetuning using a large number of labeled set~\cite{star}.
+
+
+\section{Related Work}
+
+We study prompting LLMs with of chain-of-thought \cite{scratch,chain,shi2022language,wei2022emergent} or textual explanations more generally \cite{Marasovi2021,interpicl}. Much of the past work focuses on exemplar selection in the presence of explanations \cite{fu2022complexity,ye2022comp} or developing prompting methods for various reasoning tasks \cite{jung2022maieutic,gao2022pal}, which typically require manually engineered explanations. We focus instead on searching for better-performing explanations.
+
+
+Our approach leverages data without explanation annotations. Similarly, prior work also explores the means of using few-show explanations together with data points without explanations annotations for improving the downstream performance \cite{star,li2022advance,ye2022comp,li2022explanations,pinto,huang2022}. Many of these techniques need large amount of fully labeled data to train the models used for generating explanations \cite{star} or smaller models used as verifiers \cite{li2022advance,li2022explanations,pinto}, whereas our work only uses a small unlabeled set. There is also work on automatically constructing CoTs \cite{zhang2023automatic} starting ZoTs \cite{zerocot}, which also requires a
+fully labeled dataset. In particular, \citet{huang2022} also use LLMs to silver labeled data points for finetuning the LLMs; our work instead treats LLMs as black-boxes and searches for better explanations instead of tuning the parameters. 
+
+Our work also closely relates to prompt optimization. One line of prompt engineering work requires interacting with gradients \cite{shin-etal-2020-autoprompt,hu2021knowledgeable} or continuous embeddings \cite{sun2022black}. Another line uses LMs as black-boxes \cite{Prasad2022GrIPS,deng2022rlprompt,zhang2022tempera,zhou2022humanengineer}. However, this past work either optimizes over discrete templates (not applicable for the explanation optimization setting) or optimizes over string verbalizations (a search space too large for our setting).
+
+\section{Conclusion}
+We have presented an approach that can search for better-performing explanations for ICL starting from a set of seed explanations. Our approach first proposes promising candidate combinations of alternative explanations generated using LLMs, then finds explanation combinations using proxy metrics before using a silver-labeled validation set to select the best candidate. Our results highlight the substantial variance in the performance of different sets of explanations, paving the way for future work to further optimize explanations in this paradigm.
+
+\section*{Acknowledgments}
+
+This work was supported by NSF CAREER Award IIS-2145280 and the NSF Institute for Foundations of Machine Learning. We would like to thank Eunsol Choi, Chenglei Si, Qiaochu Chen, Huancheng Chen, Yasumasa Onoe, Jiacheng Xu, Jifan Chen, Zhen Chen, and Lemeng Wu for their help with various aspects of this work.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+\nocite{langley00}
+

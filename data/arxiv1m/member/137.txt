@@ -1,0 +1,1089 @@
+\section{Appendix}
+\label{s:App}
+In this section, we include additional comparisons to related work, additional definitions, proofs to the theorems in the main text, and additional experimental details. 
+The code to reproduce the figures and experiments is available here: \url{https://github.com/cavalab/proportional-multicalibration}.  
+
+\subsection{Related Work}
+\label{s:App:related}
+\paragraph{Definitions of Fairness}
+There are myriad ways to measure fairness that are covered in more detail in other works~\citep{barocasFairnessMachineLearning2019,chouldechovaFrontiersFairnessMachine2018,castelnovoZooFairnessMetrics2021}.
+We briefly review three notions here. 
+The first, \textit{demographic parity}, requires the model's predictions to be independent of patient demographics ($A$). 
+Although a model satisfying demographic parity can be desirable when the outcome should be unrelated to sensitive attributes~\citep{fouldsAreParityBasedNotions2020}, it can be unfair if important risk factors for the outcome are associated with those attributes~\citep{hardtEqualityOpportunitySupervised2016a}.
+For example, it may be more fair to admit socially marginalized patients to a hospital at a higher rate if they are assessed less able to manage their care at home. 
+Furthermore, if the underlying rates of illness vary demographically, requiring demographic parity can result in a healthier patients from one group being admitted more often than patients who urgently need care. 
+
+When the base rates of admission are expected to differ demographically, we can instead ask that the model's errors be balanced across groups. 
+One such notion is \textit{equalized odds}, which states that for a given $Y$, the model's predictions should be independent of $A$. 
+Satisfying equalized odds is equivalent to having equal FPR and FNR for every group in $A$. 
+
+When the model is used for patient risk stratification, as in the target use case in this paper, it is important to consider a model's calibration for each demographic group in the data. 
+Because risk prediction models influence who is prioritized for care, an unfairly calibrated model can systematically under-predict risk for certain demographic groups and result in under-allocation of patient care to those groups. 
+Thus, guaranteeing group-wise calibration via an approach such as multicalibration also guarantees fair patient prioritization for health care provision. 
+In some contexts, risk predictions are not directly interpreted, but only used to \textit{rank} patients, which in some contexts is sufficient for resource allocation.
+Authors have proposed various ways of measuring the fairness of model rankings, for example by comparing AUROC between groups~\citep{kallusAssessingAlgorithmicFairness2020}.  
+
+\paragraph{Approaches to Fairness}
+Many approaches to achieving fairness guarantees according to demographic parity, equalized odds and its relaxations have been proposed~\citep{ dworkFairnessAwareness2012,hardtEqualityOpportunitySupervised2016a, berkConvexFrameworkFair2017,jiangIdentifyingCorrectingLabel2019a,kearnsPreventingFairnessGerrymandering2018}. 
+When choosing an approach, is important to carefully weigh the relative impact of false positives, false negatives, and miscalibration on patient outcomes, which differ by use case.
+When group base rates differ (i.e., group-specific positivity rates), \emph{equalized odds and calibration by group cannot both be satisfied}~\citep{kleinbergInherentTradeoffsFair2016}. 
+Instead, one can often equalized multicalibration while satisfying relaxations of equalized odds such as \emph{equalized accuracy}, where $Accuracy = \mu TPR+(1-\mu)(1-FPR)$ for a group with base rate $\mu$. 
+However, to do so requires denigrating the performance of the model on specific groups~\citep{chouldechovaFairPredictionDisparate2017,pleissFairnessCalibration2017}, which is unethical in our context. 
+
+As mentioned in the introduction, we are also motivated to utilize approaches to fairness that 1) dovetail well with intersectionality theory, and 2) provide privacy guarantees. 
+Most work in the computer science/ machine learning space does not engage with the broader literature on socio-cultural concepts like intersectionality, which we see as a gap that makes adoption in real-world settings difficult~\citep{hanna2020towards}. 
+One exception to this statement is differential fairness~\citep{fouldsIntersectionalDefinitionFairness2019}, a measure designed with intersectionality in mind. 
+In addition to being a definition of fairness that provides equal protection to groups defined by intersections of protected attributes, models satisfying $\epsilon$-differential fairness also satisfy $\epsilon$-pufferfish privacy. 
+This privacy guarantee is very desirable in risk prediction contexts, because it limits the extent to which the model reveals sensitive information to a decision maker that has the potential to influence their interpretation of the model's recommendation. 
+However, prior work on differential fairness has been limited to using it to control for demographic parity, which is not an appropriate fairness measure for our use case~\citep{fouldsAreParityBasedNotions2020}. 
+
+
+Multicalibration has inspired several extensions, including relaxations such as multiaccuracy~\citep{kimMultiaccuracyBlackboxPostprocessing2019}, low-degree multicalibration~\citep{gopalanLowDegreeMulticalibration2022}, and extensions to conformal prediction and online learning~\citep{jungMomentMulticalibrationUncertainty2021,guptaOnlineMultivalidLearning2021}. 
+Noting that multicalibration is a guarantee over mean predictions on a collection of groups $\mathcal{C}$, \cite{jungMomentMulticalibrationUncertainty2021} propose to extend multicalibration to higher-order moments (e.g., variances), which allows one to estimate a confidence interval for the calibration error for each category. 
+\cite{guptaOnlineMultivalidLearning2021} extend this idea and generalize it to the online learning context, in which an adversary chooses a sequence of examples for which one wishes to quantify the uncertainty of different statistics of the predictions.  
+Recent work has also utilized higher order moments to ``interpolate" between the guarantees provided by multiaccuracy, which  only requires accuracy in expectation for groups in $\mathcal{C}$, and multicalibration, which requires accuracy in expectation at each prediction interval~\citep{kimMultiaccuracyBlackboxPostprocessing2019}. 
+Like proportional multicalibration (\cref{def:PMC}), definitions of multicalibration for higher order moments provide additional criteria for quantifying model performance over many groups; in general, however, much of the focus in other work is on statistics for uncertainty estimation. 
+Like these works, one may view our proposal for proportional multicalibration as alternative definition of what it means to be multicalibrated. 
+The key difference is that proportional multicalibration measures the degree to which multicalibration depends on differences in outcome prevalence between groups, and in doing so provides guarantees of pufferfish privacy and differential calibration.  
+
+\cite{dworkLearningOutcomesEvidenceBased2019} study the relation of fair rankings to multicalibration, and, in a similar vein to differential fairness measures, formulate a fairness measure for group rankings using the relations between pairs of groups.  
+However, these definitions are specific to the ranking relation between the groups, whereas differential calibration cares only about the outcome differential (conditioned on model predictions) between pairs of groups. 
+
+\subsubsection{Differential Fairness}
+\label{s:App:DF}
+
+DF was explicitly defined to be consistent with the social theoretical framework of \emph{intersectionality}. 
+This framework dates back as early as the social movements of the '60s and '70s \citep{collins_intersectionality_2020} and  was brought into the academic mainstream by pioneering work from legal scholar Kimberlé Crenshaw~\citep{crenshawDemarginalizingIntersectionRace1989,crenshaw_mapping_1991} and sociologist Patricia Hill Collins~\citep{collins_black_1990}. 
+Central to intersectionality is that hierarchies of power and oppression are structural elements that are fundamental to our society. 
+Through an intersectional lens, these power structures are viewed as interacting and co-constituted, inextricably related to one another.
+To capture this viewpoint, DF~\citep{fouldsIntersectionalDefinitionFairness2019} constrains the differential of a general data mechanism among all pairs of groups, where groups are explicitly defined as the intersections of protected attributes in $\mathcal{A}$.
+
+\begin{definition}[$\epsilon$-differential fairness~\citep{fouldsIntersectionalDefinitionFairness2019}]
+    \label{def:DF}
+    Let $\Theta$ denote a set of distributions and let $x \sim \theta$ for $\theta \in \Theta$.
+    A mechanism $M(x)$ is $\varepsilon$-differentially fair with respect to ($\mathcal{C}$,$\Theta$) 
+    for all $\theta \in \Theta$ with $x \sim \theta$, and $m \in Range(M)$ if, 
+    for all $(S_i,S_j) \in \mathcal{C} \times \mathcal{C}$ where $P(S_i|\theta)>0$, $P(S_j|\theta)>0$,
+    \begin{equation}\label{eq:eDF} 
+    e^{-\varepsilon}\leq\frac{P_{M,\theta}(M(x)=m|S_i,\theta)}{P_{M,\theta}(M(x)=m|S_j,\theta)} \leq e^{\varepsilon}
+    \end{equation}
+\end{definition}
+\begin{definition}[Pufferfish Privacy]\label{def:puff}
+    Let the collection of subsets $\mathcal{C}$ represent sets of secrets.  
+    A mechanism $M({x})$ is $\epsilon$-\emph{pufferfish private} \citep{kiferPufferfishFrameworkMathematical2014} with respect to $(\mathcal{C}, \Theta)$ if for all $\theta \in \Theta$ with ${x} \sim \theta$, for all secret pairs $(S_i,S_j) \in \mathcal{C} \times \mathcal{C}$ and $y \in \mbox{Range}(M)$,
+    \begin{equation}
+    e^{-\epsilon} \leq \frac{P_{M, \theta}(M(x) = y| S_i, \theta)}{P_{M, \theta}(M(x) = y|S_j, \theta)}\leq e^\epsilon \mbox{ ,} \label{def:pufferfish}
+    \end{equation}
+    when $S_i$ and $S_j$ are such that  $P(S_i|\theta) > 0$, $P(S_j|\theta) > 0$.
+\end{definition}
+\paragraph{Note on pufferfish and differential privacy}
+Although \cref{eq:eDF} is notable in its similarity to differential privacy~\citep{dwork2009differential}, they differ in important ways. 
+Differential privacy aims to limit the amount of information learned about any one individual in a database by computations performed on the data (e.g. $M(x)$). 
+Pufferfish privacy only limits information learned about the group membership of individuals as defined by $\mathcal{C}$. 
+\cite{kiferPufferfishFrameworkMathematical2014} describe in detail the conditions under which these privacy frameworks are equivalent. 
+
+\paragraph{Efficiency Property}
+\label{s:df-efficient}
+\cite{fouldsIntersectionalDefinitionFairness2019} also define an interesting property of $\varepsilon$-differential fairness that allows guarantees of higher order (i.e., marginal) groups to be met for free; the property is given in \cref{s:App:def}. 
+
+\begin{definition}[Efficiency Property~\citep{fouldsIntersectionalDefinitionFairness2019}] \label{def:inter}
+    Let $M(x)$ be an $\varepsilon$-differentially fair mechanism with respect to $(\mathcal{C},\Theta)$. 
+    Let the collection of subsets $\mathcal{C}$ group individuals according to the Cartesian product of attributes $A \subseteq \mathcal{A}$.  
+    Let $\cal G$ be any collection of subsets that groups individuals by the Cartesian product of attributes in $A'$, where $A' \subset A$ and $A' \neq \emptyset$.  
+   
+    Then $M(x)$ is $\varepsilon$-differentially fair in $(\cal G,\Theta)$.
+\end{definition}
+
+The authors call this the "intersectionality property", yet its implication is the opposite: if a model satisfies $\epsilon$-DF for the low level (i.e. intersectional) groups in $\mathcal{C}$, then it satisfies $\epsilon$-DF for every higher-level (i.e. marginal) group. 
+For example, if a model is ($\epsilon$)-differentially fair for intersectional groupings of individuals by race and sex, then it is $\epsilon$-DF for the higher-level race and sex groupings as well.
+Whereas the number of intersections grows exponentially as additional attributes are protected~\citep{kearnsPreventingFairnessGerrymandering2018}, the number of total possible subgroupings grows at a larger combinatorial rate: for $p$ protected attributes, we have $\sum_{k=1}^p{ \binom{p}{k} m_a^k}$ groups, where $m_a$ is the number of levels of attribute $a$. 
+\paragraph{Limitations}
+To date, analysis of DF for predictive modeling has been limited to defining $R(x)$ as the mechanism, which is akin to asking for \emph{demographic parity}.
+Under demographic parity, one requires that model predictions be independent from group membership entirely, and this limits the utility of it as a fairness notion.
+Although a model satisfying demographic parity can be desirable when the outcome should be unrelated to $\mathcal{C}$~\citep{fouldsAreParityBasedNotions2020}, it can be unfair if important risk factors for the outcome are associated with demographics~\citep{hardtEqualityOpportunitySupervised2016a}. 
+For example, if the underlying rates of an illness vary demographically, requiring demographic parity can result in a healthier patients from one group being admitted more often than patients who urgently need care. 
+\subsection{Additional Definitions}
+\label{s:App:def}
+
+\begin{definition}[$\alpha$-calibration~\citep{hebert-johnsonCalibrationComputationallyIdentifiableMasses2018}]
+\label{def:calibration}
+Let $S \subseteq \mathcal{X}$.  
+For $\alpha \in [0,1]$, $R$ is $\alpha$-\emph{calibrated} with
+respect to $S$ if there exists some $S' \subseteq S$
+with $\card{S'} \ge (1-\alpha)\card{S}$
+such that
+for all $r \in [0,1]$,
+$$
+\card{ \E_D [ y | R(x) = r, x \in S' ] - r} \le \alpha.
+$$
+\end{definition}
+
+\begin{definition}[$\alpha$-MC~\citep{hebert-johnsonCalibrationComputationallyIdentifiableMasses2018}]
+\label{def:MC}
+Let $\mathcal{C} \subseteq 2^{\mathcal{X}}$ be a collection of subsets of $\mathcal{X}$, $\alpha \in [0,1]$. 
+A predictor $R$ is $\alpha$-multicalibrated on $\mathcal{C}$ if for all $S \in \mathcal{C}$,
+$R$ is $\alpha$-calibrated with respect to $S$.
+\end{definition}
+
+We note that, according to \cref{def:calibration}, a model need only be calibrated over a sufficiently large subset of each group ($S'$) in order to satisfy the definition. 
+This relaxation is used to maintain a satisfactory definition of MC when working with discretized predictions.
+That is, with \cref{def:calibration}, \cite{hebert-johnsonCalibrationComputationallyIdentifiableMasses2018} show that $(\alpha, \lambda)$-multicalibrated models are at most $2\alpha$-multicalibrated.
+
+
+
+\subsubsection{Loss functions}
+The following loss functions are empirical analogs of the definitions of $MC$, $PMC$, and $DC$, and are used in the experiment section to measure performance. 
+
+\begin{definition}[MC loss]
+    \label{def:mcloss}
+    Let $\mathcal{D} = \set{(y,x)_i}_{i=0}^{N} \sim D$, and let $\alpha, \lambda, \gamma > 0$.
+    Define a collection of subsets $\mathcal{C} \in 2^{\mathcal{X}}$ such that for all $S \in \mathcal{C}, |S| \geq \gamma N$.
+    Let $S_I = \set{x: R(x) \in I, x \in S}$ for $(S,I) \in \mathcal{C} \times \Lambda_\lambda$.
+   
+    Define the collection $\mathcal{S}$ containing all $S_I$ satisfying $S_I \geq \alpha \lambda N$.
+    The MC loss of a model $R(x)$ on $\mathcal{D}$ is 
+\[
+    \max_{S_I \in \mathcal{S}}{
+    \frac{1}{|S_I|}
+    \card{\sum_{i \in S_I}{ y_i } - \sum_{i \in S_I}{ R_i }}
+}
+\]
+\end{definition}
+
+\begin{definition}[PMC loss]
+    \label{def:pmcloss}
+    Let $\mathcal{D} = \set{(y,x)_i}_{i=0}^{N} \sim D$, and let $\alpha, \lambda, \gamma, \rho > 0$.
+    Define a collection of subsets $\mathcal{C} \in 2^{\mathcal{X}}$ such that for all $S \in \mathcal{C}, |S| \geq \gamma N$.
+    Let $S_I = \set{x: R(x) \in I, x \in S}$ for $(S,I) \in \mathcal{C} \times \Lambda_\lambda$.
+   
+    Define the collection $\mathcal{S}$ containing all $S_I$ satisfying $S_I \geq \alpha \lambda N$.
+    Let $\frac{1}{|S_I|}\sum_{i \in S_I}{ y_i } \geq \rho$.
+    The PMC loss of a model $R(x)$ on $\mathcal{D}$ is 
+\[
+    \max_{S_I \in \mathcal{S}}{
+    \frac{
+        \card{\sum_{i \in S_I}{ y_i } - \sum_{i \in S_I}{ R_i }}
+    }
+    {
+        \sum_{i \in S_I}{ y_i }
+    }
+}
+\]
+\end{definition}
+
+\begin{definition}[DC loss]
+    \label{def:dcloss}
+    Let $\mathcal{D} = \set{(y,x)_i}_{i=0}^{N} \sim D$, and let $\alpha, \lambda, \gamma > 0$.
+    Define a collection of subsets $\mathcal{C} \in 2^{\mathcal{X}}$ such that for all $S \in \mathcal{C}, |S| \geq \gamma N$.
+    Given a risk model $R(x)$ and prediction intervals $I$, 
+   
+    Let $S_I = \set{x: R(x) \in I, x \in S}$ for $(S,I) \in \mathcal{C} \times \Lambda_\lambda$.
+    Define the collection $\mathcal{S}$ containing all $S_I$ satisfying $S_I \geq \alpha \lambda N$.
+    The DC loss of a model $R(x)$ on $\mathcal{D}$ is 
+\[
+    \max_{(S_I^a,S_I^b) \in \mathcal{S} \times \mathcal{S}}{
+    \log{\card{
+        \frac{1}{|S_I^a|} \sum_{i \in S_I^a}{ y_i } - \frac{1}{|S_I^b|}\sum_{j \in S_I^b}{ y_j }
+    }}
+}
+\]
+\end{definition}
+
+
+\subsection{Theorem Proofs}
+\label{s:proof}
+
+
+\paragraph{\cref{thm:alg}}\label{proof:alg}
+\textit{
+    \Paste{thm:alg}
+}
+\begin{proof}
+
+    We show that \cref{alg:PMC} converges using a potential function argument~\citep{bansalPotentialfunctionProofsGradient2019}, similar to the proof techniques for the MC boosting algorithms in \cite{hebert-johnsonMulticalibrationCalibrationComputationallyIdentifiable2018,kimMultiaccuracyBlackboxPostprocessing2019}. 
+    Let $p^*_i$ be the underlying risk, $R_i$ be our initial model, and $R'_i$ be our updated prediction model for individual $i \in S_r$, where $S_r = \{x | x \in S, R(x) \in I\}$ and $(S,I) \in \mathcal{C} \times \Lambda_{\lambda}$.   
+    We use $p^*$, $R$, and $R'$ without subscipts to denote these values over $S_r$. 
+    We cannot easily construct a potential argument using progress towards ($\alpha$,$\lambda$)-PMC, since its derivative is undefined at $\E_D [ y | R \in I, x \in S]$=0.  
+    Instead, we analyze progress towards the difference in the $\ell_2$ norm at each step. 
+
+    \begin{align}
+        ||p^*-R|| - ||p^*-R'||  &= \sum_{i \in S_r}{ (p_i^* - R_i)^2 } - \sum_{i \in S_r}{ (p_i^* - \text{squash}(R_i+\Delta r))^2 } \nonumber \\
+                                &\geq   \sum_{i \in S_r}{\left( (p_i^* - R)^2 - (p_i^* - (R_i+\Delta r))^2 \right) } \nonumber\\
+                                &=   \sum_{i \in S_r}{\left( 2p_i^* \Delta r - 2R_i \Delta r - \Delta r^2 \right) } \nonumber\\
+                                &=  2 \Delta r \sum_{i \in S_r}{\left( p_i^* - R_i \right)} - |S_r|\Delta r^2 \label{eq:del}
+    \end{align}
+
+    From \cref{alg:PMC} we have 
+    $$
+    \Delta r =  \frac{1}{|S_r|}\sum_{i \in S_r}{( p_i^* - R_i )}
+    $$
+    Substituting into~\cref{eq:del} gives
+    \begin{align*}
+        ||p^*-R|| - ||p^*-R'|| &\geq |S_r|{\Delta r}^2 \\
+    \end{align*}
+    We know that $|S_r| \geq \alpha \lambda \gamma N$, and that the smallest update $\Delta r$ is $\alpha \rho$. 
+    Thus, 
+    \begin{align*}
+        ||p^*-R|| - ||p^*-R'|| &\geq \alpha^3 \rho^2 \lambda \gamma N \\
+    \end{align*}
+    Since our initial loss, $|| p^* - R||$, is at most $N$, \cref{alg:PMC} converges in at most $O(\frac{1}{\lambda^3 \rho^2 \lambda \gamma})$ updates for category $S_r$. 
+
+    To understand the total number of steps, including those without updates, we consider the worst case, in which only a single category $S_r$ is updated in a cycle of the for loop (if no updates are made, the algorithm exits). 
+    Since each repeat consists of at most $|C|/\lambda$ loop iterations, this results in $O(\frac{|C|}{\alpha^3 \lambda^2 \rho^2 \gamma})$ total steps. 
+\end{proof}
+
+
+
+    
+
+
+
+
+
+\subsection{Additional Theorems}\label{s:App:thm} 
+
+\subsubsection{Differentially calibrated models with global calibration are multicalibrated}
+Here we show that, under the assumption that a model is globally calibrated (satisfies $\delta$-calibration), models satisfying $\varepsilon$-DC are also multicalibrated. 
+
+
+\begin{theorem}\label{thm:DCtoMC}
+    Let R(x) be a model satisfying ($\varepsilon$,$\lambda$)-DC and $\delta$-calibration. 
+    Then $R(x)$ is ($1-e^{-\varepsilon}+\delta$, $\lambda$)-multicalibrated. 
+\end{theorem}
+\begin{proof}
+
+From~\cref{eq:DC} we observe that $\varepsilon$ is bounded by the two groups with the largest and smallest group- and prediction- specific probabilities of the outcome. 
+Let $I_M$ be the risk stratum maximizing $(\varepsilon,\lambda)$-DC, and let $p_n = \max_{S \in \mathcal{C}} P_D(y|R \in I_M, x \in S)$ and $p_d = \min_{S \in \mathcal{C}} P_D(y|R \in I_M,x \in S)$. 
+These groups determine the upper and lower bounds of $\varepsilon$ as $e^{-\varepsilon} \leq p_d/p_n$ and $p_n/p_d \leq e^{\varepsilon}$. 
+
+We note that $p_d \leq P_D(y|R \in I_M) \leq p_n$, since $P(y| R \in I_M) = \frac{1}{N} \sum_{S \in \mathcal{C}} |S| P_D(y|R \in I_M, x \in S)$, and $p_n$ and $p_d$ are the extreme values of $P(y|R\in I_M,x \in S)$ among $S$. 
+So, $\alpha$-MC is bound by the group outcome that most deviates from the predicted value, which is either $p_n$ or $p_d$. 
+Let $r = P_D( R|R \in I_M )$.
+There are then two scenarios to consider:
+
+\begin{enumerate}
+    \item $ \alpha \leq | p_n - r | = p_n - r $ when $r \leq \frac{1}{2}(p_n + p_d)$; and
+    \item $ \alpha \leq | p_d - r | = r - p_d $ when $r \geq \frac{1}{2}(p_n + p_d)$.
+\end{enumerate} 
+
+We will look at the first case. 
+Let $p^*_r = P_D(y|R \in I_M)$. 
+Due to $\delta$-calibration, $p^*_r - \delta \leq r \leq p^*_r + \delta$. 
+Then 
+\begin{align*}
+    \alpha  &\leq p_n - r \\
+            &\leq p_n - (p^*_r - \delta) \\
+            &\leq p_n - p_d + \delta \\
+            &= p_n (1-e^{-\varepsilon}) + \delta\\
+   \alpha   &\leq 1 - e^{-\varepsilon} + \delta. 
+\end{align*}
+
+Above we have used the facts that $r \leq p^*_r - \delta$, $p^*_r \geq p_d$, $p_d \leq e^{-\varepsilon}p_n$, and $p_n \leq 1$. 
+The second scenario is complementary and produces the identical bound. 
+\end{proof}
+\cref{thm:DCtoMC} formally describes how $\delta$-calibration controls the baseline calibration error contribution to $\alpha$-MC, while $\varepsilon$-DC limits the deviation around this value by constraining the (log) maximum and minimum risk within each category. 
+\subsection{Multicalibrated models satisfy intersectional guarantees}
+
+In contrast to DF, MC \citep{hebert-johnsonMulticalibrationCalibrationComputationallyIdentifiable2018} was not designed to explicitly incorporate the principles of intersectionality. 
+However, we show that it provides an identical efficiency property to DF in the theorem below. 
+\begin{theorem}\label{thm:intersectionalmc}
+   
+   
+   
+    Let the collection of subsets $\mathcal{C} \subseteq 2^\mathcal{X}$ define groups of individuals according to the Cartesian product of attributes $A \subseteq \mathcal{A}$.  
+   
+   
+   
+   
+    Let $\cal G \in 2^\mathcal{X}$ be any collection of subsets that groups individuals by the Cartesian product of attributes in $A'$, where $A' \subset A$ and $A' \neq \emptyset$.  
+   
+    If $R(x)$ satisfies $\alpha$-MC on $\mathcal{C}$, then $R(x)$ is $\alpha$-multicalibrated on $\cal G$.
+\end{theorem}
+
+In proving \cref{thm:intersectionalmc}, we will make use of the following lemma. 
+
+\begin{lemma}\label{lemma:express} 
+    The $\alpha$-MC criteria can be rewritten as: for a collection of subsets $\mathcal{C} \subseteq \mathcal{X}$, $\alpha \in [0,1]$, and $r \in [0,1]$,
+$$
+\max_{c\in\mathcal{C}}\E_D [ y | R(x) = r, x \in c ]\leq r+\alpha 
+$$
+and
+$$
+\min_{c\in\mathcal{C}}\E_D [ y | R(x) = r, x \in c ] \ge r-\alpha
+$$
+\end{lemma}
+
+\begin{proof}
+The lemma follows from~\cref{def:MC}, and simply restates it as a constraint on the maximum and minimum expected risk among groups at each prediction level. 
+\end{proof}
+
+
+\begin{proof}[Proof of \cref{thm:intersectionalmc}]
+    We use the same argument as \cite{fouldsIntersectionalDefinitionFairness2019} in proving this property for DF. 
+Define $Q$ as the Cartesian product of the protected attributes included in $\mathcal{A}$, but not $\mathcal{A}'$. 
+Then for any $(y,x) \sim D$,
+
+
+\begin{align}
+\max_{g\in \cal G}\E_D [ y | R(x) = r, x \in g] 
+    =& \max_{g \in \cal G}\sum_{q\in Q} \E_D [ y | R(x) = r, x \in g \cap q ]P[x \in q | x \in g]\\
+    \leq& \max_{g \in \cal G}\sum_{q\in Q} \max_{q'\in Q}\E_D [ y | R(x) = r, x \in g \cap q' ]P[x \in q | x \in g]\\
+    =&\max_{g \in \cal G}\max_{q'\in Q}\E_D [ y | R(x) = r, x \in g \cap q' ]\\
+    =&\max_{c\in \mathcal{C}} \E_D [ y | R(x) = r, x \in c ]
+    .
+\end{align}
+
+Moving from (5) to (6) follows from substituting the maximum value of $\E_D [ y | R(x) = r, x]$ for observations in the intersection of subsets in $\mathcal{G}$ and $Q$ which is the upper limit of the expression in (5). 
+Moving from (6) to (7) follows from recognizing that the sum $P[x\in q|x \in g]$ for all subsets in $\mathcal{Q}$ is 1. 
+Finally, moving from (7) to (8) follows from recognizing that the intersections of subsets in $\mathcal{G}$ and $\mathcal{Q}$ that satisfy (7), must define a subset of $\mathcal{C}$.
+Applying the same argument, we can show that
+
+$$
+\min_{g\in \cal G}\E_D[y|R(x)=r,x\in g] \ge\min_{c\in \mathcal{C}} \E_D [ y | R(x) = r, x \in c ] 
+.
+$$
+Substituting into \cref{lemma:express},
+$$
+\max_{g\in \cal G}\E_D [ y | R(x) = r, x \in g]\leq \alpha+r\\
+$$
+and
+$$
+\min_{g\in \cal G}\E_D [ y | R(x) = r, x \in g ] \ge r -\alpha
+$$
+
+or
+
+$$
+\card{\E_D [ y | R(x) = r, x \in g ]-r}\le{\alpha} 
+$$
+for all $g\in \cal G$. Therefore $R(x)$ is $\alpha$-multicalibrated with respect to $\cal G$.
+
+\end{proof}
+
+
+As a concrete example, imagine we have the protected attributes $A = \set{ \text{race} \in \set{B,W}, \text{gender} \in \set{M,F}}$. 
+According to \cref{thm:intersectionalmc}, $\mathcal{C}$ would contain four sets: $\{(B,M),(B,F),(W,M),(W,F)\}$. 
+In contrast, there are eight possible sets in $\cal G$: $\set{ (B,M),(B,F),(W,M),(W,F),(B,*),(W,*),(*,M), (*,F)}$, where the wildcard indicates a match to either attribute. 
+As noted in \cref{s:df-efficient}, the efficiency property is useful because the number of possible sets in $\cal G$ grows at a large combinatorial rate, rate as additional attributes are added; meanwhile $\mathcal{C}$ grows at a slower, yet exponential, rate. 
+For an intuition for why this property holds, consider that the maximum calibration error of two subgroups is at least as large as the maximum expected error of those groups combined; e.g., the maximum calibration error in a higher order groups such as $(B,*)$ will be covered by the maximum calibration error in either $(B,M)$ or $(B,F)$. 
+
+
+
+\subsection{Additional Experiment Details}
+Models were trained on a heterogenous computing cluster. 
+Each training instance was limited to a single core and 4 GB of RAM. 
+We conducted a full parameter sweep of the parameters specified in \cref{tbl:params}.
+A single trial consisted of a method, a parameter setting from \cref{tbl:params}, and a random seed. 
+Over 100 random seeds, the data was shuffled and split 75\%/25\% into train/test sets.
+Results in the manuscript are summarized over these test sets. 
+
+\paragraph{Code}
+\label{s:code}
+
+Code for the experiments is available here: \url{https://github.com/by1tTZ4IsQkAO80F/pmc}. 
+Code is licensed under GNU Public License v3.0.
+\paragraph{Data}
+
+We make use of data from the \href{https://physionet.org/content/mimic-iv-ed/1.0/}{MIMIC-IV-ED} repository, version 1.0, to train admission risk prediction models~\citep{johnsonalistairMIMICIVED2021}.
+This resource contains more than 440,000 ED admissions from Beth Isreal Deaconness Medical Center between 2011 and 2019. 
+We preprocessed these data to construct an admission prediction task in which our model delivers a risk of admission estimate for each ED visitor after their first visit to triage, during which vitals are taken. 
+Additional historical data for the patient was also included (e.g., number of previous visits and admissions). 
+A list of features is given in \cref{tbl:features}.
+
+
+\begin{table}
+    \caption{Features used in the hospital admission task.}
+    \label{tbl:features}
+    \begin{tabularx}{\textwidth}{XX}
+        \toprule
+        Description     &   Features   \\
+        \midrule
+        Vitals  &
+            temperature, heartrate, 	resprate, 	o2sat, 	systolic blood pressure, 	diastolic blood press, 	
+            \\
+        Triage Acuity &  
+            Emergency Severity Index~\citep{tanabeReliabilityValidityScores2004}
+        \\
+        Check-in Data   &
+            chief complaint, self-reported pain score
+        \\
+        Health Record Data  &
+            no. previous visits, no. previous admissions 
+        \\
+        Demographic Data    &
+            ethnoracial group, gender, age, marital status, insurance, primary language
+        \\
+        \bottomrule
+    \end{tabularx}
+\end{table}
+
+\subsection{Additional Results}
+\label{s:app:results}
+
+
+\cref{tbl:params} lists a few parameters that may affect the performance of post-processing for both MC and PMC.  
+Of particular interest when comparing MC versus PMC post-processing is the parameter $\alpha$, which controls how stringent the calibration error must be across categories to terminate, and the group definition ($A$), which selects which features of the data will be used to asses and optimize fairness. 
+In comparing \cref{def:MC,def:PMC}, we note PMC's tolerance for error is more ``aggressive" for a given value of $\alpha$, since $\E_D [ y | R \in I, x \in S] \in [0,1]$. 
+Thus a natural question is whether MC can match the performance of PMC on different fairness measures simply by specifying a smaller $\alpha$. 
+
+We shed light on this question in three ways. 
+First, we quantify how often the use of each post-processing algorithm gives the best loss for each metric and trial in \cref{tbl:wins}. 
+Next, we look at the performance of MC and PMC postprocessing over values of $\alpha$ and group definitions in \cref{fig:auroc,fig:mcloss,fig:pmcloss}. 
+Finally, we empirically compare MC- and PMC-postprocessing by the number of steps required for each to reach their best performance in \cref{fig:updates,tbl:time}. 
+
+\cref{tbl:wins} quantifies the number of trials for which the baseline model and the two post-processing variants produce the best model according to a given metric, over all paramter configurations. 
+In pure head-to-head comparisons, we observe that PMC-postprocessing produces models with the lowest fairness loss according to all three metrics (DC loss, MC loss, PMC loss) the majority of the time. 
+This provides strong evidence that, over a large range of $\alpha$ values, PMC post-processing is beneficial compared to MC-postprocessing.  
+
+From \cref{fig:auroc}, it is clear that post-processing has a minimal effect on AUROC in all cases; note the differences dissapear if we round to two decimal places. 
+When post processing with RF, we do note a relationship between lower values of $\alpha$ and a very slight decrease in performance, particularly for MC-postprocessing. 
+
+\cref{fig:mcloss,fig:pmcloss} show performance between methods on MC loss and PMC loss, respectively. 
+In terms of MC loss, PMC-postprocessing tends to produce models with the lowest loss, at $\alpha$ values greater than 0.01. 
+Lower values of $\alpha$ do not help MC-postprocessing in most cases, suggesting that these smaller updates may be overfitting to the post-processing data. 
+In terms of PMC loss (\cref{fig:pmcloss}), we observe that performance by MC-postprocessing is highly sensitive to the value of $\alpha$.
+For smaller values of $\alpha$, MC-postprocessing is able to achieve decent performance by these metrics, although in all cases, PMC-postprocessing generates a model with a better median loss value at some configuration of $\alpha$. 
+
+The ability of MC-postprocessing to perform well in terms of PMC and DC loss for certain values of $\alpha$ makes intuitive sense. 
+If $\alpha$ can be made small enough, the calibration error $\card{\E_D [ R | R \in I, x \in S] - \E_D [ y | R \in I, x \in S]}$ on all categories will be small compared to the outcome prevalence, $\E_D [ y | R \in I, x \in S]$.
+However, to achieve this performance by MC-postprocessing may require a large number of unnecessary updates for high risk intervals, since the DC and PMC of multicalibrated models are limited by low-risk groups (\cref{thm:MCtoDC}). 
+Furthermore, the number of steps in MC-postprocessing (and PMC-postprocessing) scales as an inverse high-order polynomial of $\alpha$ (cf. Thm. 2~\citep{hebert-johnsonMulticalibrationCalibrationComputationallyIdentifiable2018}). 
+
+We assess how many steps/updates MC and PMC take for different values of $\alpha$ in \cref{fig:updates}, and summarize empirical measures of running time in \cref{tbl:time}. 
+On the figure, we annotate the point for which each post-processing algorithm achieves the lowest median value of PMC loss across trials. 
+\cref{fig:updates} validates that PMC-postprocessing is more efficient than MC-postprocessing at producing models with low PMC loss, on average requiring 4.0x fewer updates to achieve its lowest loss on test. 
+From \cref{tbl:time} we observe that PMC typically requires a larger number of updates to achieve its best performance on MC loss (about 2x wall clock time and number of updates), whereas MC-postprocessing requires a larger number of updates to achieves its best performance on PMC loss and DC loss, due to its dependence on very small values of $\alpha$. 
+We accompany these results with the caveat that they are based on performance on one real-world task, and wall clock time measurements are influenced by the heterogenous cluster environment; future work could focus on a larger empirical comparison.  
+
+
+
+
+\begin{table}
+    \centering
+    \footnotesize
+    \caption{Across 100 trials of dataset shuffles, we compare the post-processing configurations in terms of the number of times they achieve the best score for the metric shown on the left. 
+        PMC post-processing (\cref{alg:PMC}) achieves the best fairness the highest percent of the time, according to DC loss (63\%), MC loss (70\%), and PMC loss (72\%), while MC-postprocessed models achieve the best AUROC in 88\% of cases.  
+    }
+    \input{tbls/winning_configs.tex}
+    \label{tbl:wins}
+\end{table}
+
+\begin{figure}
+    \includegraphics[width=\textwidth]{figs/catpoint_AUROC_vs_alpha_row-ML_col-groups_hue-postprocessing_annot-none.pdf}
+    \caption{
+        AUROC test performance versus $\alpha$ across experiment settings.
+        Rows are different ML base models, and columns are different attributes used to define $\mathcal{C}$. 
+        The color denotes the post-processing method. 
+    }
+    \label{fig:auroc}
+\end{figure}
+
+\begin{figure}
+    \includegraphics[width=\textwidth]{figs/catpoint_MC-loss_vs_alpha_row-ML_col-groups_hue-postprocessing_annot-none.pdf}
+    \caption{
+        MC loss test performance versus $\alpha$ across experiment settings.
+        Rows are different ML base models, and columns are different attributes used to define $\mathcal{C}$. 
+        The color denotes the post-processing method. 
+    }
+    \label{fig:mcloss}
+\end{figure}
+
+\begin{figure}
+    \includegraphics[width=\textwidth]{figs/catpoint_PMC-loss_vs_alpha_row-ML_col-groups_hue-postprocessing_annot-none.pdf}
+    \caption{
+        PMC loss test performance versus $\alpha$ across experiment settings.
+        Rows are different ML base models, and columns are different attributes used to define $\mathcal{C}$. 
+        The color denotes the post-processing method. 
+    }
+    \label{fig:pmcloss}
+\end{figure}
+
+
+\begin{figure}
+    \includegraphics[width=\textwidth]{figs/catpoint_n-of-Updates_vs_alpha_row-ML_col-groups_hue-postprocessing_annot-PMC-loss.pdf}
+    \caption{
+        Number of post-processing updates by MC and PMC versus $\alpha$ across experiment settings.
+        Rows are different ML base models, and columns are different attributes used to define $\mathcal{C}$. 
+        The color denotes the post-processing method. 
+        Each result is annotated with the median PMC loss for that method and parameter combination. 
+    }
+    \label{fig:updates}
+\end{figure}
+
+\begin{table}
+    \centering
+    \footnotesize
+    \caption{For MC- and PMC-postprocessing, we compare the median number of updates and median wall clock time (s) taken to train for the configuration ($\alpha$,$A$) that achieved the best performance on each metric. 
+    }
+    \footnotesize
+    \input{tbls/best_cfg_time.tex}
+    \label{tbl:time}
+\end{table}
+
+
+
+
+\section{Introduction}
+
+Today, machine learning (ML) models have an impact on outcome disparities across sectors (health, lending, criminal justice) due to their wide-spread use in decision-making.  
+When applied in clinical decision-making, ML models help care providers decide whom to prioritize to receive finite and time-sensitive resources among a population of potentially very ill patients. 
+These resources include hospital beds~\citep{barak-correnPredictionPatientDisposition2021,dinhOvercrowdingKillsHow2021}, organ transplants~\citep{schnellinger2021mitigating}, specialty treatment programs~\citep{henryTargetedRealtimeEarly2015,obermeyerDissectingRacialBias2019}, and, recently, ventilator and other breathing support tools to manage the COVID-19 pandemic~\citep{rivielloAssessmentCrisisStandards2022}. 
+
+In scenarios like these, decision makers typically rely on risk prediction models to be \emph{calibrated}. 
+Calibration measures the extent to which a model's risk scores, $R$, match the observed probability of the event, $y$. 
+Perfect calibration implies that $P(y|R=r) = r$, for all values of $r$. 
+Calibration allows the risk scores to be used to rank patients in order of priority and informs care providers about the urgency of treatment. 
+However, models that are not equally calibrated among subgroups defined by different sensitive attributes (race, ethnicity, gender, income, etc.) may lead to systematic denial of resources to marginalized groups (e.g.~\citep{obermeyerDissectingRacialBias2019,ashana2021equitably,roberts_fatal_2011,zelnick2021association,ku2021racial}). 
+Just this scenario was observed by~\citet{obermeyerDissectingRacialBias2019} analyzed a large health system algorithm used to enroll high-risk patients into care management programs and showed that, at a given risk score, Black patients exhibited significantly poorer health than white patients. 
+
+To address equity in calibration, \citet{hebert-johnsonMulticalibrationCalibrationComputationallyIdentifiable2018} proposed a fairness measure called \textit{multicalibration} (MC), which asks that calibration be satisifed simultaneously over many flexibly-defined subgroups. 
+Remarkably, MC can be satisfied efficiently by post-processing risk scores without negatively impacting the generalization error of a model, unlike other fairness concepts like demographic parity~\citep{fouldsAreParityBasedNotions2020} and equalized odds~\citep{hardtEqualityOpportunitySupervised2016a}. 
+This has motivated the use of MC in practical settings (e.g.~\citet{bardaAddressingBiasPrediction2021a}) 
+and has spurred several extensions~\citep{kimMultiaccuracyBlackboxPostprocessing2019,jungMomentMulticalibrationUncertainty2021,guptaOnlineMultivalidLearning2021,gopalanLowDegreeMulticalibration2022}.
+If we bin our risk predictions, the MC criteria specifies that, for every group within each bin, the absolute difference between the mean observed outcome and the mean of the predictions should be small. 
+
+As~\citet{barocasFairnessMachineLearning2019} note, equity in calibration embeds the fairness notion called \emph{sufficiency}, which states: for a given risk prediction, the expected outcome should be independent of group membership. 
+Starting from this notion, we can assess the conditions under which MC satisfies sufficiency. 
+In this work, we derive a fairness criteria directly from sufficiency dubbed \emph{differential calibration} for its relation to differential fairness~\citep{foulds_intersectional_2019}.
+We show that satisfying differential calibration can ensure that a model is equally ``trustworthy" among groups in the data. 
+By equally ``trustworthy'', we mean that a decision maker cannot reasonably come to distrust the model's risk predictions for specific groups, which may help prevent differences in decision-making between demographic groups, given the same risk prediction.
+
+By relating sufficiency to MC, we describe a shortcoming of MC that can occur when the outcome probabilities are strongly tied to group membership. 
+Under this condition, the amount of calibration error \emph{relative to the expected outcome} can be unequal between groups. 
+This inequality hampers the ability of MC to (approximately) guarantee sufficiency, and thus guarantee equity in trustworthiness for the decision maker. 
+
+We propose a simple variant of MC called \textit{proportional multicalibration} (PMC) that ensures that the proportion of calibration error within each bin and group is small. 
+We prove that PMC bounds both multicalibration and differential calibration. 
+We show that PMC can be satisfied with an efficinet post-processing method, similarly to MC. 
+
+
+
+
+
+\looseness=-1
+
+
+
+
+
+
+\subsection{Our Contributions}
+
+In this manuscript, we formally analyze the connection of MC to the fairness notion of sufficiency. 
+To do so, we introduce differential calibration (DC), a sufficiency measure that constrains ratios of population risk between pairs of groups within prediction bins. 
+We describe how DC, like sufficiency, provides a sense of equal trustworthiness from the point of view of the decision maker. 
+With this definition, we prove the following. 
+First, models that are ($\alpha$,$\lambda$)-multicalibrated satisfy $(log \frac{r_{min}+\alpha}{r_{min}-\alpha}, \lambda)$-DC, where $r_{min}$ is the minimum expected risk prediction among categories defined by subgroups and prediction intervals. 
+We illustrate the meaning of this bound, which is that the proportion of calibration error in multicalibrated models may scale inversely with the outcome probability. 
+
+    
+Based on these observations, we propose an alternate definition of MC, PMC, that controls the percentage error by group and risk strata (\cref{def:PMC}). 
+We show that models satisfying $(\alpha,\lambda)$-PMC are $(\frac{\alpha}{1-\alpha},\lambda)$-multicalibrated and $(\log \frac{1+\alpha}{1-\alpha})$-differentially calibrated. 
+Proportionally multicalibrated models thereby obtain robust fairness guarantees that are independent of population risk categories. 
+Furthermore, we define an efficient algorithm for learning predictors satisfying $\alpha$-PMC. 
+
+Finally, we investigate the application of these methods to predicting patient admissions in the emergency department, a real-world resource allocation task, and show that post-processing for PMC results in models that are accurate, multicalibrated, and differentially calibrated. 
+
+
+
+
+
+
+
+\section{Reconciling Multicalibration and Sufficiency}
+\label{s:methods}
+
+
+\subsection{Preliminaries}
+
+\looseness=-1
+We consider the task of training a risk prediction model for a population of individuals with  outcomes, $y \in \set{0,1}$, and features, $x \in \mathcal{X}$.  
+Let $D$ be the joint distribution from which individual samples $(y, x)$ are drawn. 
+We assume the outcomes $y$ are random samples from underlying independent Bernoulli distributions, denoted as $p^*(x) \in [0,1]$.
+Given an individual's attributes $x = (x_1,\;\dots,\;x_d)$, it will be useful to refer to subsets we wish to protect, e.g. demographic identifiers.
+To do so, we define $\mathcal{A} = \set{A_1,\;\dots,\;A_p}$, $p \leq d$, such that $A_1 = \{x_{1i},\;\dots,\;x_{1k}\}$ is a finite set of values taken by attribute $x_1$.  
+Individuals can be further grouped into \emph{collections of subsets}, $\mathcal{C} \subseteq \text{2}^{\mathcal{X}}$, such that $S \in \mathcal{C}$ is the subset of individuals belonging to $S$, and $x \in S$ indicates that individual $x$ belongs to group $S$. 
+
+We denote our risk prediction model as $R(x): \mathcal{X}$ $\rightarrow [0,1]$.
+In order to consider calibration in practice, the risk predictions are typically discretized and considered within intervals. 
+The coarseness of this interval is parameterized by a partitioning parameter, $\lambda \in (0, 1]$. 
+The \emph{$\lambda$-discretization} of $[0,1]$ is denoted by a set of intervals, 
+$\Lambda_{\lambda} = \set{ \set{I_j}_{j=0}^{1/\lambda -1}}$, where  
+$I_j = [ j\lambda, (j+1)\lambda ) $.
+For brevity, most proofs in the following sections are given in~\cref{s:proof}.
+
+
+
+
+
+
+
+
+
+
+
+
+\subsection{Multicalibration}
+\looseness=-1
+MC~\citep{hebert-johnsonCalibrationComputationallyIdentifiableMasses2018} guarantees that the calibration error for any group from a collection of subsets, $\mathcal{C}$ will not exceed a user-defined threshold, over the range of risk scores. 
+In order to work with bins of predictions, we will mostly concern ourselves with the discretized version of MC, defined below. 
+The non-discretized versions are given in~\cref{s:App:def}. 
+
+\begin{definition}[$(\alpha,\lambda)$-multicalibration]
+\label{def:alMC}
+Let $\mathcal{C} \subseteq \text{2}^{\mathcal{X}}$ be a collection of subsets of $\mathcal{X}$. 
+For any $\alpha, \lambda > 0$, 
+a predictor $R$ is \emph{$(\alpha,\lambda)$-multicalibrated} on $\mathcal{C}$
+if,  
+for all $I \in \Lambda_{\lambda}$ 
+and $S \in \mathcal{C}$ where $P_D(R \in I |x \in S) \geq \alpha \lambda $,
+$$ \card{ \E_D [ y | R \in I, x \in S] - \E_D [ R | R \in I, x \in S]} \le \alpha .$$
+\end{definition}
+
+ 
+MC is one of few approaches to achieving fairness that does not require a significant trade-off to be made between a model's generalization error and the improvement in fairness it provides~\citep{hebert-johnsonCalibrationComputationallyIdentifiableMasses2018}. 
+As \cite{hebert-johnsonCalibrationComputationallyIdentifiableMasses2018} show, this is because achieving multicalibration is not at odds with achieving accuracy in expectation for the population as a whole. 
+This separates calibration fairness from other fairness constraints like demographic parity and equalized odds~\citep{hardtEqualityOpportunitySupervised2016a}, both of which may denigrate the performance of the model on specific groups~\citep{chouldechovaFairPredictionDisparate2017,pleissFairnessCalibration2017}. 
+In clinical settings, such trade-offs may be difficult or impossible to justify. 
+In addition to its alignment with accuracy in expectation, \citet{hebert-johnsonCalibrationComputationallyIdentifiableMasses2018} propose an efficient post-processing algorithm for MC similar on boosting. 
+We discuss additional extensions to MC in \cref{s:App:related}. 
+
+\subsection{Sufficiency and Differential Calibration}
+
+
+
+
+MC provides a sense of fairness by approximating \emph{calibration by group}, which is perfectly satisfied when $P_D(y|R=r,x \in S)=r$ for all $S \in C$. 
+Calibration by group is closely related to the \emph{sufficiency} fairness criterion~\citep{barocasFairnessMachineLearning2019}. 
+Sufficiency is the condition where the outcome probability is independent from $\mathcal{C}$ conditioned on the risk score.  
+In the binary group setting ($\mathcal{C} = \{S_i, S_j\}$), sufficiency can be expressed as
+$
+P_D(y|R, x \in S_i) = P_D(y|R, x \in S_j)
+$, or 
+\begin{equation}\label{eq:sufficiency}
+\frac{ P_D(y|R, x \in S_i) }{ P_D(y|R, x \in S_j) } = 1. 
+\end{equation}
+
+Unlike calibration by group, sufficiency does not stipulate that the risk scores be calibrated, yet from a fairness perspective, sufficiency and calibration-by-group are equivalent~\citep{barocasFairnessMachineLearning2019}.
+Consider that one can easily transform a model satisfying sufficiency into one that is calibrated-by-group with a single function $f(R) \rightarrow [0,1]$, for example with Platt scaling~\citep{barocasFairnessMachineLearning2019}. 
+In both cases, the sense of \emph{fairness} stems from the desire for the risk scores, $R$ to capture everything about group membership that is relevant to predicting the outcome, $y$.
+
+Under sufficiency, the risk score is equally informative of the outcome, regardless of group membership. 
+In this sense, a model satisfying sufficiency provides \emph{equally trustworthy} risk predictions to a decision maker, regardless of the groups to which an individual belongs.  
+
+Below, we define an approximate measure of sufficiency that constrains pairwise differentials between groups, and accomodates binned predictions: 
+
+\begin{definition}[Differential calibration]\label{def:DC}
+   
+   
+   
+   
+    Let $\mathcal{C} \subseteq \text{2}^{\mathcal{X}}$ be a collection of subsets of $\mathcal{X}$. 
+    A model $R(x)$ is ($\varepsilon$,$\lambda$)-differentially calibrated with respect to $\mathcal{C}$ if, across prediction intervals $I \in \Lambda_{\lambda}$, for all pairs $(S_i,S_j) \in \mathcal{C} \times \mathcal{C}$ for which $P_D(S_i), P_D(S_j) >0$, 
+    \begin{equation}\label{eq:DC}
+       
+        e^{-\varepsilon} \leq 
+            \frac{\E_D [ y | R \in I, x \in S_i]}
+            {\E_D [ y | R \in I, x \in S_j ]} 
+        \leq e^{\varepsilon}
+    \end{equation}
+\end{definition}
+
+By inspection we see that $\epsilon$ in $(\epsilon,\lambda)$-DC measures the extent to which $R$ satisifies sufficiency. 
+That its, when $P(y|R \in I, x \in S_i) \approx P(y|R \in I, x \in S_j)$ for all pairs, $\varepsilon \approx 0$. 
+$(\varepsilon,\lambda)$-DC says that, within any bin of risk scores, the outcome $y$ is at most $e^{\varepsilon}$ times more likely among one group than another, and a minimum of $e^{-\varepsilon}$ less likely. 
+\cref{def:DC} fits into the general definition of a \emph{differential fairness} measure proposed by~\citet{fouldsIntersectionalDefinitionFairness2019}, although previously it was used to define demographic parity criteria~\citep{fouldsAreParityBasedNotions2020}. 
+We describe the relation in more detail in~\cref{s:App:DF}, including \cref{eq:DC}'s connection to differential privacy~\cite{dwork2009differential} and pufferfish privacy~\cite{kiferPufferfishFrameworkMathematical2014}. 
+
+
+
+
+
+
+
+
+
+
+
+
+
+\subsection{The differential calibration of multicalibrated models is limited by low-risk groups}
+
+At a basic level, the form of MC and sufficiency differ: MC constrainins absolute differences between groups across prediction bins, whereas sufficiency constrains pairwise differentials between groups. 
+To reconcile MC and DC/sufficiency more formally, we pose the following question: if a model satisfies $\alpha$-MC, what, if anything does this imply about the $\varepsilon$-DC of the model?   
+(In \cref{s:App:thm},\cref{thm:DCtoMC}, we answer the inverse question).
+We now show that multicalibrated models have a bounded DC, but that this bound is limited by small values of $R$. 
+\begin{theorem}
+\label{thm:MCtoDC}
+\Copy{thm:MCtoDC}{
+    Let $R(x)$ be a model satisfying ($\alpha$,$\lambda$)-MC on a collection of subsets $\mathcal{C} \in 2^{\mathcal{X}}$. 
+    Let $r_{min} = \min_{(S, I) \in \mathcal{C} \times \Lambda_\lambda}{\E_D [ R | R \in I, x \in S]}$ be the minimum expected risk prediction among categories $(S, I) \in \mathcal{C} \times \Lambda_\lambda$. 
+   
+    Then R(x) is $(\log \frac{r_{min}+\alpha}{r_{min}-\alpha}, \lambda)$-differentially calibrated. 
+}
+\end{theorem}
+\begin{proof}
+    Let $r = \E_D [ R | R \in I, x \in S]$ and $p^* = \E_D [ y | R \in I, x \in S]$.
+    $(\alpha, \lambda)$-MC guarantees that $r - \alpha \leq p^* \leq r + \alpha$ for all groups $S \in \mathcal{C}$ and prediction intervals $r \in \Lambda_\lambda[0, 1]$. 
+   
+    Plugging these lower and upper bounds into \cref{eq:DC} yields 
+    $
+        e^{\varepsilon} \geq   {\frac{r+\alpha}{r-\alpha} }   
+    $.  
+    The maximum of this ratio, for a fixed $\alpha$, occurs at the smallest value of $r$; therefore 
+    $
+        \varepsilon \geq \log \frac{r_{min} + \alpha}{r_{min} - \alpha} . 
+    $
+\end{proof}
+
+\cref{thm:MCtoDC} illustrates the important point that, \emph{in terms of percentage error}, $MC$ does not provide equal protection to groups with different risk profiles. 
+Imagine a model satisfying (0.05,0.1)-MC for groups $S \in \mathcal{C}$. 
+Consider individuals receiving model predictions in the interval $(0.9,1]$. 
+MC guarantees that, for any category $\set{x : x \in S, R(x) \in I =(0.9,1]}$, the expected outcome prevalence ($\E_D[y|x \in S, R \in I]$) of at least $0.9 - \alpha = 0.85$. 
+This bounds the percent error among groups in the $(0.9, 1]$ prediction interval to 6\%.
+In contrast, consider individuals for whom $R(x) \in (0.3-0.4]$; each group may have a true outcome prevalence as low as 0.25, which is an error of 20\% - about 3.4x higher than the percent error in the higher-risk group. 
+
+
+
+\section{Proportional Multicalibration} 
+
+We are motivated to define a measure that is efficiently learnable like MC (\cref{def:alMC}) but better aligned with the fundamental fairness notion of sufficiency, like DC (\cref{def:DC}). 
+To do so, we define PMC, a variant of MC that constrains the proportional calibration error of a model among subgroups and risk strata. 
+In this section, we show that bounding a model's PMC is enough to meaningfully bounds its DC and MC. 
+Furthermore, we provide an efficient algorithm for satisfying PMC based on a simple extension of MC/Multiaccuracy boosting~\citep{kimMultiaccuracyBlackboxPostprocessing2019}.
+
+\begin{definition}[Proportional Multicalibration]\label{def:PMC}
+    A model $R(x)$ is $(\alpha,\lambda)$-proportionally multicalibrated with respect to a collection of subsets $\mathcal{C}$ if, 
+    for all $S \in \mathcal{C}$ and $I \in \Lambda_\lambda$ satisfying $P_D(R(x) \in I | x \in S) \geq \alpha \lambda$,
+    \begin{equation}\label{eq:lPMC}
+        \frac{  \card{ \E_D [ y | R \in I, x \in S] - \E_D [ R | R \in I, x \in S] }   }
+             {  \E_D [ y | R \in I, x \in S]   }   
+             \le  \alpha.
+    \end{equation}
+\end{definition}
+
+Note that, in practice, we must ensure $\E_D [ y | R \in I, x \in S] \neq 0$ for \cref{def:PMC} to be defined. 
+We handle this by introducing a parameter $\rho > 0$ constraining the lowest expected outcome among categories $(S,I)$. 
+In the remainder of this section, we detail how PMC relates to suffiency/DC and MC. 
+We provide bounds on the values of $MC$ and $DC$ given a proportionally multicalibrated model, and we illustrate the relationship between these three metrics in \cref{fig:params}. 
+
+\paragraph{Comparison to Differential Calibration}
+Rather than constraining the differentials of prediction- and group- specific outcomes among all pairs of subgroups in $\mathcal{C} \times \mathcal{C}$ as in DC (\cref{def:DC}), PMC constrains the relative error of each group in $\mathcal{C}$. 
+In practical terms, this makes it more efficient to calculate PMC by a factor of $O(\card{\mathcal{C}})$ steps compared to DC.  
+In addition, PMC does not require additional assumptions about the overall calibration of a model in order to imply guarantees of MC, since PMC directly constrains calibration rather than constraining sufficiency alone. 
+
+\begin{theorem}
+\label{thm:PMCtoDC}
+\Copy{thm:PMCtoDC}
+{
+    Let R(x) be a model satisfying $(\alpha,\lambda)$-PMC on a collection $\mathcal{C}$. 
+    Then $R(x)$ is $(\log \frac{1+\alpha}{1-\alpha}, \lambda )$-differentially calibrated.
+   
+}
+\end{theorem}
+\begin{proof}
+    Let $r = \E_D [ R | R \in I, x \in S]$ and $p^* = \E_D [ y | R \in I, x \in S]$.
+    If $R(x)$ satisfies $\alpha$-PMC (\cref{def:PMC}), then 
+    $ r/(1 + \alpha) \leq p^* \leq r/(1 - \alpha)$. 
+    Solving for the upper bound on $\varepsilon$-DC, we immediately have
+    $\varepsilon  \leq \log \frac{r(1+\alpha)}{r(1-\alpha)} \leq \log \frac{1+\alpha}{1-\alpha} $.
+   
+\end{proof}
+
+\cref{thm:PMCtoDC} demonstrates that $\alpha$-proportionally multicalibrated models satisfy a straightforward notion of differential fairness that depends monotonically only on $\alpha$. 
+The relationship between PMC and DC is contrasted with the relationship of MC and DC in \cref{fig:params}, left panel. 
+The figure illustrates how MC's sensitivity to small risk categories limits its DC. 
+
+\paragraph{Comparison to Multicalibration}
+Rather than constraining the absolute difference between risk predictions and the outcome as in MC, PMC requires that the calibration error be a small fraction of the expected risk in each category $(S,I)$.  
+In this sense, it provides a stronger protection than MC by requiring calibration error to be a small fraction regardless of the risk group.  
+In many contexts, we would argue that this is also more aligned with the notion of fairness in risk prediction contexts.  
+Under MC, the underlying prevalence of an outcome within a group affects the fairness protection that is received (i.e., the percentage error that \cref{def:MC} allows).  
+Because underlying prevalences of many clinically relevant outcomes vary significantly among subpopulations, multicalibrated models may systematically permit higher percentage error to specific risk groups. 
+The difference in relative calibration error among populations with different risk profiles also translates in weaker sufficiency guarantees, as demonstrated in~\cref{thm:MCtoDC}.  
+In contrast, PMC provides a fairness guarantee that is independent of subpopulation risks.  
+In the following theorem, we show that MC is constrained when a model satisfies PMC. 
+
+\begin{theorem}
+    \label{thm:PMCtoMC}
+    \Copy{thm:PMCtoMC}{
+    Let $R(x)$ be a model satisfying \emph{$\alpha$-PMC} on a collection $\mathcal{C}$. 
+    Then $R(x)$ is ($\frac{\alpha}{1-\alpha}$)-multicalibrated on $\mathcal{C}$. 
+    }
+\end{theorem}
+\begin{proof}
+    To distinguish the parameters, let $R(x)$ be a model satisfying $\delta$-PMC. 
+    Let $r = \E_D [ R | R \in I, x \in S]$ and $p^* = \E_D [ y | R \in I, x \in S]$.
+    Then  $ r/(1 + \delta) \leq p^* \leq r/(1 - \delta) $. 
+    We solve for the upper bound on $\alpha$-MC from \cref{def:MC} for the case when $p^* > r$. 
+    This yields
+    \begin{align*}
+    \alpha &\leq p^* - r \\
+           &\leq \frac{r}{1-\delta} - r \\
+           &= r\frac{\delta}{1-\delta} \\
+           &\leq \frac{\delta}{1-\delta}
+           .
+    \end{align*}
+\end{proof}
+
+
+The right panel of \cref{fig:params} illustrates this relation in comparison to the DC-MC relationship described in \cref{s:App:thm}, \cref{thm:DCtoMC}. 
+At small values of $\epsilon$ and $\alpha$ and when the model is perfectly calibrated overall, $\alpha$-PMC and $\epsilon$-DC behave similarly. 
+However, given $\delta>0$, $\epsilon$-differentially calibrated models suffer from higher MC error than proportionally calibrated models when $\alpha$-PMC $< 0.3$. 
+The right graph also illustrates the feasible range of $\alpha$ for $\alpha$-PMC is $0 < \alpha < 0.5$, past which it does not provide meaningful $\alpha$-MC. 
+The steeper relation between $\alpha$-PMC and MC may have advantages or disadvantages, depending on context. 
+It suggests that, by optimizing for $\alpha$-PMC, small improvements to this measure can result in relatively large improvements to MC; conversely, $\epsilon$-DC models that are well calibrated may satisfy a lower value of $\alpha$-MC over a larger range of $\epsilon$. 
+
+\begin{figure}
+    \centering
+    \includegraphics[width=0.75\textwidth]{figs/parameter_comparison.pdf}
+    \caption{
+        A comparison of $\varepsilon$-DC, $\alpha$-MC, and $\alpha$-PMC in terms of their parameters $\alpha$ and $\epsilon$. 
+    In both panes, the x value is a given value of one metric for a model, and the y axis is the implied value of the other metric, according to \cref{thm:DCtoMC}-\cref{thm:PMCtoMC}. 
+    The left filled area denotes the dependence of the privacy/DC of $\alpha$-multicalibrated models on the minimum risk interval, $r_{min} \in [0.01, 1.0]$. 
+    The right filled area denotes the dependence of the MC of $\epsilon$-differentially calibrated models on their overall calibration, $\delta \in [0.0, 0.5]$.
+    $\alpha$-PMC does not have these sensitivities. 
+    }
+    \label{fig:params}
+
+\end{figure}
+
+\subsection{Learning proportionally multicalibrated predictors}
+
+So far we have demonstrated that models satisfying PMC exhibit desirable guarantees relative to two previously defined measures of fair calibration, but have not considered whether PMC is easy to learn. 
+Here, we answer in the affirmative by proposing \cref{alg:PMC} to satisfy PMC and proving that it learns an ($\alpha$,$\lambda$)-PMC model in a polynomial number of steps. 
+
+\begin{theorem}
+\label{thm:alg}
+\Copy{thm:alg}{
+    Define $\alpha, \lambda, \gamma, \rho > 0$. 
+    Let $\mathcal{C} \subseteq 2^{\mathcal{X}}$ be a collection of subsets of $\mathcal{X}$ such that, for all $S \in \mathcal{C}$, $P_D(S) > \gamma$. 
+    Let $R(x)$ be a risk prediction model to be post-processed.
+   
+   
+    For all 
+    $(S,I) \in \mathcal{C} \times \Lambda_{\lambda}$, let 
+    $E[y|R\in I, x \in S] > \rho$. 
+    There exists an algorithm that satisfies $(\alpha, \lambda)$-PMC with respect to $\mathcal{C}$ 
+   
+    in $O(\frac{|C|}{\alpha^3\lambda^2\rho^2\gamma})$ steps.
+   
+   
+   
+   
+}
+\end{theorem}
+
+We analyze \cref{alg:PMC} and show it satisfies  \cref{thm:alg} in \cref{s:proof}.
+\cref{alg:PMC} directly extends MCBoost\citep{pfistererMcboostMultiCalibrationBoosting2021}, but differs in that it does not terminate until $R(x)$ is within $\alpha \bar{y}$ for all categories, as opposed to simply within $\alpha$. 
+This more stringent threshold requires an additional $O(\frac{1}{\rho^2})$ steps, where $\rho>0$ is a lower bound on the expected outcome within a category $(S,I)$.  
+The parameter $\rho$ also serves to smooth empirical estimates of \cref{eq:lPMC} in our experiments. 
+
+
+
+        
+
+
+\algblockdefx{MRepeat}{EndRepeat}{\textbf{repeat}}{}
+\algnotext{EndRepeat}
+
+\begin{algorithm}[t]
+\caption{Proportional Multicalibration Post-processing} 
+\label{alg:PMC}
+
+\begin{algorithmic}[1]
+    \footnotesize
+    \Require{ Predictor $R(x)$ \\
+            $\mathcal{C} \in 2^{\mathcal{X}}$ such that for all $S \in \mathcal{C}, P_D(S) \geq \gamma$ \\
+            $\alpha, \lambda, \gamma, \rho > 0$ \\
+            $\mathcal{D} = \set{(y,x)_i}_{i=0}^{N} \sim D$
+    }
+    
+    \Statex
+    \Function{PMC}{$R$, $\mathcal{C}$, $\mathcal{D}$, $\alpha$, $\lambda$, $\gamma$, $\rho$}
+       
+        \MRepeat \hspace{1em} 
+        \Let{$\{(y,x)\}$}{sample $\mathcal{D}$}
+        \For{$S \in \mathcal{C}, I \in \Lambda_\lambda$ 
+             such that $P_D(R \in I , x \in S) \geq \alpha \lambda \gamma$ }
+          \Let{$S_r$}{$S \cap \set{x: R(x) \in I}$}
+          \Let{$\bar{r}$}{$\frac{1}{|S_r|}\sum_{x \in S_r}{R(x)}$} \Comment{average group prediction }
+          \Let{$\bar{y}$}{$\frac{1}{|S_r|}\sum_{x \in S_r}{y(x)}$} \Comment{average subgroup risk}
+          \If{$\bar{y} \leq \rho$}
+            \State continue
+          \EndIf
+          \Let{$\Delta r$}{$\bar{y} - \bar{r}$}
+        \If{$\card{\Delta r} \geq \alpha \bar{y}$}
+          \Let{$R(x)$}{$R(x) + \Delta r$ for all $x \in S_r$}
+          \Let{$R(x)$}{squash($R(x)$, $[0,1]$)} \Comment{squash updates to $[0,1]$} 
+        \EndIf
+      \EndFor
+      \If{No Updates to R(x)}
+        \State break
+      \EndIf
+      \EndRepeat
+      \State \Return{$R$}
+    \EndFunction
+  \end{algorithmic}
+  
+\end{algorithm}
+
+
+
+
+
+
+
+\section{Experiments}
+\label{s:exp}
+In our first set of experiments (\cref{s:exp}), we study MC and PMC in simulated population data to understand and validate the analysis in previous sections. 
+In the second section, we compare the performance of varied model treatments on a real world hospital admission task, using an implementation of \cref{alg:PMC}. 
+We make use of empirical versions of our fairness definitions which we refer to as \textit{MC loss} (\cref{def:mcloss}), \textit{PMC loss} (\cref{def:pmcloss}), and \textit{DC loss} (\cref{def:dcloss}), defined in \cref{s:App:def}.  
+
+\paragraph{Simulation study}
+\label{s:exp:sim}
+We simulate data from $\alpha$-multicalibrated models. 
+For simplicity, we specify a data structure with a one-to-one correspondence between subset  and model estimated risk, such that for all $x$ in subset $S$, $R(x)=R(x|x\in S)=R(S)$.
+Therefore all information for predicting the outcome based on the features in $x$ is contained in the attributes $\mathcal{A}$ that define subgroup $S$. 
+Prevalence is specified as
+$p_i^*=P_D(y|x \in S_i)=0.2+0.01(i-1)$
+and $i=1,\cdots,N_s$, where $N_s$ is the number of subsets $S$, defined by $\mathcal{A}$ and indexed by $i$  with increasing $p^*$. 
+For each group,
+$R_i=R(S_i)=R(x|x \in S_i)=p_i^*-\Delta_i.$
+We randomly select $\Delta_i$ for one group to be $\pm\alpha$ and for the remaining groups, $\Delta_i= \pm\delta$, where $\delta\sim \textrm{Uniform}(\min=0, \max=\alpha)$. 
+In all cases, the sign of $\Delta_i$ is determined by a random draw from a Bernoulli distribution.  For these simulations we set $N_S=61$ and $\alpha=0.1$, such that $p^*_i\in[0.2,0.8]$ and $R_i\in[0.1,0.9]$. We generate $N_{sim}=1000$ simulated datasets, with $n=1000$ observations per group, and for each $S_i$, we calculate the ratio of the absolute mean error to $p^*_i$, i.e. the PMC loss function for this data generating mechanism. 
+
+We also simulate three specific scenarios where: 
+\begin{enumerate*}[label=\arabic*)] 
+    \item $\card{\Delta_i}$ is equivalent for all groups (Fixed); 
+    \item $\card{\Delta_i}$ increases with increasing $p_i^*$; and 
+    \item $\card{\Delta_i}$ decreases with increasing $p_i^*$
+\end{enumerate*}, with $\alpha=0.1$ in each case.
+These scenarios compare when $\alpha$ is determined by all groups, the group with the lowest outcome prevalence, and the group with the highest outcome prevalence, respectively. 
+
+
+
+\paragraph{Hospital admission}
+\label{s:exp:mimic}
+Next, we test PMC alongside other methods in application to prediction of inpatient hospital admission for patients visiting the emergency department (ED). 
+The burden of overcrowding and long wait times in EDs is significantly higher among non-white, non-Hispanic patients and socio-economically marginalized patients~\citep{jamesAssociationRaceEthnicity2005,mcdonaldExaminingAssociationCommunityLevel2020a}. 
+Recent work has demonstrated risk prediction models that can expedite patient visits by predicting patient admission at an early stage of a visit with a high degree of certainty (AUC $\geq$ 0.9 across three large care centers)~\citep{barak-correnProgressivePredictionHospitalisation2017,barak-correnEarlyPredictionModel2017,barak-correnPredictionHealthcareSettings2021,barak-correnPredictionPatientDisposition2021}. 
+Our goal is to ensure no group of patients will be over- or under-prioritized over another by these models, which could exacerbate the treatment and outcome disparities that currently exist.  
+
+We construct a prediction task similar to previous studies but using a new data resource: the \href{https://physionet.org/content/mimic-iv-ed/1.0/}{MIMIC-IV-ED} repository~\citep{johnsonalistairMIMICIVED2021}.
+The overall intersectional demographic statistics for these data are given in~\cref{tbl:mimic}.
+In \cref{tbl:mimic} we observe stark differences in admission rates by demographic group and gender, suggesting that the use of a proportional measure of calibration could be appropriate for this task. 
+We trained and evaluated logistic regression (LR) and random forest (RF) models of patient admission, with and without post-processing for MC~\citep{pfistererMcboostMultiCalibrationBoosting2021} or PMC. 
+We tested a number of parameter settings given in~\cref{tbl:params}, running 100 trials with different shuffles of the data. 
+Comparisons are reported on a test set of 20\% of the data for each trial.  
+Additional experiment details are available in~\cref{s:app:results} and
+code for the experiments is available here: \url{https://github.com/cavalab/proportional-multicalibration}. 
+The PMC-postprocessing method is available as a package as well: \url{https://github.com/cavalab/pmcboost}. 
+
+\section{Results}
+\cref{fig:sim} shows the PMC loss of $\alpha$-multicalibrated models under the scenarios described in \cref{s:exp:sim}.
+Proportional $\alpha$-MC constrains the ratio of the absolute mean error (AME) to the outcome prevalence, for groups defined by a risk interval $(R(x) \in I)$ and subset within a collection of subsets ($x \in S, S\in \mathcal{C})$. Without the proportionality factor $\card{ \E_D [ y | R \in I, x \in S] }^{-1}$ , $\alpha$-multicalibrated models allow a dependence between the group prevalence and the error or privacy loss permitted that is unfair for groups with lower outcome prevalence. 
+
+Results on the hospital admission prediction task are summarized in \cref{fig:mimic_results} and \cref{tbl:wins}. 
+PMC post-processing has a negligible effect on predictive performance ($<$0.1\% $\Delta$ AUROC, LR and RF) while reducing DC loss by 27\% for LR and RF models, and reducing PMC loss by 40\% and 79\%, respectively.
+In the case of RF models, PMC post-processing reduces MC loss by 23\%, a significantly larger improvement than MC post-processing itself (19\%, $p$=9e-26). 
+
+    \begin{table}
+        \centering
+        \scriptsize
+        \caption{
+            Admission prevalence (Admissions/Total (\%)) among patients in the MIMIC-IV-ED data repository, stratified by the intersection of ethnoracial group and gender. 
+        }
+        \label{tbl:mimic}
+       
+        \input{tbls/case_control_intersections.tex}
+    \end{table}
+Due to normalization by outcome rates, the optimal value of $\alpha$ for PMC is likely to differ from the best value for MC (their relationship is shown in \cref{fig:params}).  
+For both methods, setting $\alpha$ too small may result in over-fitting. 
+To account for this, we quantified the number of trials for which a given method produced the best model according to a given metric, over all parameter configurations in \cref{tbl:params}. 
+PMC post-processing (\cref{alg:PMC}) achieves the best fairness the highest percent of the time, according to DC loss (63\%), MC loss (70\%), and PMC loss (72\%), while MC-postprocessed models achieve the best AUROC in 88\% of cases.  
+This provides strong evidence that, over a large range of $\alpha$ values, PMC post-processing is beneficial compared to MC-postprocessing.  
+
+We characterize the sensitivity of PMC and MC to $\alpha$ and provide a more detailed breakdown of these results in \cref{s:app:results}. 
+
+\begin{figure}
+    \begin{minipage}{.49\textwidth}
+       
+        \includegraphics[width=\textwidth]{figs/sim_plot2.pdf}
+    \end{minipage}
+\hspace{.01\textwidth}
+    \begin{minipage}{.49\textwidth}
+        \caption{
+            The relationship between MC, PMC, and outcome prevalence as illustrated via a simulation study in which the rates of the outcome are associated with group membership. 
+            Gray points denote the PMC loss of a (0.1,0.1)-MC model on 1000 simulated datasets, and colored lines denote three specific scenarios in which each group's calibration error ($|\Delta|$) follows specific rules.
+            PMC loss is higher among groups with lower positivity rates in most scenarios unless the groupwise calibration error increases with positivity rate. 
+           
+        }
+    \label{fig:sim}
+    \end{minipage}
+\end{figure}
+
+\begin{table}[t]
+    \begin{minipage}[b]{.5\textwidth}
+        \centering
+        \footnotesize
+        \caption{Parameters for the hospital admission prediction experiment.}
+        \label{tbl:params}
+        \input{tbls/pmc_params.tex}
+    \end{minipage}
+    \hspace{.01\textwidth}
+    \begin{minipage}[b]{.44\textwidth}
+    \centering
+    \footnotesize
+    \caption{
+        The number of times each postprocessing method achieved the best score among all methods, out of 100 trials. 
+    }
+    \input{tbls/winning_configs.tex}
+    \label{tbl:wins}
+    \end{minipage}
+\end{table}
+
+\begin{figure}
+    \includegraphics[width=\textwidth]{figs/box_AUROC_MC_PMC_DC.pdf}
+    \caption{
+        A comparison of LR and RF models, with and without MC and PMC post-processing, on the hospital admission task. 
+        From left to right, trained models are compared in terms of test set AUROC, MC loss, PMC loss, and DC loss. 
+        Points represent the median performance over 100 shuffled train/test splits with bootstrapped 99\% confidence intervals. 
+        We test for significant differences between post-processing methods using two-sided Wilcoxon rank-sum tests with Bonferroni correction. 
+        ns: $p <=$ 1; 
+      
+      **: 1e-03 $< p <=$ 1e-02;
+     ***: 1e-04 $< p <=$ 1e-03;
+    ****: $p <=$ 1e-04.
+       
+       
+       
+    }
+    \label{fig:mimic_results}
+\end{figure}
+
+
+\section{Discussion and Conclusion}
+
+\looseness=-1
+In this paper we have analyzed multicalibration through the lens of suffiency and differential calibration to reveal the sensitivity of this metric to correlations between outcome rates and group membership. 
+We have proposed a measure, PMC, that alleviates this sensitivity and attempts to capture the ``best of both worlds" of MC and DC. 
+PMC provides equivalent percentage calibration protections to groups regardless of their risk profiles, and in so doing, bounds a model's differential calibration. 
+We provide an efficient algorithm for learning PMC predictors by postprocessing a given risk prediction model.   
+On a real-world and clinically relevant task (admission prediction), we have shown that post-processing LR and RF models with PMC leads to better performance across all three fairness metrics, with little to no impact on predictive performance. 
+
+
+\looseness=-1
+Our preliminary analysis suggests PMC can be a valuable metric for training fair algorithms in resource allocation contexts. 
+Future work could extend this analysis on both the theoretical and practical side. 
+On the theoretical side, the generalization properties of the PMC measure should be established and its sample complexity quantified, as \citet{roseMachineLearningPrediction2018} did with MC. 
+Additional extensions of PMC could establish a bound on the accuracy of PMC-postprocessed models in a similar vein to work by \citet{kimMultiaccuracyBlackboxPostprocessing2019} and \citet{hebert-johnsonMulticalibrationCalibrationComputationallyIdentifiable}. 
+On the empirical side, future works should benchmark PMC on a larger set of real-world problems, and explore use cases in more depth. 
+
+
+
+
+
+
+
+

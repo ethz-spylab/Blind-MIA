@@ -1,0 +1,556 @@
+
+\section{Introduction}
+\label{introduction}
+
+Neural network pruning has become an essential tool to reduce the size of modern-day neural networks. Small-sized networks are important for faster inference and many real-world tasks, for example, deployment on edge devices. With scaling model parameters becoming a popular way to scale performance, model sizes are becoming huge and an increasing cost to the environment \cite{strubell2019energy}. Neural network compression and neural network pruning in particular, has therefore, seen a lot of new work in the last few years. This has also coincided with the insight by Han et al. in 2015 \cite{han2015learning}, that neural networks can be pruned to a significantly large extent without a drop in accuracy. New methods have utilized a myriad of pruning techniques consisting of gradient-based methods, sensitivity to or feedback from an objective function, distance or similarity measures, regularization-based techniques, amongst others. 
+
+The state-of-the-art (SOTA) pruning techniques use complex rules like iterative pruning and re-growth of weight parameters using heuristics rules every few hundred iterations for DSR \cite{ICML-2019-MostafaW}. SM \cite{sparse_momentum} uses sparse momentum that uses exponentially smoothed gradients (momentum) to find layers and weights that reduce error and then redistribute the pruned weights across layers using the mean momentum magnitude of each layer. For each layer, sparse momentum grows the weights using the momentum magnitude of zero-valued weights. Another popular SOTA technique, RigL \cite{pmlr-v119-evci20a}, also works by iteratively pruning and re-growing weights every few iterations. They use either uniform or Erdos-Renyi-Kernel (ERK) for pruning connections and re-grow connections based on the highest magnitude gradients. Among the most recent techniques, DPF \cite{Lin2020Dynamic} uses dynamic allocation of the sparsity pattern and incorporates a feedback signal to re-activate prematurely pruned weights, while STR \cite{pmlr-v119-kusupati20a} utilises Soft Threshold Reparameterization and uses back-propagation to find sparsity ratios for each layer. 
+
+Despite the high number of new pruning algorithms proposed, the tangible benefits of many of them are still questionable. For instance, recently it has been shown that many pruning at initialization (PAI) schemes do not perform as well as expected \cite{frankle2021pruning}. In that paper, it is shown through a number of experiments that these PAI schemes are actually no better than random pruning, which is one of the most naive pruning baselines with no complexity involved. Similarly, in this paper, we bring attention to the trend of proposing increasingly complex pruning algorithms and question whether such complexity is really required to achieve superior results. We benchmark popular state-of-the-art (SOTA) pruning techniques against a naive pruning baseline, namely, Global Magnitude Pruning (Global MP). Global MP ranks all the weights in a neural network by their magnitudes and then prunes off the smallest ones (Fig.~\ref{fig:workflow}). Thus, in its vanilla form, it is a very simple pruning technique and contrasts sharply with the rest of the algorithms in the literature in terms of complexity.
+
+Despite its simplicity, Global MP has not been comprehensively analyzed and evaluated in the literature. Although, some prior works have used Global MP as a baseline \cite{frankle2018lottery, NEURIPS2019_a4613e8d, blalock2020state, NEURIPS2020_46a4378f, Renda2020Comparing, lee2021layeradaptive}, they missed out on conducting rigorous experiments with it; for example, in settings of both gradual and one-shot pruning or comparing it with SOTA. Similarly, many SOTA papers do not use Global MP for benchmarking and miss out on capturing its remarkable performance \cite{pmlr-v119-evci20a, pmlr-v119-kusupati20a, Zhu2018ToPO, gale2019state, DNW}. We bridge this gap in evaluating the efficacy of Global MP under multiple experimental conditions and demonstrate its superior performance. 
+
+In this paper, we show that naive Global MP surpasses the other pruning techniques and sets a new SOTA result for ImageNet experiments. This performance is also valid across different datasets, neural network models, and target sparsity levels. While achieving such performance, Global MP does not require any additional algorithm-specific hyper-parameters to be tuned. Unlike many pruning techniques in the literature, it is very straightforward to implement. We conduct experiments with Global MP in both one-shot and gradual settings, and find that Global MP in a gradual fashion helps to increase the FLOPs sparsity even further, without compromising accuracy. Aside to its benefits, we also shed light into a potential problem with Global MP, known as layer-collapse, whereby an entire layer is pruned away, leading to a drastic loss in accuracy. In fact, this is a long-standing issue for many pruning algorithms in the literature, but the fix for it in Global MP is rather simple through introducing a minimum threshold to retain a minimum number of weights in every layer, while it is likely to be more complicated in other algorithms. We conduct experiments on WRN-28-8, ResNet-32, ResNet-50, MobileNet-V1, and FastGRNN models, and on CIFAR-10, ImageNet, and HAR-2 datasets. We test Global MP for both unstructured and structured as well as one-shot and gradual settings, and share our findings.
+
+\begin{figure*}[!h]
+    \centering
+    \includegraphics[trim=0cm 5.5cm 0cm 8cm,clip,width=\textwidth]{Figures/GlobalMPv4.pdf}
+    \caption{Illustration of how Global MP works. Global MP ranks all the weights in a network by their magnitudes and prunes off the smallest weights until the target sparsity is met. Light green weights refer to the smaller-magnitude weights which are pruned off. A pruned network consisting of larger-magnitude weights (dark green weights) is obtained after the process.}
+    \label{fig:workflow}
+\end{figure*}
+
+\section{Related Work}
+\label{related_work}
+
+Compression of neural networks has become an important research area due to the rapid increase in size of neural networks \cite{brown2020language}, the need for fast inference \cite{camci2020deep}, application to real-world tasks \cite{9516010, 8818358, 8756206, Liu2021ARA, 8693518} and concerns about the carbon footprint of training large neural networks \cite{strubell2019energy}. Over the years, several compression techniques have emerged in the literature \cite{cheng2017survey, 9478787}, such as quantisation, factorisation, attention, knowledge distillation, architecture search and pruning \cite{almahairi2016dynamic,ashok2017n2n,i2016squeezenet,pham2018efficient}. 
+
+Quantisation techniques which restrict the bitwidth of parameters \cite{Rastegari_2016,courbariaux2016binarized} and tensor factorisation and decomposition which aim to break large kernels into smaller components \cite{mathieu2013fast,gong2014compressing,lebedev2014speedingup,Masana_2017} are popular methods. However, they need to be optimised for specific architectures. Attention networks \cite{almahairi2016dynamic} have two separate networks to focus on only a small patch of the input image. Training smaller student networks in a process called knowledge distillation \cite{ashok2017n2n, 9461003} has also proved effective, although it can potentially require a large training budget. Architecture search techniques, such as new kernel design \cite{i2016squeezenet} or whole architecture design \cite{pmlr-v80-pham18a,Tan_2019} have also become popular. Nevertheless, the large search space size requires ample computational resources to do the architecture search. Different from all these approaches, we focus on pruning deep neural networks in this work. As compared to other categories, pruning is more general in nature and has shown strong performance \cite{gale2019state}.
+
+Many pruning techniques have been developed over the years, which use first or second order derivatives \cite{NIPS1989_250,NIPS1992_647}, gradient based methods \cite{lee2018snip, Wang2020Picking}, sensitivity to or feedback from some objective function \cite{Lin2020Dynamic, molchanov2016pruning, LIU2020Dynamic, jorge2021progressive, 9097925}, distance or similarity measures \cite{Srinivas_2015}, regularization-based techniques \cite{pmlr-v119-kusupati20a, ContinuousSparsification2020, wang2021neural, 9398648}, and magnitude-based criterion \cite{pmlr-v119-evci20a, lee2021layeradaptive, Zhu2018ToPO, Strom97sparseconnection, Park2020LookaheadAF}. A key trick has been discovered in \cite{han2015learning} to iteratively prune and retrain a network, thereby preserving high accuracy. Runtime Neural Pruning \cite{NIPS2017_6813} attempts to use reinforcement learning (RL) for compression by training an RL agent to select smaller sub-networks during inference. \cite{he2018amc} design the first approach using RL for pruning. However, RL training approaches typically require additional RL training budgets and careful RL action and state space design \cite{gupta2020learning, qlp}.
+
+Global Magnitude Pruning (Global MP) on the other hand works by ranking all the parameters in a network by their absolute magnitudes and then pruning the smallest ones. It is therefore, quite intuitive, logical and straightforward to implement. It is also not to be confused with methods utilizing Global Pruning but not conducting magnitude pruning, for example, SNIP \cite{lee2018snip}. Many methods can do Global Pruning but they cannot be called Global MP because they do not conduct magnitude-based pruning. Some prior works have utilised Global MP but have missed out on rigorously benchmarking it, for example in settings of both gradual and one-shot pruning, and have also not compared it to SOTA algorithms \cite{frankle2018lottery, NEURIPS2019_a4613e8d, blalock2020state, NEURIPS2020_46a4378f, Renda2020Comparing, lee2021layeradaptive}. Also, many SOTA algorithms miss out on benchmarking their algorithms against Global MP and hence are unable to capture its efficacy \cite{pmlr-v119-evci20a, pmlr-v119-kusupati20a, Zhu2018ToPO, gale2019state, DNW}. We conduct systematic experiments to bridge this gap and demonstrate its superior performance by evaluating its efficacy under multiple experimental conditions. 
+\section{Method}
+\label{approach}
+
+In this section, we explain how Global MP works by describing its key components. We shed light into its practical details and implementation. We present a pseudocode to explain the algorithmic flow of Global MP (Algorithm~\ref{algo1} and Table~\ref{table:func_list}). We also introduce a simple thresholding mechanism, called \textit{Minimum Threshold (MT)}, to avoid the issue of layer-collapse at high sparsity levels.
+
+\subsection{Global Magnitude Pruning (Global MP)}
+\label{algo:gp}
+
+Global MP is a magnitude-based pruning approach, whereby weights larger than a certain threshold are kept, and weights smaller than the threshold are pruned across a neural network. The threshold is calculated based on the target sparsity rate and is not a hyper-parameter that needs to be tuned or learnt. Given a target sparsity rate $\kappa_{target}$, the threshold $t$ is simply calculated as the weight magnitude that serves as a separation point between the smallest $\kappa_{target}$ percent of weights and the rest, once all weights are sorted into an array based on their magnitude.
+
+Formally, for a calculated threshold $t$ and each individual weight $w$ in any layer, the new weight $w_{new}$ is defined as follows:
+\begin{equation}
+    w_{new} = \begin{cases} 
+      0 & |w| < t, \\
+      w & otherwise. \\
+   \end{cases}
+\end{equation}
+
+In Global MP, a single threshold is set for the entire network based on the target sparsity for the network. This is in contrast to layer-wise pruning, in which different threshold values have to be searched for each layer individually. In the case of uniform pruning on the other hand, a threshold for each layer needs to be calculated based on the sparsity target assigned to the layers uniformly across the network. In this aspect, Global MP is more efficient than layer-wise or uniform pruning because the threshold does not need to be searched or calculated for every layer individually.
+
+\subsection{Minimum Threshold (MT)}
+\label{algo:MT}
+
+The Minimum Threshold (MT) refers to the fixed number of weights that are preserved in every layer of the neural network post pruning. The MT is a scalar value that is fixed before the start of the pruning cycle. The weights in a layer are sorted by their magnitude and the largest MT number of weights are preserved. For instance, an MT of 500 implies that 500 of the largest weights in every layer need to be preserved post pruning. If a layer originally has a smaller number of weights than the MT number, then all the weights of that layer will be preserved.  Therefore, MT is simple to apply and also computationally inexpensive. This corresponds to:
+
+\begin{equation}
+{\|W_l\|_0}
+ \geq \begin{cases} 
+      \sigma & \text{if } m \geq \sigma_l, \\
+      m & \text{otherwise.} \\
+    \end{cases}
+\label{eq:MT}
+\end{equation}
+
+The term $W_l \in \mathbb{R}^{m}$ denotes the weight vector for layer $l$, $\sigma$ is the MT value in terms of the number of weights and ${\|W_l\|_0}$ indicates the number of non-zero elements in $W_l$. We explain in the below section how the actual pruning using MT is implemented.
+
+\begin{algorithm}[t!]
+\caption{Global MP}
+\label{algo1}
+\begin{algorithmic}
+\STATE{\textbf{Input:} $DNN_{init}$, pre-trained or untrained DNN}
+\STATE{\hspace{1.1cm}$\kappa_{target}$, target sparsity}
+\STATE{\hspace{1.1cm}$\sigma$, minimum threshold (MT)}
+\STATE{\hspace{1.1cm}$e_{total}$, total epochs}
+\STATE{\hspace{1.1cm}$isGradual$, gradual or one-shot}
+\STATE{\hspace{1.1cm}$isMT$, MT is applied or not}
+\STATE{\textbf{Output:} $DNN_{final}$, pruned and trained DNN}
+\vspace{0.35cm}
+\STATE{$e = 0$}
+\STATE{$DNN(w_e)$ = $DNN_{init}$}
+\WHILE{$e < e_{total}$}
+\IF{$\kappa_{DNN(w_e)} < \kappa_{target}$}
+\STATE{$t_e$ $\leftarrow$ $CalcThreshold(e, \kappa_{target}, isGradual)$}
+\IF{$isMT$}
+\STATE{$DNN(w_{e'}) \hspace{0.1cm} \leftarrow Mask(DNN(w_e), t_e)$}
+\STATE{$W \hspace{1.43cm} \leftarrow MTcheck(DNN(w_{e'}), \sigma)$}
+\STATE{$DNN(w_{e^+}) \leftarrow MTprune(DNN(w_{e'}), W)$}
+\ELSE
+\STATE{$DNN(w_{e^+}) \leftarrow Prune(DNN(w_e), t_e)$}
+\ENDIF
+\ELSE
+\STATE{$DNN(w_{e^+}) = DNN(w_e)$}
+\ENDIF
+\STATE{$DNN(w_{e^{++}}) \leftarrow BackProp(DNN(w_{e^+}))$}
+\STATE{$DNN(w_e) = DNN(w_{e^{++}})$}
+\STATE{$e = e+1$}
+\ENDWHILE
+\STATE{$DNN_{final}$ = $DNN(w_e)$}
+\end{algorithmic}
+\end{algorithm}
+
+\begin{table}[t!]
+\caption{Function explanations for Algorithm 1.}
+\label{table:func_list}
+\centering
+\begin{tabular}{rl}
+\hline\noalign{\smallskip}
+\textbf{Function} & \textbf{Explanation} \\ 
+\noalign{\smallskip}\hline\noalign{\smallskip}
+\multirow{4}{*}{$CalcThreshold()$:} & Calculates the magnitude threshold below which \\
+& the weights are to be pruned. Assigns all pruning \\
+& budget in one epoch or distributes it to epochs \\
+& based on $isGradual$. \\
+\noalign{\smallskip}
+\multirow{2}{*}{$Mask()$:} & Identifies the weights to be pruned without \\
+& actually pruning them. \\
+\noalign{\smallskip}
+\multirow{3}{*}{$MTcheck()$:} & Checks the layers that violate the MT condition \\
+& and returns a new mask by distributing \\
+& the pruning budget among other layers. \\
+\noalign{\smallskip}
+\multirow{2}{*}{$MTprune()$:} & Prunes based on the mask returned by \\
+& $MTcheck()$. \\
+\noalign{\smallskip}
+$Prune()$: & Prunes based on a threshold. \\
+\noalign{\smallskip}
+$BackProp()$: & Conducts a single back-propagation for training. \\
+\hline
+\vspace{-1cm}
+\end{tabular}
+\end{table}
+
+\subsection{The Pruning Workflow}
+
+The pruning pipeline for Global MP is specified in Algorithm \ref{algo1}. It consists of taking a starting model, pruning it until the desired sparsity target is met and training or fine-tuning it for the specified number of epochs. It supports both one-shot and gradual pruning settings as well as with or without MT. The users may choose any pruning setting as per their use-case. The procedure starts by first taking a pre-trained model for the case of one-shot pruning or untrained model for the case of gradual pruning. Next, the sparsity of the model is checked and if the sparsity is lower than the target sparsity, then the model is pruned using either vanilla Global MP or Global MP with MT, as per the choice of the user. Once, the model is pruned then it is trained for the case of gradual pruning or fine-tuned for the case of one-shot pruning. The above procedure repeats until the final epoch is reached. For the case of one-shot pruning, the later epochs are just used for doing fine-tuning as the pruning happens in one-go in the first epoch itself. This finishes the procedure and the final result is a pruned and trained (or fine-tuned) model. 
+\section{Experiments}
+\label{Results}
+Below we describe experiments related to Global Magnitude Pruning (Global MP) compared to state-of-the-art (SOTA) pruning algorithms. We conduct experiments on well-known image classification datasets, such as CIFAR-10 and ImageNet. We also include a human activity recognition dataset (HAR-2) to demonstrate generalization to other domains. We report hyper-parameters and training-related information for all the experiments in supplementary materials (Section A).
+
+\subsection{Comparison with SOTA}
+
+We compare Global MP with various popular SOTA algorithms that are well known for pruning including SNIP \cite{lee2018snip}, SM \cite{sparse_momentum}, DSR \cite{ICML-2019-MostafaW}, DPF \cite{Lin2020Dynamic}, GMP \cite{Zhu2018ToPO}, DNW \cite{DNW}, RigL \cite{pmlr-v119-evci20a}, and STR \cite{pmlr-v119-kusupati20a}. These include a broad spectrum of methods involving iteratively pruning and re-growing weights every few iterations, pruning at initialization, using gradients and feedback signals for pruning and pruning using regularization. We report results from these algorithms whenever they report results for the specific dataset that is being experimented upon. We report performance on weight sparsity (i.e., the number of parameters pruned) vs. accuracy, the default metric reported by all pruning papers, for all our experiments. 
+
+\subsubsection{CIFAR-10}
+\label{sota_cifar10}
+We conduct experiments to compare Global MP to SOTA pruning algorithms on the CIFAR-10 dataset, which features 60,000 tiny, 32$\times$32-sized RGB images with 10 classes. It is a commonly used dataset for benchmarking DNN pruning algorithms. We compare Global MP with various algorithms including SNIP \cite{lee2018snip}, SM \cite{sparse_momentum}, DSR \cite{ICML-2019-MostafaW}, and DPF \cite{Lin2020Dynamic}. We report results on two popular and widely pruned network architectures, namely, WideResNet-28-8 (WRN-28-8) and ResNet-32 \cite{DBLP:journals/corr/HeZRS15}. For both architectures, we start off with the original model having the same initial accuracy as the other algorithms to have a fair comparison. Table~\ref{table:wrn-28-8_cifar_10} includes the results for WRN-28-8 experiments. As can be seen, Global MP performs better than the rest of the competitors at 90\% and 95\% sparsity levels. At 97.5\% sparsity level, Global MP is the second-best algorithm with a very small margin after a strong competitor DPF, which takes the second-best place in other two target sparsity levels. As for ResNet-32, since it is a smaller network with less redundancy, we conduct experiments only up to 95\% sparsity. Table \ref{table:resnet32_cifar10} depicts these results. Similar to the results in WRN-28-8, Global MP and DPF take the first two places at both 90\% and 95\% sparsity levels, while margins are being very small in between. This is an indication of the capabilities of Global MP as compared to the other algorithms, while featuring no added complexity.
+
+\begin{table}[t!]
+\small
+\centering
+\begin{tabular}{p{1.5cm}p{2.1cm}p{1.1cm}p{1.1cm}}
+\toprule
+\multirow{1}{*}{Method} & Top-1 Acc & Params & Sparsity\\
+\midrule
+WRN-28-8 & 96.06\% & 23.3M\ & 0.0\%\\
+\midrule
+SNIP & $95.49 \pm 0.21\%$ & 2.33M\ & 90\%\\
+SM & $95.67 \pm 0.14\%$ & 2.33M\ & 90\%\\
+DSR & $95.81 \pm 0.10\%$ & 2.33M\ & 90\%\\
+\underline{DPF} & $\underline{96.08 \pm 0.15\%}$ & 2.33M\ & 90\%\\
+\textbf{Global MP} & $\textbf{96.30} \pm \textbf{0.03\%}$ & 2.33M & 90\%\\
+\midrule
+SNIP & $94.93 \pm 0.13\%$ & 1.17M\ & 95\%\\
+SM & $95.64 \pm 0.07\%$ & 1.17M\ & 95\%\\
+DSR & $95.55 \pm 0.12\%$ & 1.17M\ & 95\%\\
+\underline{DPF} & $\underline{95.98 \pm 0.10\%}$ & 1.17M\ & 95\%\\
+\textbf{Global MP} & $\textbf{96.16} \pm \textbf{0.02\%}$ & 1.17M\ & 95\%\\
+\midrule
+SNIP & $94.11 \pm 0.19\%$ & 0.58M\ & 97.5\%\\
+SM & $95.31 \pm 0.20\%$ & 0.58M\ & 97.5\%\\
+DSR & $95.11 \pm 0.07\%$ & 0.58M\ & 97.5\%\\
+\textbf{DPF} & $\textbf{95.84} \pm \textbf{0.04\%}$ & 0.58M\ & 97.5\%\\
+\underline{Global MP} & $\underline{95.68 \pm 0.08\%}$ & 0.58M\ & 97.5\%\\
+\bottomrule
+\end{tabular}
+\vspace{3pt}
+\captionof{table}{Results of SOTA pruning algorithms on WideResNet-28-8 on CIFAR-10. Global MP outperforms or yields comparable performance to other algorithms.}
+\label{table:wrn-28-8_cifar_10}
+\end{table}
+
+\begin{table}[t!]
+\vspace{0pt}
+\small
+\centering
+\begin{tabular}{p{1.5cm}p{2.3cm}p{1.1cm}p{1.1cm}}
+\toprule
+\multirow{1}{*}{Method} & Top-1 Acc & Params. & Sparsity\\
+\midrule
+ResNet-32 & 93.83 $\pm$ 0.12 \% & 0.46M\ & 0.00\%\\
+\midrule
+SNIP & 90.40 $\pm$ 0.26\% & 0.046M\ & 90\%\\
+SM & 91.54 $\pm$ 0.18\% & 0.046M\ & 90\%\\
+DSR & 91.41 $\pm$ 0.23\% & 0.046M\ & 90\%\\
+\underline{DPF} & \underline{92.42 $\pm$ 0.18\%} & 0.046M\ & 90\%\\
+\textbf{Global MP} & $\textbf{92.67} \pm \textbf{0.03\%}$ & 0.046M\ & 90\%\\
+\midrule
+SNIP & 87.23 $\pm$ 0.29\% & 0.023M\ & 95\%\\
+SM & 88.68 $\pm$ 0.22\% & 0.023M\ & 95\%\\
+DSR & 84.12 $\pm$ 0.32\% & 0.023M\ & 95\%\\
+\textbf{DPF} & \textbf{90.94 $\pm$ 0.35\%} & 0.023M\ & 95\%\\
+\underline{Global MP} & \underline{90.65 $\pm$ 0.13\%} & 0.023M\ & 95\%\\
+\bottomrule
+\end{tabular}
+\vspace{3pt}
+\captionof{table}{Results of pruning algorithms on ResNet-32 on CIFAR-10. Global MP outperforms or yields comparable performance to other algorithms.}
+\label{table:resnet32_cifar10}
+\end{table}
+
+\subsubsection{ImageNet}
+\label{sota_imagenet}
+Following the favorable performance on CIFAR-10 dataset, we benchmark Global MP against other competitors in the literature over ImageNet dataset, also known as ILSVRC 2012 dataset. This is a highly compelling dataset as compared to CIFAR-10, featuring around 1.3 million RGB images with 1,000 classes. In the pruning context, it typically serves as an ultimate benchmark and has been utilized by many other papers during comparison. Using this dataset, we compare Global MP with SOTA algorithms like GMP \cite{Zhu2018ToPO}, DSR \cite{ICML-2019-MostafaW}, DNW \cite{DNW}, SM  \cite{sparse_momentum}, RigL \cite{pmlr-v119-evci20a}, DPF \cite{Lin2020Dynamic} and STR \cite{pmlr-v119-kusupati20a}. The two network architectures that we use for this comparison are ResNet-50 and MobileNet-V1 \cite{howard2017mobilenets}, the two most popular architectures for benchmarking on ImageNet \cite{blalock2020state}. We again start from the same initial accuracy for the non-pruned models for all algorithms, either by matching the results in their original papers or reproducing their results whenever their code is available.
+
+The remarkable performance of Global MP becomes clearly visible in ResNet-50 over ImageNet experiments. As can be seen from Table~\ref{table:resnet50_imagenet}, Global MP outperforms all the other competitors in every weight sparsity level from 80\% to 98\%. The first two places at each of these target sparsity levels belong to either the gradual version or the one-shot version of Global MP. Different from CIFAR-10 results, the performance margins that Global MP surpasses the others are also fairly high in ImageNet experiments. For instance, Global MP (Gradual) yields about 2\% higher accuracy at 95\% target sparsity level, while this number goes up to about 5\% at 98\% target sparsity level. This is an important finding that such a simple algorithm like Global MP can highly outperform other competitors that incorporates very complex design choices or computationally demanding procedures.
+
+
+
+\begin{table}[t!]
+\small
+\centering
+\begin{tabular}[t]{p{3cm}p{0.9cm}p{0.8cm}p{1cm}p{0.8cm}}
+\toprule
+\multirow{1}{*}{Method} & Top-1 Acc & Params & Sparsity & FLOPs pruned\\
+\midrule
+ResNet-50 & 77.0\% & 25.6M\ & 0.00\% & 0.0\%\\
+\midrule
+GMP & 75.60\% & 5.12M\ & 80.00\% & 80.0\%\\
+DSR*\#\ & 71.60\% & 5.12M\ & 80.00\% & 69.9\%\\
+DNW & 76.00\% & 5.12M\ & 80.00\% & 80.0\%\\
+SM & 74.90\% & 5.12M\ & 80.00\% & -\\
+SM + ERK & 75.20\% & 5.12M\ & 80.00\% & 58.9\%\\
+RigL* & 74.60\% & 5.12M\ & 80.00\% & 77.5\%\\
+RigL + ERK & 75.10\% & 5.12M\ & 80.00\% & 58.9\%\\
+DPF & 75.13\% & 5.12M\ & 80.00\% & 80.0\%\\
+STR & 76.19\% & 5.22M\ & 79.55\% & 81.3\%\\
+\textbf{Global MP (One-shot)} & \textbf{76.84\%} & 5.12M & 80.00\% & 72.4\%\\
+\underline{Global MP (Gradual)} & \underline{76.12\%} & 5.12M & 80.00\% & 76.7\%\\
+\midrule
+GMP & 73.91\% & 2.56M\ & 90.00\% & 90.0\%\\
+DNW & 74.00\% & 2.56M\ & 90.00\% & 90.0\%\\
+SM & 72.90\% & 2.56M\ & 90.00\% & 60.1\%\\
+SM + ERK & 72.90\% & 2.56M\ & 90.00\% & 76.5\%\\
+RigL* & 72.00\% & 2.56M\ & 90.00\% & 87.4\%\\
+RigL + ERK & 73.00\% & 2.56M\ & 90.00\% & 76.5\%\\
+DPF\# & 74.55\% & 4.45M\ & 82.60\% & 90.0\%\\
+STR & 74.73\% & 3.14M\ & 87.70\% & 90.2\%\\
+\textbf{Global MP (One-shot)} & \textbf{75.28\%} & 2.56M & 90.00\%  & 82.8\%\\
+\underline{Global MP (Gradual)} & \underline{74.83\%} & 2.56M & 90.00\%  & 87.8\%\\
+\midrule
+GMP & 70.59\% & 1.28M\ & 95.00\% & 95.0\%\\
+DNW & 68.30\% & 1.28M\ & 95.00\% & 95.0\%\\
+RigL* & 67.50\% & 1.28M\ & 95.00\% & 92.2\%\\
+RigL + ERK & 70.00\% & 1.28M\ & 95.00\% & 85.3\%\\
+STR & 70.97\% & 1.33M\ & 94.80\% & 95.6\%\\
+STR & 70.40\% & 1.27M\ & 95.03\% & 96.1\%\\
+STR & 70.23\% & 1.24M\ & 95.15\% & 96.0\%\\
+\underline{Global MP (One-shot)} & \underline{71.56\%} & 1.20M & 95.30\% & 89.3\%\\
+\textbf{Global MP (Gradual)} & \textbf{72.14\%} & 1.20M & 95.30\% & 93.1\%\\
+\midrule
+GMP & 57.90\% & 0.51M\ & 98.00\% & 98.0\%\\
+DNW & 58.20\% & 0.51M\ & 98.00\% & 98.0\%\\
+STR & 61.46\% & 0.50M & 98.05\% & 98.2\%\\
+\underline{Global MP (One-shot)} & \underline{61.80}\% & 0.50M & 98.05\% & 93.7\%\\
+\textbf{Global MP (Gradual)} & \textbf{66.57}\% & 0.50M & 98.05\% & 96.2\%\\
+\bottomrule
+\end{tabular}
+\vspace{3pt}
+\captionof{table}{Results on ResNet-50 on ImageNet. Global MP outperforms SOTA pruning algorithms at all sparsity levels. * and \# imply the first and the last layer are dense, respectively.}
+\label{table:resnet50_imagenet}
+\end{table}
+
+\begin{figure}[t!]
+\begin{minipage}[t]{0.49\textwidth}
+\centering
+\includegraphics[trim={0 0 0 1.3cm}, clip, width=\textwidth]{Figures/ResNet50_results.pdf}
+\caption{Global MP surpasses all the unstructured pruning baselines at all sparsity ratios on ResNet-50 over ImageNet, showcasing that it is state-of-the-art for weight sparsity.}
+\label{fig:resnet50_sparsity}
+\end{minipage}
+\end{figure}
+
+We also test another architecture on ImageNet, MobileNet-V1, which is a much smaller and more efficient architecture than ResNet-50. In this case, strong competitors are limited in the literature; only two of the aforementioned algorithms are able to present competitive results due to the fact that this architecture has less redundancy. We benchmark Global MP with two other competitors at two target sparsity levels: 75\% and 90\%. As can be seen in Table~\ref{table:mobilenetv1_imagenet}, Global MP outperforms SOTA algorithms by a margin of more than 2\% at 75\% sparsity, which is a significant result given how compact the MobileNet-V1 is. At 90\% sparsity on the other hand, the same compactness causes Global MP to over-prune certain layers in the network, which result in a significant accuracy drop. This is the above-mentioned problem of layer-collapse, and it is easily rectified when MT is introduced to Global MP. We use an MT value of 0.2\% which is determined using the same search procedure as any other hyper-parameter. The accuracy of Global MP at 90\% sparsity goes beyond SOTA again with such a simple fix, and the accuracy margin to the next competitor gets higher than 2\%. MT comes at the cost of a less FLOPs reduction, but it is useful especially for accuracy-critical applications where decreasing the size of the network is still important. All these findings clearly indicates that Global MP is a simple yet competitive pruning algorithm.
+
+\begin{table}[t!]
+\centering
+\small
+\begin{tabular}{p{3cm}p{0.9cm}p{0.8cm}p{1cm}p{0.8cm}}
+\toprule
+\multirow{1}{*}{Method} & Top-1 Acc & Params. & Sparsity & FLOPs pruned\\
+\midrule
+MobileNet-V1 & 71.95\% & 4.21M\ & 0.00\% & 0.0\%\\
+\midrule
+GMP & 67.70\% & 1.09M\ & 74.11\% & 71.4\%\\
+\underline{STR} & \underline{68.35\%} & 1.04M\ & 75.28\% & 82.2\%\\
+\textbf{Global MP} & \textbf{70.74\%} & 1.04M & 75.28\% & 68.9\%\\ 
+\midrule
+GMP & 61.80\% & 0.46M\ & 89.03\% & 85.6\%\\
+STR & 61.51\% & 0.44M\ & 89.62\% & 93.0\%\\
+\underline{Global MP} & \underline{59.49\%} &0.42M\ & 90.00\% & 83.7\%\\
+\textbf{Global MP with MT} & \textbf{63.94\%} & 0.42M & 90.00\% & 72.9\%\\
+\bottomrule
+\end{tabular}
+\captionof{table}{Results of pruning algorithms on MobileNet-V1 on ImageNet. Global MP with MT surpasses SOTA algorithms on weight sparsity.}
+\label{table:mobilenetv1_imagenet}
+\end{table}
+
+\subsection{Generalizing to other domains and RNN architectures}
+\label{rnn}
+We experiment with Global MP on other domains and non-convolutional networks as well to measure the generalizability of the algorithm on different domains and network types. We experiment on a FastGRNN model \cite{Kusupati2018FastGRNNAF} on the HAR-2 Human Activity Recognition dataset \cite{HAR}. HAR-2 dataset is a binarized version of the 6-class Human Activity Recognition dataset. From the full-rank model with $r_W = 9$ and $r_U = 80$ as suggested on the STR paper \cite{pmlr-v119-kusupati20a}, we apply Global MP on the matrices $W_1$ and $W_2$. To do this, we find the weight mask by ranking the columns of $W_1$ and $W_2$ based on their absolute sum, then we prune the $9 - r_W^{new}$ lowest columns and $80 - r_U^{new}$ lowest columns from $W_1$ and $W_2$ respectively. In the end, we fine-tune this pruned model by retraining it with FastGRNN's trainer and applying the weight mask at every epoch. We test Global MP under different network configurations. We find that Global MP surpasses the other baselines on all the configurations (Table \ref{table:fastgrnn_har2}) and successfully prunes the model on a very different architecture and domain.
+
+\subsection{Mitigating Layer-Collapse}
+\label{high_sparsity}
+Layer-collapse is an issue that many pruning algorithms run into \cite{NEURIPS2020_46a4378f, Lee2020A, hayou2021robust} and occurs when an entire layer is pruned by the pruning algorithm, rendering the network untrainable. We investigate this phenomena and find that the performance of a pruning algorithm can be substantially affected by the architecture of the neural network being pruned, especially in the high sparsity domain. We conduct experiments on MobileNet-V2 and WRN-22-8 models over the CIFAR-10 dataset. We report results averaged over multiple runs where each run uses a different pre-trained model to provide more robustness. We first prune a WRN-22-8 model to 99.9\% sparsity. We find that at 99.9\% sparsity, the WRN is still able to get decent accuracy (Table \ref{table:highsparsity_wrn}). We then prune a MobileNet-V2 model to 98\% sparsity. For the MobileNet, however, accuracy drops to 10\% using only Global MP, and the model is not able to learn (Table \ref{table:highsparsity_mnet}).
+
+\begin{figure*}[h!]
+    \centering
+    \includegraphics[trim=3cm 2.7cm 12cm 2cm,clip,width=0.7\textwidth]{Figures/architectures.pdf}
+    \caption{Difference in architectures between WRN and MobileNet. WRN does not have any prunable residual connections in the last layers (dotted lines) while MobileNet does. This leads to different pruning behaviors on the two architectures.}
+    \vspace*{-0.3cm}
+    \label{fig:highsparsity_archs}
+\end{figure*}
+
+\begin{figure*}[h!]
+    \centering
+    \includegraphics[trim=1.5cm 11cm 1.5cm 11cm,clip,width=\textwidth]{Figures/MobileNetv2-remaining_weights_93.89.pdf}
+    \vspace*{-0.9cm}
+    \caption{For MobileNet-V2 at 98\% sparsity, MT helps retain some weights in the heavily pruned layers (Layers 55, 56, and 57) and allows the model to learn successfully.}
+    \vspace*{-0.3cm}
+    \label{fig:highsparsity_mnet}
+\end{figure*}
+
+\begin{figure*}[h!]
+    \centering
+    \includegraphics[trim=1.5cm 11cm 1.5cm 11cm,clip,width=\textwidth]{Figures/MobileNetv2-remaining_weights_3runs_GP.pdf}
+    \vspace*{-0.9cm}
+    \caption{Layer-wise pruning results produced by Global MP on MobileNet-V2 model on CIFAR-10. Pruning is conducted on three different pre-trained models and the pruning results across the three runs are very stable.}
+    \vspace*{-0.3cm}
+    \label{fig:highsparsity_mnet_gp}
+\end{figure*}
+
+The reason for this wide discrepancy in learning behavior lies in the shortcut connections \cite{DBLP:journals/corr/HeZRS15}. Both WRN-22-8 and MobileNet-V2 use shortcut connections, however, their placement is different. Referring to Fig. \ref{fig:highsparsity_archs}, WRN uses identity shortcut connections from Layer 20 to Layer 23. This type of shortcut connections are simple identity mappings and do not require any extra parameters, and hence, they do not count towards the weights. However, MobileNet-V2 uses a convolutional shortcut mapping from Layer 52 to Layer 57 and hence, it adds to the model's weights, and thus, it is prunable layer for the pruning algorithm. Global MP completely prunes the two preceding layers before the last layer. However, because WRN uses identity mappings, it is still able to relay information to the last layer, and the model is still able to learn, whereas MobileNet-V2 faces catastrophic accuracy drop due to layer-collapse.
+
+Pruning algorithms can be susceptible to such catastrophic layer-collapse issues especially in the high sparsity domain. The MT rule can help overcome this issue. Retaining a small MT of 0.02\% was sufficient for the MobileNet-V2 model to avoid layer-collapse and learn successfully. We provide layer-wise weight snapshot for the model, before and after applying MT, to illustrate what MT does (Fig. \ref{fig:highsparsity_mnet}). Hence, retaining a small amount of weights can help in the learning dynamics of models in high sparsity settings.
+
+\begin{table}[t!]
+\centering
+\small
+\begin{tabular}{p{2.6cm}p{1.45cm}p{0.5cm}p{0.5cm}}
+\toprule
+\multirow{1}{*}{Method} & Top-1 Acc & $r_W$ & $r_U$\\
+\midrule
+FastGRNN & 96.10\% & 9\ & 80\\
+\midrule
+Vanilla Training & 94.06\% & 9\ & 8\\
+\underline{STR} & \underline{95.76\%} & 9\ & 8\\
+\textbf{Global MP} & \textbf{95.89}\% & 9 & 8\\
+\midrule
+Vanilla Training & 93.15\% & 9\ & 7\\
+\underline{STR} & \underline{95.62\%} & 9\ & 7\\
+\textbf{Global MP} & \textbf{95.72}\% & 9 & 7\\
+\midrule
+Vanilla Training & 94.88\% & 8\ & 7\\
+\underline{STR} & \underline{95.59\%} & 8\ & 7\\
+\textbf{Global MP} & \textbf{95.62}\% & 8 & 7\\
+\bottomrule
+\end{tabular}
+\captionof{table}{Results on FastGRNN on HAR-2 dataset. Global MP outperforms other pruning algorithms.}
+\label{table:fastgrnn_har2}
+\end{table}
+
+\begin{table}[t!]
+\small
+\begin{tabular}{p{1.5cm}p{0.8cm}p{2.2cm}p{2.2cm}}
+\toprule
+\multirow{2}{*}{Method} & \multicolumn{2}{c}{WRN-22-8 on CIFAR-10} \\ \cmidrule(lr){2-4}
+& Sparsity & Starting Acc. & Pruned Acc.\\
+\midrule
+\textbf{Global MP} & 99.9\% & $94.07\% \pm 0.05\%$ & $\textbf{67.68\%} \pm \textbf{0.78\%}$ \\
+\bottomrule
+\end{tabular}
+\captionof{table}{Performance of Global MP on WideResNet-22-8 in the high sparsity regime at 99.9\% sparsity.}
+\label{table:highsparsity_wrn}
+\end{table}
+
+\begin{table}[t!]
+\small
+\centering
+\begin{tabular}{m{1.5cm}m{0.7cm}m{2.2cm}m{2.2cm}}
+\toprule
+\multirow{2}{*}{Method} & \multicolumn{2}{c}{MobileNet-V2 on CIFAR-10} \\ \cmidrule(lr){2-4}
+& Sparsity & Starting Acc. & Pruned Acc.\\
+\midrule
+Global MP & 98.0\% & $94.15\%\pm0.23\%$ & $10\%$ \textit{(Unable to learn)} \\
+\textbf{Global MP with MT} & 98.0\% & $94.15\% \pm 0.23\%$ & $\textbf{82.97\%} \pm \textbf{0.57\%}$\\
+\bottomrule
+\end{tabular}
+\captionof{table}{Adding MT enables the MobileNet-V2 model to learn in the high sparsity regime.}
+\label{table:highsparsity_mnet}
+\end{table}
+\section{Discussion, Limitations and Future Work}
+We have seen that Global MP works very well and achieves superior performance on all the datasets and architectures tested. It can work as a one-shot pruning algorithm or as a gradual pruning algorithm. It is very stable and produces similar pruning results across multiple runs and pre-trained models (Fig. \ref{fig:highsparsity_mnet_gp}). It also surpasses SOTA algorithms on ResNet-50 over ImageNet and sets the new SOTA results across many sparsity levels. At the same time, Global MP has very low algorithmic complexity and arguably is one of the simplest pruning algorithms. It is simpler than many other pruning algorithms like custom loss based regularization, RL-based procedures, heuristics-based layerwise pruning ratios, etc. It just ranks weights based on their magnitude and removes the smallest ones. This raises a key question on whether complexity is really required for pruning and if complex pruning algorithms have tangible advantages over naive baselines. According to our results, the advantages seem to be narrow. The only advantages maybe that while Global MP gets competitive FLOPs performance, some algorithms may have higher FLOPs sparsity, though at the cost of accuracy. Therefore, practitioners may opt for another algorithm to get SOTA FLOPs performance if the accuracy loss incurred is reasonable for their application.
+
+A limitation of Global MP is that the theoretical foundations for it have not been well-established yet. While empirically it gets superior performance, we still do not understand mathematically why this is the case. A richer understanding of the dynamics of Global MP can enable researchers to build upon it and further improve its performance, and it is an area for future work. Another area for future work is jointly optimizing both weights and FLOPs during the pruning process. Currently, Global MP is used to reach a certain parameter sparsity, and FLOPs reduction comes as a by-product. In the future, FLOPs can also be added to the optimization function to jointly sparsify both parameters and FLOPs. This can lead to further gains in the FLOPs performance of Global MP.
+\section{Conclusions}
+\label{conclusion}
+
+In this work, we raised the question of whether utilizing complex and computationally demanding algorithms are really required to achieve superior DNN pruning results. This stemmed from the hike in the number of new pruning algorithms proposed in the recent years, each with a marginal performance increment, though with complicated procedures, which makes it hard for a practitioner to select the correct algorithm and the best set of algorithm-specific hyper-parameters for their application. We benchmarked these algorithms against a naive baseline, namely, Global MP, which does not incorporate any complex procedure or any hard-to-tune hyper-parameter. Despite its simplicity, we found that Global MP outperforms many SOTA pruning algorithms over multiple datasets such as CIFAR-10, ImageNet and HAR-2; with different network architectures such as ResNet-50 and MobileNet-V1; and at various sparsity levels from 50\% up to 99.9\%. We also presented a few variants of Global MP, i.e., one-shot and gradual, together with a new, complementary technique, MT. We demonstrated that through the selection of an appropriate variant of Global MP, the performance at different metrics, i.e., accuracy vs. weight sparsity or accuracy vs. FLOPs sparsity, can be maximized. While our results serves as an empirical proof that a naive pruning algorithm like Global MP can achieve SOTA results, it remains as a promising future research direction to shed light into theoretical aspects of how such performance is possible with Global MP. Another future direction includes extending the capabilities of Global MP, such as jointly optimizing both FLOPs and the number of weights.
+
+\section{Acknowledgement}
+
+This research is supported by the Agency for Science, Technology and Research (A*STAR) under its AME Programmatic Funds (Project No: A1892b0026 and A19E3b0099). Any opinions, findings and conclusions or recommendations expressed in this material are those of the author(s) and do not reflect the views of the A*STAR.
+\subsection{Hyper-parameters and Experimental Setup}
+\label{hyperparams}
+No data augmentation is done apart from standard data pre-processing. Difference in batch size for training and testing in some experiments is due to GPU RAM availability. Averaged results are reported over three runs.
+
+\begin{table*}[h]
+\vspace{-1cm}
+\centering
+\small
+\begin{tabular}{p{2cm}p{2cm}p{2cm}}
+\toprule
+\multicolumn{3}{c}{MT Values} \\ 
+\cmidrule(lr){1-3}
+Experiment & Sparsity & MT Value\\
+\midrule
+Table 4 & 90\% &  0.2\% \\
+\midrule
+Table 7 & 98\% &  0.02\% \\
+\bottomrule
+\end{tabular}
+\label{table:MT_values}
+\end{table*}
+
+\begin{table*}[hbt!]
+\vspace{-0.2cm}
+\centering
+\small
+\begin{tabular}{lccccccc}
+\toprule
+\multicolumn{8}{c}{\centering{Setup for Table 2}} \\ \cmidrule(lr){1-8}
+\multirow{2}{*}{Stage} & \multirow{2}{*}{Epochs} & Batch & \multirow{2}{*}{Momentum} & Weight & Initial & LR & \multirow{2}{*}{Nesterov}\\
+ & & Size & & Decay & LR & Scheduler & \\
+\midrule
+Training & 200 & 128 & 0.875 & 5e-4 & 0.1 & Cosine & Yes\\
+Finetuning (GP 90\%) & 200 & 128 & 0.9 & 0 & 0.0512 & Cosine & Yes\\
+Finetuning (GP 95\%) & 200 & 128 & 0.9 & 2e-5 & 0.0256 & Cosine & Yes\\
+Finetuning (GP 97.5\%) & 200 & 128 & 0.9 & 0 & 0.0128 & Cosine & Yes\\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\begin{table*}[hbt!]
+\vspace{-0.1cm}
+\centering
+\small
+\begin{tabular}{lccccccc}
+\toprule
+\multicolumn{8}{c}{\centering{Setup for Table 3}} \\ \cmidrule(lr){1-8}
+\multirow{2}{*}{Stage} & \multirow{2}{*}{Epochs} & Batch & \multirow{2}{*}{Momentum} & Weight & Initial & LR & \multirow{2}{*}{Nesterov}\\
+ & & Size & & Decay & LR & Scheduler & \\
+\midrule
+Training & 300 & 128 & 0.9 & 0.001 & 0.05 & Cosine & No\\
+Finetuning (GP 90\%) & 300 & 128 & 0.9 & 0.001 & 0.01 & Cosine & No\\
+Finetuning (GP 95\%) & 300 & 128 & 0.9 & 1e-5 & 0.01 & Cosine & No\\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\begin{table*}[hbt!]
+\vspace{-0.1cm}
+\centering
+\small
+\begin{tabular}{lccccccc}
+\toprule
+\multicolumn{8}{c}{\centering{Setup for Table 4}} \\ \cmidrule(lr){1-8}
+\multirow{2}{*}{Stage} & \multirow{2}{*}{Epochs} & Batch & \multirow{2}{*}{Momentum} & Weight & Initial & LR & Label\\
+ & & Size & & Decay & LR & Scheduler & Smoothing \\
+\midrule
+Training & 100 & 256 & 0.875 & 0.000031 & 0.256 & Cosine (warmup = 5) & 0.1\\
+One-shot GP 80\% & 100 & 256 & 0.875 & 0.000023 & 0.0256 & Cosine (warmup = 5) & 0.1\\
+Gradual GP 80\% & 100 & 256 & 0.875 & 0.000031 & 0.256 & Cosine (warmup = 5) & 0.1\\
+One-shot GP 90\% & 100 & 256 & 0.875 & 0.000007 & 0.1024 & Cosine (no warmup) & 0.1\\
+Gradual GP 90\% & 100 & 256 & 0.875 & 0.000031 & 0.256 & Cosine (warmup = 5) & 0.1\\
+One-shot GP 95.3\% & 100 & 256 & 0.95 & 0.0 & 0.0512 & Cosine (no warmup) & 0.05\\
+Gradual GP 95.3\% & 100 & 256 & 0.875 & 0.000031 & 0.256 & Cosine (warmup = 5) & 0.1\\
+One-shot GP 98.05\% & 100 & 256 & 0.95 & 0.0 & 0.0512 & Cosine (no warmup) & 0.05\\
+Gradual GP 98.05\% & 100 & 256 & 0.875 & 0.000031 & 0.256 & Cosine (warmup = 5) & 0.1\\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\begin{table*}[hbt!]
+\vspace{-0.1cm}
+\centering
+\small
+\begin{tabular}{lccccccc}
+\toprule
+\multicolumn{8}{c}{\centering{Setup for Table 5}} \\ \cmidrule(lr){1-8}
+\multirow{2}{*}{Stage} & \multirow{2}{*}{Epochs} & Batch & \multirow{2}{*}{Momentum} & Weight & Initial & LR & Label\\
+ & & Size & & Decay & LR & Scheduler & Smoothing \\
+\midrule
+Training & 100 & 256 & 0.875 & 3.1e-5 & 0.256 & Cosine (warmup=5) & 0.1\\
+Finetuning (GP 75\%) & 120 & 256 & 0.875 & 1e-5 & 0.0512 & Cosine (no warmup) & 0.1\\
+Finetuning (GP 90\%) & 120 & 256 & 0.875 & 1e-5 & 0.0256 & Cosine (no warmup) & 0.1\\
+Finetuning (GP + MT 90\%) & 120 & 256 & 0.875 & 0 & 0.0512 & Cosine (no warmup) & 0.1\\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\begin{table*}[hbt!]
+\vspace{-0.1cm}
+\centering
+\small
+\begin{tabular}{lccccc}
+\toprule
+\multicolumn{6}{c}{\centering{Setup for Table 6}} \\ \cmidrule(lr){1-6}
+Stage & Epochs & Batch Size & Initial LR & hd &  Optimizer \\
+\midrule
+Training & 300 & 100 & 0.0064 & 80 & Adam\\
+Finetuning (GP 9,8) & 300 & 64 & 0.5 & 80 & Adam\\
+Finetuning (GP 9,7) & 300 & 100 & 0.5 & 80 & Adam\\
+Finetuning (GP 8,7) & 300 & 100 & 0.55 & 80 & Adam\\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\begin{table*}[hbt!]
+\vspace{-0.1cm}
+\centering
+\small
+\begin{tabular}{lccccccc}
+\toprule
+\multicolumn{8}{c}{\centering{Setup for Table 7}} \\ \cmidrule(lr){1-8}
+\multirow{2}{*}{Stage} & \multirow{2}{*}{Epochs} & Batch & \multirow{2}{*}{Momentum} & Weight & Initial & LR & \multirow{2}{*}{Nesterov}\\
+ & & Size & & Decay & LR & Scheduler & \\
+\midrule
+Training & 30 & 256 & 0.9 & 5e-4 & 0.1 & Step decay (Step size 25, gamma 0.1) & Yes\\
+Finetuning (GP 99.9\%) & 80 & 64 & 0.9 & 5e-4 & 0.1 & Step decay (Step size 40, gamma 0.1) & Yes\\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\begin{table*}[t!]
+\centering
+\small
+\begin{tabular}{lccccccc}
+\toprule
+\multicolumn{8}{c}{\centering{Setup for Table 8}} \\ \cmidrule(lr){1-8}
+\multirow{2}{*}{Stage} & \multirow{2}{*}{Epochs} & Batch & \multirow{2}{*}{Momentum} & Weight & Initial & LR & \multirow{2}{*}{Nesterov}\\
+ & & Size & & Decay & LR & Scheduler & \\
+\midrule
+Training & 200 & 450 & 0.9 & 5e-4 & 0.1 & Step decay (Step size 25, gamma 0.56) & Yes\\
+Finetuning (GP 98\%) & 200 & 64 & 0.9 & 5e-4 & 0.1 & Step decay (Step size 25, gamma 0.56) & Yes\\
+Finetuning (GP + MT 98\%) & 200 & 64 & 0.9 & 5e-4 & 0.1 & Step decay (Step size 25, gamma 0.56) & Yes\\
+\bottomrule
+\end{tabular}
+\end{table*}

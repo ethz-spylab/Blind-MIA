@@ -1,0 +1,331 @@
+\section{Introduction}
+
+\begin{figure}[t]
+  \begin{center}
+   \includegraphics[width=0.98\linewidth]{figs/overall_archi_230126_2333.png}
+  \end{center}
+    \vspace{-3mm}
+  \caption{The model architectures for representation types.}
+  \label{fig:overall_archi}
+    \vspace{-4mm}
+\end{figure}
+
+One of the main challenges in deep reinforcement learning (RL) from pixels is determining how to effectively represent the state of the environment. Many previous approaches have represented the state using single-vector representations \citep{dqn, vae_ood,dqn,visuomotor}, encoding the entire input image into a single vector which is then used as input for the policy network (Figure \ref{fig:overall_archi}a). However, such representations may fail to capture important relationships and interactions between entities in the scene \citep{rn}. One way to address this limitation is to use a region-based representation, where an image is encoded into a grid of representations \citep{rdrl} which are then combined using a transformer encoder that allows for explicit modeling of interactions between the different regions (Figure \ref{fig:overall_archi}b).
+
+Recent work in learning unsupervised Object-Centric Representations (OCR) provides another potentially promising way of representing the state of the scene \citep{air,spair,space,cswm, op3, monet,iodine,genesis,genesisv2,sa,slate}.
+These approaches learn a structured visual representation from images without the need for labels, modeling each image as a composition of objects.
+They provide a more semantically explicit way of modeling the entities in the scene than region-based representation models and can be similarly combined using a transformer encoder to model the relationships between the objects (Figure \ref{fig:overall_archi}c).
+Thus, they have the promise of being an effective pre-training technique to learn representations for downstream RL.
+
+Most previous research in OCRs, however, have evaluated OCRs only indirectly in the context of reconstruction loss, segmentation quality, or object property prediction \citep{generalization_ocr}. 
+While some studies have applied OCRs to a few specific RL problems \citep{rim, smorl, cobra, load}, OCR pre-training has not been systematically and thoroughly evaluated for RL tasks. Therefore, many aspects of the relationship between OCR pre-training and RL remain unclear and further research is needed to fully understand its potential impact. This is of particular importance because many properties often show quite different behavior when it is applied to reinforcement learning due to the difficulties related to non-stationarity and reward sparsity.
+
+In this study, we investigate the effectiveness of OCR pre-training as a representation learning framework for RL through empirical experimentation. 
+To achieve this, we propose a new benchmark that covers a range of object-centric tasks such as object interaction and relational reasoning \citep{stephens2008one}. The benchmark is set in a visually simple 2D scene (shown in Figure \ref{fig:task_illustration}) that current unsupervised OCR methods can successfully decompose, allowing us to isolate the effects of different experiment parameters and draw specific conclusions about when OCR pre-training is effective.
+We further evaluate the performance in a more visually complex 3D scene \citep{causalworld} to explore a more realistic scenario where OCR pre-training may be beneficial.
+
+\begin{figure}[t]
+  \begin{center}
+   \includegraphics[width=0.93\linewidth]{figs/icml_bar_overall_23-01-26-23-31-24.png}
+    \vspace{-3mm}
+  \end{center}
+  \caption{The performance comparison of unsupervised object-centric representation (OCR) pre-training against other representation types in object-centric tasks. The results indicate that OCR pre-training demonstrates a significant performance gap compared to other representations and slightly worse performance than ground truth states in the comparison tasks where relational reasoning is a crucial aspect. However OCR pre-training performance is similar to or worse than baselines for other tasks.}
+  \label{fig:overall_regime}
+    \vspace{-2mm}
+\end{figure}
+
+Our investigation includes evaluating a series of hypotheses that have been presumed in prior work but not systematically investigated for OCR pre-training \citep{van2019perspective,building,binding, oomdp, schemanet, rdrl,lrn,rim,load,smorl}. The results of our investigation provide insights beyond these hypotheses. For instance, one of the hypotheses posits that OCR leads to improved performance in object-centric tasks \citep{smorl}.
+However, our findings, as illustrated in Figure \ref{fig:overall_regime}, indicate that while OCR pre-training can indeed lead to improved performance in relational-reasoning tasks, it may not be as beneficial in other tasks even if they are object-centric.
+Another common hypothesis suggests that decompositional representations are beneficial for reasoning tasks \citep{binding,van2019perspective,building}.
+From our investigation, we find that the \textit{type} of the decompositional representation is crucial -- OCR pre-training performs well on relational-reasoning tasks, but fixed region representations, another type of decompositional representation, failed to solve these tasks.
+Additionally, we also investigate important characteristics of applying OCR pre-training to RL, such as performance in a visually complex environment and what kind of pooling layer is appropriate to aggregate the object representations.
+
+The main contribution of this paper is to provide insights into the effectiveness of OCR pre-training in RL tasks and the potential and limitations of its use through empirical evidence. To accomplish this, we make the following specific contributions: (1) propose a new simple benchmark to systematically validate OCR pre-training for RL tasks, (2) evaluate OCR pre-training performance compared with various baselines on this benchmark, and (3) systematically analyze different aspects of OCR pre-training to develop a better understanding of when and why OCR pre-training is beneficial for RL. Additionally, we will release the benchmark and our experiment framework code to the community.
+
+\begin{figure*}[t]
+    \centering
+    \includegraphics[width=0.85\textwidth]{figs/benchmark_samples.png}
+    \caption{Samples from the dataset and five tasks in our benchmark; Object Goal / Object Interaction / Object Comparison / Property Comparison / Object Reaching tasks. In the 2D tasks ((b) - (e)), the red ball is always the agent. See main text for details about each task. In the robotics task (f), the goal is to use the green robotic finger to touch the blue object before touching any of the distractor objects.}
+    \label{fig:task_illustration}
+\end{figure*}
+ 
+\section{Related Work} \label{sec:related_work}
+
+\textbf{Object-Centric Representation Learning}.
+Recent research in machine learning has focused on developing unsupervised object-centric representation (OCR) learning methods \citep{air,spair,sqair,space,scalor,cswm, op3, monet,iodine,genesis,genesisv2,sa,gswm,slate,savi,savi++,steve}. These methods aim to learn structured visual representations from images without the need for labels, modeling each image as a composition of objects. The motivation behind this research is the potential benefits for downstream tasks such as improved generalization and relational reasoning \citep{binding, van2019perspective}.
+
+In this paper, we investigate state-of-the-art OCR learning methods such as IODINE \citep{iodine}, Slot-Attention \citep{sa}, and SLATE \citep{slate}. IODINE represents objects with multiple latent variables through iterative refinement. Slot-Attention uses a similar approach but incorporates an attention mechanism to refine the variables. SLATE improves upon Slot-Attention by using a Transformer-based decoder instead of a pixel-mixture decoder, resulting in better generalization and comparable reconstruction performance. Additionally, we also implement a larger version of Slot-Attention (Slot-Attention-Large) to fairly compare the two methods with similar model sizes.
+
+\textbf{Object-Centric Representations and Reinforcement Learning}. 
+Reinforcement learning (RL) is a frequently mentioned downstream task where OCR are thought to be beneficial due to their potential for improved generalization, reasoning, and sample efficiency \citep{rdrl,garnelo2016towards,oomdp,schemanet,crafter_cnnfm,lrn,visuomotor}. However, to our knowledge, there have been no studies that systematically and thoroughly demonstrate these benefits.
+\citet{rim} evaluated OCR for RL through end-to-end learning, which may lead to task-specific representations that lack the strengths of unsupervised OCR learning such as sample efficiency, generalization, and reasoning.
+\citet{smorl} investigated OCR pre-training but applied a bounding box-based method \citep{scalor} and proposed/evaluated a new policy for the limited regime of goal-conditioned RL. 
+\citet{cobra} evaluate OCR pre-training for a synthetic benchmark but a simple search is used rather than policy learning.
+
+Previous studies have also investigated the use of decomposed representations in RL \citep{rdrl,garnelo2016towards,oomdp,schemanet,crafter_cnnfm,lrn,visuomotor}. Many of these works use CNN feature maps \citep{rdrl, crafter_cnnfm, visuomotor} as the representation or their own encoders \citep{garnelo2016towards}. Other studies have used ground truth states \citep{oomdp, schemanet, lrn}, and these representations have been implemented through separate object detectors and encoders \citep{oomdp, load}. The effectiveness of pre-trained representations for out-of-distribution generalization of RL agents is studied in \citep{vae_ood}, but only the single-vector representation (i.e. VAE) is evaluated. In our work, we use a similar model as a baseline to compare with our pre-trained OCR model.
+
+\section{Experimental Setup}
+
+In this section, we provide an overview of our experimental setup.
+We first discuss the OCR pre-training models and baselines we chose to evaluate and explain how the representations are used in a policy for RL.
+We then introduce the tasks used in our experiments detailing the motivation behind each task.
+ 
+\subsection{Models} \label{sec:model}
+
+Each model consists of (1) an \textbf{encoder} that takes as input an image observation and outputs a latent representation and (2) a \textbf{pooling layer} that combines the latent representation into a single vector suitable to be used for the value function and policy network of an RL algorithm. We use PPO \citep{ppo} for all our experiments. Detailed information about the architecture and hyperparameters is in Appendix \ref{appx:model}.
+
+\begin{comment}
+\begin{table*}[t]
+    \centering
+    \begin{tabular}{@{}lccc@{}}
+    \toprule
+                                                      & \multicolumn{2}{c}{Training Regimes}                                               \\ \cmidrule(l){2-3}
+    Representation Types                               & End-to-end Learning                             & Pre-training                 \\ \midrule
+    \multirow{3}{14em}{Single-vector Representation}    & \multirow{2}{15em}{CNN \citep{dqn}}       & VAE \citep{vae_ood}          \\
+                                                      &                                                 & MAE-CLS \citep{mvp}         \\
+                                                      &                                                 & SLATE-CNN \citep{visuomotor}\\\midrule
+    \multirow{1}{14em}{Fixed-region Representation}   & \multirow{1}{15em}{CNNFeat \citep{rdrl}}     & MAE-Patch                   \\\midrule
+    \multirow{4}{14em}{Object-Centric Representation} & \multirow{4}{15em}{MultiCNNs \citep{cswm}}     & SLATE \citep{slate}          \\
+                                                      &                                                 & Slot-Attention \citep{sa}    \\
+                                                      &                                                & Slot-Attention-Large          \\
+                                                      &                                                & IODINE \citep{iodine}         \\ \bottomrule
+                                 
+    \end{tabular}
+     \caption{Summary of Evaluated Encoders}
+     \label{tab:rep_regime_summ}
+ \end{table*}
+\end{comment}
+
+ \textbf{Encoders.}
+To investigate OCR pre-training, we evaluated three types of representations (single-vector representation, fixed-region representation, and Object-Centric Representation (OCR)) and two training regimes for each type (end-to-end learning and pre-training). Single-vector representations encode the observation to a single vector which is used in the downstream policy.
+Fixed-region representations use multiple vectors to represent the image, each corresponding to a region of the observation such as a mini-patch.
+For our experiments, we use the CNN feature map \citep{rn,rdrl} for end-to-end learned fixed-region representations and the mini-patch representations from pre-trained Masked AutoEncoder (MAE) \citep{mae} for pre-trained fixed-region representations.
+Since the fixed-region representation can support an explicit interaction architecture, such as a Transformer encoder, it can be a stronger baseline than single-vector representations.
+For end-to-end trained OCR, we use an encoder consisting of multiple CNN encoders \citep{cswm, vin}.
+The pre-trained OCR methods we use in our study are described in Section \ref{sec:related_work}.
+The evaluated encoders are summarized in Table \ref{tab:rep_regime_summ}.
+
+\textbf{Pooling Layers.}
+In order to use the three types of representations for RL, we implement different pooling layers for each type. For single-vector representations, an MLP (or a CNN-MLP \citep{visuomotor} in the case of SLATE-CNN) is used to obtain a single-vector representation.
+For region and object-centric representations, a Transformer encoder \citep{transformer} is used.
+For fixed-region representations, we add a positional embedding to identify the location of each region.
+This is not needed for object-centric representations because the representations are order-invariant.
+The overall architectures are shown in Figure \ref{fig:overall_archi}.
+
+\subsection{Benchmark and Tasks}
+
+To verify our hypotheses, we created a suite of tasks and a dataset for pre-training using objects from Spriteworld \citep{spriteworld} (Figures \ref{fig:task_illustration}b-e).
+While this environment is visually simple, we wanted to ensure that the OCR pre-training models could cleanly segment the objects in the scene into separate slots, reducing the possibility that the downstream RL performance is affected by poor OCR quality.
+
+In order to evaluate the performance of OCR pre-training in a more visually complex environment, we also implemented a robotic reaching task using the CausalWorld framework \citep{causalworld} (Figure \ref{fig:task_illustration}f). 
+Details about the implementation of these benchmarks can be found in Appendix \ref{appx:benchmark}.
+
+\textbf{Dataset: } For pre-training on the 2D tasks, we generate a dataset with a varying number of objects of different shapes randomly placed in the scene.(Figures \ref{fig:task_illustration}a).
+Note that this data is diverse enough to cover all four 2D tasks, so we use the same dataset for pre-training on all 2D tasks.
+For 3D task from CausalWorld framework, we generate a dataset through a random policy on the task.
+
+\textbf{Object Goal Task: } The agent (red circle), target object (blue square), and other distractor objects are randomly placed in this task.
+The goal of the task is for the agent to move to the target object without touching any distractor objects.
+Once the agent reaches the target object, a positive reward is given, and the episode ends.
+If a distractor object is reached, the episode ends without any reward.
+The discrete action space consists of the four cardinal directions to move the agent.
+To solve this task, the agent must be able to extract information about the location of the target object and the objects between the agent and the target.
+Therefore, through this task, we can verify that the agent can extract per-object information from the representation.
+
+\textbf{Object Interaction Task: } This task is similar to the object goal task but requires the agent to push the target to a specific location.
+In Figure \ref{fig:task_illustration}c, the bottom left blue square area is the goal area.
+Since the agent cannot push two objects at once, the agent must plan how to move the target to the goal area while avoiding the other objects.
+Therefore, through this task, we can verify how well the agent can extract per-object information and how well the agent can reason about how the objects interact.
+The action space is the same as above, and the reward is only given when the agent pushes the target to the goal area.
+
+\textbf{Object Comparison Task: } This task is designed to test relational reasoning ability. It is motivated by the odd-one-out task in cognitive science \cite{crutch2009different, stephens2008one, beatty2015prospects}, which has been previously investigated with language-augmented agents \cite{lampinen2022tell}.
+To solve this task, the agent must determine which object is different from the other objects and move to it.
+That is, it must find an object with no duplicates in the scene.
+Unlike the object goal or object interaction tasks, the characteristics of the target object can change from episode to episode.
+For example, in Figure \ref{fig:task_illustration}d, the green box is the target object in the top sample, while the blue triangle is the target object in the bottom sample.
+Therefore, to know which object is the target, the agent must compare every object with every other object, which requires object-wise reasoning.
+The action space and reward structure are the same as the Object Goal Task.
+
+
+\begin{table*}[t]
+    \centering
+    \begin{tabular}{@{}lccc@{}}
+    \toprule
+                                                      & \multicolumn{2}{c}{Training Regimes}                                               \\ \cmidrule(l){2-3}
+    Representation Types                               & End-to-end Learning                             & Pre-training                 \\ \midrule
+    \multirow{3}{14em}{Single-Vector Representation}    & \multirow{2}{15em}{CNN \citep{dqn}}       & VAE \citep{vae_ood}          \\
+                                                      &                                                 & MAE-CLS \citep{mvp}         \\
+                                                      &                                                 & SLATE-CNN \citep{visuomotor}\\\midrule
+    \multirow{1}{14em}{Fixed-Region Representation}   & \multirow{1}{15em}{CNNFeat \citep{rdrl}}     & MAE-Patch                   \\\midrule
+    \multirow{4}{14em}{Object-Centric Representation} & \multirow{4}{15em}{MultiCNNs \citep{cswm}}     & SLATE \citep{slate}          \\
+                                                      &                                                 & Slot-Attention \citep{sa}    \\
+                                                      &                                                & Slot-Attention-Large          \\
+                                                      &                                                & IODINE \citep{iodine}         \\ \bottomrule
+                                 
+    \end{tabular}
+     \caption{Summary of Evaluated Encoders}
+     \label{tab:rep_regime_summ}
+ \end{table*}
+ 
+\begin{figure*}[t]
+    \hspace{-8mm}
+    \begin{center}
+        \includegraphics[width=0.95\textwidth]{figs/icml_bar_each_model_23-01-26-23-45-12.png}
+        \caption{Success Rates for Object Goal, Object Interaction, Object Comparison, and Property Comparison Tasks. The specific representation types and training regimes used for each model are outlined in Table \ref{tab:rep_regime_summ}.
+        }
+        \label{fig:overall}
+    \end{center}
+    \vspace{-2mm}
+\end{figure*}
+
+\textbf{Property Comparison Task: } 
+This task is similar to the Object Comparison Task, but the agent must now find the object with a \textit{property} (i.e., color or shape) that is different from the other objects.
+For example, in the top sample of Figure \ref{fig:task_illustration}e, the green triangle is the target because it is the only green in the scene.
+The blue triangle is the target in the bottom sample because it is the only triangle object.
+Therefore, this task requires property-level comparison, not just object-level comparison.
+While OCRs are designed to be disentangled at the object level, it is not apparent how easily specific properties can be extracted and used for reasoning.
+Through this task, we can verify how well OCRs can facilitate property-level reasoning.
+The action space and reward structure are the same as the Object Comparison Task.
+
+\textbf{Object Reaching Task:} Lastly, in order to evaluate the models in a more visually realistic environment, we also created a version of the Object Goal Task using the CausalWorld framework \citep{causalworld} (Figure \ref{fig:task_illustration}f).
+In this environment, a fixed target object and a set of distractor objects are randomly placed in the scene.
+The agent controls a tri-finger robot and must reach the target object with one of its fingers (the other two are always fixed) to obtain a positive reward and solve the task.
+The episode ends without reward if the finger first touches one of the distractor objects.
+The action space in this environment consists of the three continuous joint positions of the moveable finger.
+We do not provide proprioceptive information to the agent, so it must learn how to control the finger from images.
+
+\section{Experiments}
+
+We present our experimental results and analysis as a series of questions and answers, each probing a different aspect of OCR pre-training for RL.
+For each result below, we average the performance from three random seeds and every agent is trained to 2 million steps.
+
+
+\begin{figure*}[t]
+    \hspace{-8mm}
+    \centering
+    \includegraphics[width=0.95\linewidth]{figs/icml_plot_overall_globalstep_23-01-26-23-56-36.png}
+    \vspace{-2mm}
+    \caption{The comparison of success rate against the number of interaction steps with the environments. Note that SLATE is compared with baselines for the Object Interaction task, where averaged performance of OCR pre-training is hard to be compared because other OCR methods failed to solve.}
+    \label{fig:overall_globalstep}
+    \vspace{-3mm}
+\end{figure*}
+
+\textbf{Question 1:} \textit{Does OCR pre-training improve performance in object-centric tasks? Which types of tasks benefit the most from OCR pre-training?}
+OCR pre-training represents objects through separate slots and is assumed to be beneficial for object-centric reinforcement learning (RL) tasks \citep{iodine}. Previous work has evaluated this for specific object-centric RL tasks such as goal-conditioned skill learning~\citep{smorl}. However, it remains elusive whether this representation improves performance for general object-centric tasks, which types of tasks benefit the most from OCR pre-training, and how it compares to other representations.
+
+In Figure \ref{fig:overall_regime} and \ref{fig:overall}, we show the final Success Rates of the different models described in Table \ref{tab:rep_regime_summ} for the four synthetic tasks in our benchmark.
+For the Object Goal task, where the agent must find a pre-defined goal object while avoiding distractor objects, all models achieved success rates of over 80\%, with the exception of the pre-trained single-vector representation models.
+This task requires agents to extract information about the target object and the distractor objects, but it does not necessarily require modeling of interactions between objects.
+This result suggests that explicit modeling of objects through OCR is not the only option for this type of task---the models with end-to-end trained single-vector representations and fixed-region representations can also be reasonable choices.
+The pre-trained single-vector representation, on the other hand, seems to not be able to extract the per-object information necessary to solve the task.
+We investigate this more in the response in Appendix \ref{appx:sec:more_fewer_objs}.
+
+In the Object Interaction task, which requires the agent to learn object-level interactions, it is observed that only pre-trained SLATE and end-to-end learned CNN models exhibit performance comparable to that of a model utilizing ground truth state, achieving a Success Rate of approximately 80\%. It is noteworthy that other OCR pre-training models, namely Slot-Attention, Slot-Attention-Large, and IODINE, fail on this task.
+This discrepancy in performance may be attributed to the fact that the Object Interaction task is harder than others due to its sparser rewards and that SLATE representations are trained with a transformer decoder, whereas other OCR models utilize mixture-based decoders. One possibility is that the utilization of a transformer decoder in SLATE enhances the compatibility of these representations with transformer-based agent training, as compared to other OCR models.
+
+
+
+For the Object Comparison and Property Comparison tasks, OCR pre-training demonstrated its strengths by performing similarly to GT, with all models except IODINE. Although IODINE showed worse performance than the other OCR pre-training and GT models, it still performs better than the other baselines. End-to-end learned OCR also performed better than other baselines but was not able to fully solve the tasks (success rates were around 50\%).
+Interestingly, fixed-region representations, namely CNNFeat and MAE-Patch, failed for the comparison tasks while also utilizing a transformer pooling layer. This is because the task requires object-level reasoning while the agents with the fixed-region representations are required to do something more to infer object-level representations.
+These results align with the hypothesis discussed in previous works \citep{binding,van2019perspective,building} that decompositional representations are beneficial for reasoning tasks while suggesting that the level of decompositionality of representations is also important.
+Another interesting point is that OCRs were not necessarily disentangled at the property level but are effectively utilized to solve property-level comparisons. We hypothesize that the transformer pooling layer plays a critical role in correctly extracting property-level information.
+
+In conclusion, OCR pre-training does not always provide better performance for every object-centric task, but for relational reasoning tasks, it demonstrates better performance when compared to other diversely trained representations.
+
+\textbf{Question 2:} \textit{Does OCR pre-training improve sample efficiency in object-centric tasks?}
+Analyzing the sample efficiency of OCR pre-training compared with other methods will give us insights into whether or not the learned representations are appropriate for the downstream tasks.
+As shown in Figure \ref{fig:overall_globalstep}, OCR pre-training generally demonstrates improved sample efficiency compared to other pre-training methods.
+The exception is for the non-SLATE OCR pre-training methods for the Object Interaction task that failed to solve the task.
+This shows that when compared to pre-training with single-vector or fixed-region representations, the pre-trained object-centric representations are more suitable for these tasks.
+When compared with the end-to-end trained methods, we see that OCR pre-training also has better sample efficiency for the comparison tasks but worse sample efficiency for the object interaction task.
+These results suggest that, as with performance improvement, OCR pre-training may not always improve sample efficiency for every object-centric task, but it does enhance sample efficiency for tasks where the relationship between objects is important.
+
+
+
+
+
+
+\begin{figure*}[t]
+    \hspace{-10mm}
+    \begin{center}
+    \includegraphics[width=0.95\linewidth]{figs/icml_plot_ood_23-01-28-22-55-15.png}
+    \end{center}
+    \vspace{-2mm}
+    \caption{Generalization performance for the out-of-distribution settings. The in-distribution setting is denoted by ``(in)''. The \textbf{top row} shows the success rate for unseen numbers of objects, and the \textbf{bottom row} shows the success rate for unseen object colors. SLATE is compared for the Object Interaction task. OCR pre-training and SLATE are highlighted through markers. Note that GT is not evaluated for the unseen number of objects test on the Object Interaction task as the MLP pooling is used for the task and cannot be applied to unseen objects.}
+    \label{fig:ood}
+    \vspace{-3mm}
+\end{figure*}
+
+\textbf{Question 3:} \textit{Does OCR pre-training help in generalization of agents?} \label{sec:ood_exp}
+OCR has been shown to have strong generalization capabilities due to its object-wise modular representations, particularly when dealing with out-of-distribution data such as unseen numbers or combinations of objects \citep{generalization_ocr,sa,iodine,slate}.
+Agents that utilize explicit interaction networks, such as Transformers \citep{rdrl} or Linear Relational Networks \citep{lrn}, have also demonstrated good generalization performance in policy learning.
+It can be hypothesized that OCR pre-training in conjunction with explicit interaction networks could further improve generalization robustness, but this has not yet been thoroughly investigated. In the following, we will investigate the generalization capabilities of OCR pre-training in the context of two different types of distribution shifts: unseen number of objects and unseen types of objects.
+
+First, we investigated the effect on agent performance when the number of objects differs from that on which the agent was trained.
+The results are shown in the top row of Figure \ref{fig:ood}.
+For all tasks, OCR pre-training generally maintained good performance, although success rates on Object Interaction tasks were low.
+For the Object Interaction task, SLATE shows comparable generalization performance.
+However, it is worth noting that other methods, such as GT or CNN, also demonstrated comparable generalization capabilities.
+This is not surprising for the Object Goal and Interaction tasks, since the model must extract the target object from the observations.
+For comparison tasks, however, increasing the number of objects can create unseen patterns such as the ones in Figure \ref{fig:task_illustration}e, and the agent must compare each object to all other objects to find the odd one.
+The transformer pooling layer can handle this pairwise comparison, which is why OCR pre-training and GT perform well when scaling to more objects.
+
+Next, we evaluate the agent's performance when presented with object colors not seen during training. The experimental details, such as which colors were changed, are described in Appendix \ref{appx:ood_unseen_color_detail}. The results are shown in the bottom row of Figure \ref{fig:ood}.
+For the Object Goal and Interaction tasks, we change the color of the distractors. The target object remains the same, so we can infer that this distribution shift does not affect performance if the agent can correctly extract the target object. As expected, model performance remains relatively stable regardless of the number of unseen distractors.
+For the comparison tasks, however, the agent must compare each object, and unseen colors can negatively impact performance.
+As expected, the performance of every model that performs better than random chance significantly decreased. Especially, the GT success rate drops from almost 100\% to 2-30\%. This is likely due to the unseen index (object type is represented as an integer index in the GT state) being critical to infer the correct action. On the other hand, except for the Property Comparison task with one unseen color, OCR pre-training demonstrates more robust performance than GT.
+
+
+\textbf{Question 4:} \textit{Does OCR pre-training work well in visually complex environments where segmentation is difficult?} 
+In order to evaluate the effectiveness of OCR pre-training in visually complex environments where segmentation is challenging, we conducted experiments on the Object Reaching task using the SLATE model and several baselines (GT, CNN, and VAE). The results of the segmentation performed by SLATE, as shown in Figure \ref{fig:cw_seg}, demonstrate that it is not perfect and sometimes splits multiple objects between slots and does not accurately capture the robotic finger.
+
+However, as illustrated in Figure \ref{fig:cw}, the agent utilizing SLATE demonstrated superior sample efficiency and converged success rate compared to the other methods. Although this task does not explicitly require reasoning among the objects, it is still crucial for the agent to learn to avoid touching the distractor objects before the target object. This result suggests that the conclusions from the experiments in visually simple environments can potentially be generalized to more complex environments.
+
+
+\begin{figure}[h]
+ 
+  \begin{center}
+   \includegraphics[width=0.7\linewidth]{figs/icml_3d_23-01-27-00-06-21.png}
+  \end{center}
+    \vspace{-5mm}
+  \caption{Success rates for the Object Reaching Task.}
+  \label{fig:cw}
+    \vspace{-1mm}
+\end{figure}
+
+\textbf{Question 5:} \textit{Which OCR model is better for RL?} 
+From the results presented in Figures \ref{fig:overall} and \ref{appx:fig:each_model_walltime2}, it is clear that the SLATE model performs the best in terms of overall performance on the tasks evaluated in this study. In contrast, the IODINE model demonstrated slower computational times and inferior performance across all tasks. Slot-Attention performed similarly to the SLATE model on Object Goal, Object Comparison, and Property Comparison tasks, but failed to effectively solve the Object Interaction task, even when utilizing a more extensive architecture (Slot-Attention-Large). 
+
+\begin{table}[h]
+    \begin{center}
+    \begin{tabular}{@{}lcccc@{}}
+    \toprule
+             & \multicolumn{4}{c}{Tasks}                               \\ \cmidrule(l){2-5}
+    Models   & Goal         & Int.         & Obj. Com.    & Pro. Com.  \\ \midrule
+    SLATE    &\textbf{0.985}&\textbf{0.787}&\textbf{0.979}&\textbf{0.98} \\
+    SLATE-MLP&0.9           &0.03          &0.238         &0.229         \\ \bottomrule
+    \end{tabular}
+    \caption{Success Rate comparison between Transformer and MLP pooling layers}\label{tab:slate_mlp}
+    \end{center}
+\end{table}
+
+
+\textbf{Question 6:} \textit{How does the choice of pooling layer affect task performance?}
+In this study, the transformer pooling layer is used for the OCR pre-training models due to its permutation invariance and ability to explicitly model interactions between the slots, which are important properties for relational reasoning tasks. To evaluate the effect of the pooling layer on task performance, an ablation study is conducted, where the MLP pooling layer is applied to the SLATE (referred to as SLATE-MLP). The results, as shown in Table \ref{tab:slate_mlp}, indicate that the use of the MLP pooling layer resulted in inferior performance on all tasks, with complete failure to solve the interaction and comparison tasks. Interestingly, the SLATE-MLP is still able to achieve good performance on the Object Goal task. This may be because the task is easier than others, the target object can still be extracted from the MLP, and the interaction between objects is not very important to solve that task.
+
+
+\section{Conclusion and Discussion}
+
+In this paper, we investigated Object-Centric Representation for RL tasks. To do this, we empirically evaluated the hypotheses shown or suggested from previous works \citep{smorl,binding,van2019perspective,building,rdrl, load,lrn} on our new benchmark with diverse types of representations. We found more specific conditions to satisfy the hypotheses through this empirical investigation. OCR pre-training does not always provide sample efficiency but is efficient for relational reasoning tasks. OCR pre-training is not always better than other methods for out-of-distribution tasks also, but it shows better generalization performance for unseen objects when compared with GT.
+
+In addition, SLATE shows comparable performance to GT for visually complex tasks where OCR cannot segment objects correctly. We also studied ablations for the pooling layer. Other interesting questions were also considered, but due to space limitation, they are discussed in the Appendix \ref{appx:additional_res}.
+
+Although our benchmark covers several important object-centric tasks, such as object interaction and relational reasoning, it can seem very synthetic. We chose those visually simple scenes to ensure the downstream RL performance is not affected by poor segmentation quality. It allows us to probe more specific aspects of the reinforcement learning task to assess where OCR pre-training is most beneficial. In order to investigate the case where segmentation quality is not perfect, we also ran experiments on the robotics Object Reaching Task, which we discuss in \textbf{Question 4}. Investigating OCR in more complex and realistic environments is a promising direction for future work, especially as unsupervised OCR models continue to improve. Furthermore, in addition to scene complexity, there are other aspects of agent learning that can benefit from OCR, such as partially observable environments or tasks that require exploration.
+These are good candidates to extend the benchmark in the future.
+
+Lastly, we hope our benchmark can help evaluate OCR models in the context of agent learning, in addition to the previously standard metrics such as segmentation quality and property prediction accuracy. Further discussion is in Appendix \ref{appx:discussion}.
+
+\section*{Acknowledgement}
+This work is supported by Brain Pool Plus (BP+) Program (No. 2021H1D3A2A03103645) and Young Researcher Program (No. 2022R1C1C1009443) through the National Research Foundation of Korea (NRF) funded by the Ministry of Science and ICT.
+The work is also supported by Electronics and Telecommunications Research Institute (ETRI) grant funded by the Korean government. [23ZR1100, A Study of Hyper-Connected Thinking Internet Technology by autonomous connecting, controlling, and evolving ways] JS thanks to SAP for their support, and Jindong for constructive discussion.
+
