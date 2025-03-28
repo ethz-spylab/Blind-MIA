@@ -5,10 +5,9 @@ This repository contains the code for the paper [Blind Baselines Beat Membership
 
 ### Abstract
 
-Membership inference (MI) attacks try to determine if a data sample was used to train a machine learning model. 
-For foundation models trained on unknown Web data, MI attacks are often used to detect copyrighted training materials, measure test set contamination, or audit machine unlearning. 
+Membership inference (MI) attacks try to determine if a data sample was used to train a machine learning model. For foundation models trained on unknown Web data, MI attacks are often used to detect copyrighted training materials, measure test set contamination, or audit machine unlearning. 
 Unfortunately, we find that evaluations of MI attacks for foundation models are flawed, because they sample members and non-members from different distributions. 
-For 9 published MI evaluation datasets, we show that blind attacks—that distinguish the member and non-member distributions without looking at any trained model—outperform state-of-the-art MI attacks. 
+For 8 published MI evaluation datasets, we show that blind attacks—that distinguish the member and non-member distributions without looking at any trained model—outperform state-of-the-art MI attacks. 
 Existing evaluations thus tell us nothing about membership leakage of a foundation model’s training data.
 
 ## How to run our attacks?
