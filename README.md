@@ -2,6 +2,7 @@
 
 This repository contains the code for the paper [Blind Baselines Beat Membership Inference Attacks for Foundation Models](https://arxiv.org/abs/2406.16201).
 
+
 ### Abstract
 
 Membership inference (MI) attacks try to determine if a data sample was used to train a machine learning model. 
@@ -64,8 +65,6 @@ To redo the hyper-parameter search, add the flag ``--hypersearch``, otherwise th
 | Arxiv                | TPR@1%FPR                 |         2.5 |  2.7 | ``greedy_selection``            |
 | (1 month vs 1 month) |                           |             |      |                   |
 |                      | <span style="color:cyan"> *Biased Replication* </span>        |             |      |                   |
-| Multi-Web            | TPR@1%FPR                 |        40.3 |   93 | ``greedy_selection``            |
-|                      | AUCROC                    |        81.7 |   98 | ``bag_of_words``               |
 | LAION-MI             | TPR@1%FPR                 |         2.5 |  8.9 | ``greedy_selection``            |
 | Gutenberg            | TPR@1%FPR                 |        18.8 | 55.1 | ``greedy_selection``            |
 |                      | AUCROC                    |        85.6 | 96.1 | ``bag_of_words``               |
@@ -81,6 +80,8 @@ We handle this dataset separately because it is too big to push to the repositor
 3. Run the attack on the dataset using the command below:
 
 ``` python3 run_attack.py --dataset arxiv1m_1m --attack greedy_selection ```
+
+
 
 ### Citation
 
