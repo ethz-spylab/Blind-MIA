@@ -1,6 +1,6 @@
 # Blind Baselines Beat Membership Inference Attacks for Foundation Models
 
-This repository contains the code for the paper [Blind Baselines Beat Membership Inference Attacks for Foundation Models](https://arxiv.org/abs/2406.16201).
+This repository contains the code for the paper [Blind Baselines Beat Membership Inference Attacks for Foundation Models](https://arxiv.org/abs/2406.16201). This paper was accepted to be presented at [DATA-FM @ ICLR 2025](https://datafm.github.io/) and [IEEE DLSP Workshop 2025](https://dlsp2025.ieee-security.org/).
 
 
 ### Abstract
